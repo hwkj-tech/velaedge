@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use edge_core::{DeviceSpec, EdgeConfigPackage};
+use edge_core::{DeviceSpec, EdgeConfigPackage, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot};
 use uuid::Uuid;
 
 use crate::{AuditAction, AuditRecord, EdgeNode, ReleaseRecord};
@@ -12,6 +12,8 @@ pub struct CloudControlStore {
     config_packages: BTreeMap<(String, String), EdgeConfigPackage>,
     releases: BTreeMap<Uuid, ReleaseRecord>,
     audit_records: Vec<AuditRecord>,
+    runtime_metrics: BTreeMap<String, EdgeRuntimeMetricsSnapshot>,
+    runtime_events: Vec<EdgeRuntimeEvent>,
 }
 
 impl CloudControlStore {
@@ -73,5 +75,26 @@ impl CloudControlStore {
 
     pub fn audit_records(&self) -> &[AuditRecord] {
         &self.audit_records
+    }
+
+    pub fn upsert_runtime_metrics(&mut self, snapshot: EdgeRuntimeMetricsSnapshot) {
+        self.runtime_metrics
+            .insert(snapshot.edge_id.clone(), snapshot);
+    }
+
+    pub fn runtime_metrics(&self, edge_id: &str) -> Option<&EdgeRuntimeMetricsSnapshot> {
+        self.runtime_metrics.get(edge_id)
+    }
+
+    pub fn runtime_metrics_snapshots(&self) -> impl Iterator<Item = &EdgeRuntimeMetricsSnapshot> {
+        self.runtime_metrics.values()
+    }
+
+    pub fn push_runtime_event(&mut self, event: EdgeRuntimeEvent) {
+        self.runtime_events.push(event);
+    }
+
+    pub fn runtime_events(&self) -> &[EdgeRuntimeEvent] {
+        &self.runtime_events
     }
 }
