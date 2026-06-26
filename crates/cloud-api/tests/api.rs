@@ -95,6 +95,129 @@ async fn releases_endpoint_returns_seeded_apply_results() {
 }
 
 #[tokio::test]
+async fn runtime_status_endpoint_returns_seeded_edge_metrics() {
+    let response = app(AppState::default())
+        .oneshot(
+            Request::get("/api/runtime-status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["healthyEdgeCount"], 1);
+    assert_eq!(payload["edges"][0]["edge_id"], "edge-dev");
+    assert_eq!(payload["edges"][0]["collection"]["average_latency_ms"], 24);
+}
+
+#[tokio::test]
+async fn runtime_metrics_endpoint_accepts_edge_snapshot_and_returns_status() {
+    let router = app(AppState::default());
+    let snapshot = json!({
+        "edge_id": "edge-dev",
+        "runtime_id": "runtime-dev",
+        "config_version": "2026.06.26-002",
+        "timestamp": "2026-06-26T10:00:00Z",
+        "health": "Degraded",
+        "system": {
+            "cpu_percent": 72.5,
+            "memory_percent": 68.0,
+            "disk_percent": 64.0,
+            "process_uptime_seconds": 7200
+        },
+        "collection": {
+            "active_task_count": 2,
+            "success_rate": 0.982,
+            "average_latency_ms": 41,
+            "bad_point_count": 1
+        },
+        "protocols": [{
+            "connection_id": "modbus-line-a",
+            "protocol": "ModbusTcp",
+            "connected": true,
+            "latency_ms": 18,
+            "timeout_count": 3,
+            "error_count": 1,
+            "reconnect_count": 0
+        }],
+        "local_store": {
+            "backend": "jsonl",
+            "buffered_records": 12,
+            "oldest_buffer_age_seconds": 9,
+            "disk_usage_percent": 36.0
+        },
+        "algorithms": [],
+        "cloud_sync": {
+            "connected": true,
+            "last_sync_seconds_ago": 5,
+            "pending_uploads": 2,
+            "desired_version": "2026.06.26-002",
+            "reported_version": "2026.06.26-002"
+        }
+    });
+
+    let response = router
+        .oneshot(
+            Request::post("/api/edges/edge-dev/runtime-metrics")
+                .header("content-type", "application/json")
+                .body(Body::from(snapshot.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["healthyEdgeCount"], 0);
+    assert_eq!(payload["degradedEdgeCount"], 1);
+    assert_eq!(payload["averageCollectionLatencyMs"], 41);
+    assert_eq!(payload["edges"][0]["health"], "Degraded");
+    assert_eq!(payload["edges"][0]["system"]["cpu_percent"], 72.5);
+}
+
+#[tokio::test]
+async fn runtime_events_endpoint_accepts_edge_event_and_returns_status() {
+    let router = app(AppState::default());
+    let event = json!({
+        "edge_id": "edge-dev",
+        "severity": "Warning",
+        "category": "Protocol",
+        "code": "modbus.timeout",
+        "message": "Modbus TCP read timeout",
+        "timestamp": "2026-06-26T10:01:00Z",
+        "context": {
+            "connection_id": "modbus-line-a"
+        }
+    });
+
+    let response = router
+        .oneshot(
+            Request::post("/api/edges/edge-dev/runtime-events")
+                .header("content-type", "application/json")
+                .body(Body::from(event.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["events"][0]["code"], "modbus.timeout");
+    assert_eq!(payload["events"][0]["context"]["connection_id"], "modbus-line-a");
+}
+
+#[tokio::test]
 async fn point_mapping_update_saves_new_draft_version() {
     let router = app(AppState::default());
     let payload = json!({

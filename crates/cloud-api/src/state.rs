@@ -1,9 +1,12 @@
 use std::sync::{Arc, Mutex};
 
+use chrono::Utc;
 use cloud_control::{CloudControlStore, EdgeNode, ReleaseService};
 use edge_core::{
-    CollectionTask, DeviceInstance, EdgeConfigPackage, PointAddress, ProtocolConnection,
-    ProtocolType, TelemetryPointMapping, TelemetryType,
+    CloudSyncMetrics, CollectionRuntimeMetrics, CollectionTask, DeviceInstance, EdgeConfigPackage,
+    EdgeHealth, EdgeRuntimeMetricsSnapshot, LocalStoreMetrics, PointAddress, ProtocolConnection,
+    ProtocolRuntimeMetrics, ProtocolType, SystemRuntimeMetrics, TelemetryPointMapping,
+    TelemetryType,
 };
 
 #[derive(Clone)]
@@ -66,6 +69,49 @@ impl Default for AppState {
             .expect("demo config package should be valid");
         ReleaseService::mark_reported(&mut store, release.release_id, "2026.06.26-001")
             .expect("demo release should be reportable");
+
+        store.upsert_runtime_metrics(EdgeRuntimeMetricsSnapshot {
+            edge_id: "edge-dev".to_string(),
+            runtime_id: "runtime-dev".to_string(),
+            config_version: "2026.06.26-001".to_string(),
+            timestamp: Utc::now(),
+            health: EdgeHealth::Healthy,
+            system: SystemRuntimeMetrics {
+                cpu_percent: 18.5,
+                memory_percent: 42.0,
+                disk_percent: 61.0,
+                process_uptime_seconds: 3600,
+            },
+            collection: CollectionRuntimeMetrics {
+                active_task_count: 1,
+                success_rate: 0.995,
+                average_latency_ms: 24,
+                bad_point_count: 0,
+            },
+            protocols: vec![ProtocolRuntimeMetrics {
+                connection_id: "modbus-line-a".to_string(),
+                protocol: "Modbus TCP".to_string(),
+                connected: true,
+                latency_ms: 12,
+                timeout_count: 0,
+                error_count: 0,
+                reconnect_count: 0,
+            }],
+            local_store: LocalStoreMetrics {
+                backend: "jsonl".to_string(),
+                buffered_records: 0,
+                oldest_buffer_age_seconds: 0,
+                disk_usage_percent: 35.0,
+            },
+            algorithms: Vec::new(),
+            cloud_sync: CloudSyncMetrics {
+                connected: true,
+                last_sync_seconds_ago: 8,
+                pending_uploads: 0,
+                desired_version: "2026.06.26-001".to_string(),
+                reported_version: "2026.06.26-001".to_string(),
+            },
+        });
 
         Self {
             store: Arc::new(Mutex::new(store)),

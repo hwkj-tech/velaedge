@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+chrono.workspace = true
 cloud-control = { path = "../cloud-control" }
 edge-core = { path = "../edge-core" }
 serde.workspace = true

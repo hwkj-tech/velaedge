@@ -6,7 +6,8 @@ use axum::{
 };
 use cloud_control::{ReleaseService, ReleaseStatus};
 use edge_core::{
-    EdgeConfigPackage, PointAddress, ProtocolType, TelemetryPointMapping, TelemetryType,
+    EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, PointAddress,
+    ProtocolType, TelemetryPointMapping, TelemetryType,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -24,9 +25,18 @@ pub struct SummaryResponse {
 pub fn app(state: AppState) -> Router {
     let api = Router::new()
         .route("/api/summary", get(summary))
+        .route("/api/runtime-status", get(runtime_status))
         .route(
             "/api/edges/{edge_id}/desired-config",
             get(edge_desired_config),
+        )
+        .route(
+            "/api/edges/{edge_id}/runtime-metrics",
+            get(runtime_status).post(report_runtime_metrics),
+        )
+        .route(
+            "/api/edges/{edge_id}/runtime-events",
+            get(runtime_status).post(report_runtime_event),
         )
         .route(
             "/api/edges/{edge_id}/reported-config",
@@ -89,6 +99,11 @@ async fn releases(State(state): State<AppState>) -> Json<ReleaseListResponse> {
     Json(release_list_response(&store))
 }
 
+async fn runtime_status(State(state): State<AppState>) -> Json<RuntimeStatusResponse> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    Json(runtime_status_response(&store))
+}
+
 async fn edge_desired_config(
     State(state): State<AppState>,
     Path(edge_id): Path<String>,
@@ -123,6 +138,42 @@ async fn edge_reported_config(
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing release for edge"))?;
 
     Ok(Json(release_list_response(&store)))
+}
+
+async fn report_runtime_metrics(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+    Json(snapshot): Json<EdgeRuntimeMetricsSnapshot>,
+) -> Result<Json<RuntimeStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if snapshot.edge_id != edge_id {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "runtime metrics edge_id does not match request path",
+        ));
+    }
+
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_runtime_metrics(snapshot);
+
+    Ok(Json(runtime_status_response(&store)))
+}
+
+async fn report_runtime_event(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+    Json(event): Json<EdgeRuntimeEvent>,
+) -> Result<Json<RuntimeStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if event.edge_id != edge_id {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "runtime event edge_id does not match request path",
+        ));
+    }
+
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.push_runtime_event(event);
+
+    Ok(Json(runtime_status_response(&store)))
 }
 
 async fn save_point_mapping(
@@ -222,6 +273,42 @@ fn release_list_response(store: &cloud_control::CloudControlStore) -> ReleaseLis
     }
 }
 
+fn runtime_status_response(store: &cloud_control::CloudControlStore) -> RuntimeStatusResponse {
+    let mut edges = store
+        .runtime_metrics_snapshots()
+        .cloned()
+        .collect::<Vec<_>>();
+    edges.sort_by(|left, right| left.edge_id.cmp(&right.edge_id));
+
+    let average_collection_latency_ms = if edges.is_empty() {
+        0
+    } else {
+        edges
+            .iter()
+            .map(|edge| edge.collection.average_latency_ms)
+            .sum::<u64>()
+            / edges.len() as u64
+    };
+
+    RuntimeStatusResponse {
+        healthy_edge_count: edges
+            .iter()
+            .filter(|edge| edge.health == EdgeHealth::Healthy)
+            .count(),
+        degraded_edge_count: edges
+            .iter()
+            .filter(|edge| edge.health == EdgeHealth::Degraded)
+            .count(),
+        critical_edge_count: edges
+            .iter()
+            .filter(|edge| edge.health == EdgeHealth::Critical)
+            .count(),
+        average_collection_latency_ms,
+        edges,
+        events: store.runtime_events().to_vec(),
+    }
+}
+
 async fn create_release(
     State(state): State<AppState>,
     Json(package): Json<EdgeConfigPackage>,
@@ -257,6 +344,17 @@ pub struct ReleaseResponse {
     pub edge_id: String,
     pub desired_version: String,
     pub status: ReleaseStatus,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStatusResponse {
+    pub healthy_edge_count: usize,
+    pub degraded_edge_count: usize,
+    pub critical_edge_count: usize,
+    pub average_collection_latency_ms: u64,
+    pub edges: Vec<EdgeRuntimeMetricsSnapshot>,
+    pub events: Vec<EdgeRuntimeEvent>,
 }
 
 #[derive(Serialize)]
