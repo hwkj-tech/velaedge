@@ -45,6 +45,12 @@ impl CloudControlStore {
         self.config_packages.values()
     }
 
+    pub fn latest_config_package_for_edge(&self, edge_id: &str) -> Option<&EdgeConfigPackage> {
+        self.config_packages()
+            .filter(|package| package.edge_id == edge_id)
+            .max_by(|left, right| left.version.cmp(&right.version))
+    }
+
     pub fn insert_release(&mut self, release: ReleaseRecord) {
         self.releases.insert(release.release_id, release);
     }

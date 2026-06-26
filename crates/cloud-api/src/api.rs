@@ -1,7 +1,14 @@
-use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    routing::{get, put},
+    Json, Router,
+};
 use cloud_control::{ReleaseService, ReleaseStatus};
-use edge_core::{EdgeConfigPackage, PointAddress, ProtocolType, TelemetryType};
-use serde::Serialize;
+use edge_core::{
+    EdgeConfigPackage, PointAddress, ProtocolType, TelemetryPointMapping, TelemetryType,
+};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tower_http::services::{ServeDir, ServeFile};
@@ -18,7 +25,12 @@ pub fn app(state: AppState) -> Router {
     let api = Router::new()
         .route("/api/summary", get(summary))
         .route("/api/point-mappings", get(point_mappings))
+        .route("/api/point-mappings/{point_id}", put(save_point_mapping))
         .route("/api/releases", get(releases).post(create_release))
+        .route(
+            "/api/releases/publish",
+            get(releases).post(publish_latest_release),
+        )
         .with_state(state);
 
     let console_dir = console_dist_dir();
@@ -52,49 +64,12 @@ async fn point_mappings(State(state): State<AppState>) -> Json<Vec<PointMappingR
     let store = state.store.lock().expect("store mutex poisoned");
     let mut points = Vec::new();
 
-    for package in store.config_packages() {
-        let connections = package
-            .protocol_connections
-            .iter()
-            .map(|connection| (connection.connection_id.as_str(), connection.protocol))
-            .collect::<BTreeMap<_, _>>();
-        let devices = package
-            .devices
-            .iter()
-            .map(|device| (device.device_id.as_str(), device.device_type.as_str()))
-            .collect::<BTreeMap<_, _>>();
-
+    for edge in store.edge_nodes() {
+        let Some(package) = store.latest_config_package_for_edge(&edge.edge_id) else {
+            continue;
+        };
         for mapping in &package.point_mappings {
-            points.push(PointMappingResponse {
-                point_id: mapping.point_id.clone(),
-                point_name: mapping.point_id.clone(),
-                device_id: mapping.device_id.clone(),
-                device_model: devices
-                    .get(mapping.device_id.as_str())
-                    .copied()
-                    .unwrap_or("unknown")
-                    .to_string(),
-                semantic_telemetry: mapping.semantic_id.clone(),
-                protocol: connections
-                    .get(mapping.protocol_connection_id.as_str())
-                    .copied()
-                    .map(format_protocol)
-                    .unwrap_or_else(|| "Unknown".to_string()),
-                connection: mapping.protocol_connection_id.clone(),
-                address: format_address(&mapping.address),
-                value_type: format_telemetry_type(mapping.value_type),
-                read_write: "read".to_string(),
-                unit: mapping.unit.clone().unwrap_or_else(|| "-".to_string()),
-                scale: "1".to_string(),
-                interval: format!("{}ms", mapping.interval_ms),
-                range: mapping
-                    .range
-                    .as_ref()
-                    .map(|range| format!("{}-{}", range.min, range.max))
-                    .unwrap_or_else(|| "-".to_string()),
-                quality_rule: "timeout->bad".to_string(),
-                status: "启用".to_string(),
-            });
+            points.push(point_mapping_response(package, mapping));
         }
     }
 
@@ -103,6 +78,67 @@ async fn point_mappings(State(state): State<AppState>) -> Json<Vec<PointMappingR
 
 async fn releases(State(state): State<AppState>) -> Json<ReleaseListResponse> {
     let store = state.store.lock().expect("store mutex poisoned");
+    Json(release_list_response(&store))
+}
+
+async fn save_point_mapping(
+    State(state): State<AppState>,
+    Path(point_id): Path<String>,
+    Json(request): Json<SavePointMappingRequest>,
+) -> Result<Json<PointMappingResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    let mut package = store
+        .latest_config_package_for_edge("edge-dev")
+        .cloned()
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+    package.version = next_version(&package.version);
+
+    let mapping_index = package
+        .point_mappings
+        .iter()
+        .position(|mapping| mapping.point_id == point_id)
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing point mapping"))?;
+
+    {
+        let mapping = &mut package.point_mappings[mapping_index];
+        mapping.address = PointAddress {
+            kind: request.address_kind,
+            value: request.address_value,
+        };
+        mapping.interval_ms = request.interval_ms;
+        mapping.unit = Some(request.unit);
+    }
+
+    let response = point_mapping_response(&package, &package.point_mappings[mapping_index]);
+    store.upsert_config_package(package);
+
+    Ok(Json(response))
+}
+
+async fn publish_latest_release(
+    State(state): State<AppState>,
+) -> Result<Json<ReleaseListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    let package = store
+        .latest_config_package_for_edge("edge-dev")
+        .cloned()
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+    let release = ReleaseService::create_release(&mut store, package).map_err(|errors| {
+        error(
+            StatusCode::BAD_REQUEST,
+            errors
+                .into_iter()
+                .map(|error| error.message)
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    })?;
+    ReleaseService::mark_reported(&mut store, release.release_id, release.desired_version);
+
+    Ok(Json(release_list_response(&store)))
+}
+
+fn release_list_response(store: &cloud_control::CloudControlStore) -> ReleaseListResponse {
     let mut releases = store.releases().cloned().collect::<Vec<_>>();
     releases.sort_by(|left, right| left.desired_version.cmp(&right.desired_version));
     releases.reverse();
@@ -112,7 +148,7 @@ async fn releases(State(state): State<AppState>) -> Json<ReleaseListResponse> {
         .map(|release| release.desired_version.clone())
         .unwrap_or_else(|| "-".to_string());
 
-    Json(ReleaseListResponse {
+    ReleaseListResponse {
         draft_version,
         validation_status: "已通过".to_string(),
         change_summary: "云端配置包已生成".to_string(),
@@ -132,7 +168,7 @@ async fn releases(State(state): State<AppState>) -> Json<ReleaseListResponse> {
                 heartbeat: "18 秒前".to_string(),
             })
             .collect(),
-    })
+    }
 }
 
 async fn create_release(
@@ -177,6 +213,15 @@ pub struct ErrorResponse {
     pub message: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavePointMappingRequest {
+    pub address_kind: String,
+    pub address_value: String,
+    pub interval_ms: u64,
+    pub unit: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PointMappingResponse {
@@ -216,6 +261,70 @@ pub struct ApplyResultResponse {
     pub reported_version: String,
     pub result: String,
     pub heartbeat: String,
+}
+
+fn point_mapping_response(
+    package: &EdgeConfigPackage,
+    mapping: &TelemetryPointMapping,
+) -> PointMappingResponse {
+    let connections = package
+        .protocol_connections
+        .iter()
+        .map(|connection| (connection.connection_id.as_str(), connection.protocol))
+        .collect::<BTreeMap<_, _>>();
+    let devices = package
+        .devices
+        .iter()
+        .map(|device| (device.device_id.as_str(), device.device_type.as_str()))
+        .collect::<BTreeMap<_, _>>();
+
+    PointMappingResponse {
+        point_id: mapping.point_id.clone(),
+        point_name: mapping.point_id.clone(),
+        device_id: mapping.device_id.clone(),
+        device_model: devices
+            .get(mapping.device_id.as_str())
+            .copied()
+            .unwrap_or("unknown")
+            .to_string(),
+        semantic_telemetry: mapping.semantic_id.clone(),
+        protocol: connections
+            .get(mapping.protocol_connection_id.as_str())
+            .copied()
+            .map(format_protocol)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        connection: mapping.protocol_connection_id.clone(),
+        address: format_address(&mapping.address),
+        value_type: format_telemetry_type(mapping.value_type),
+        read_write: "read".to_string(),
+        unit: mapping.unit.clone().unwrap_or_else(|| "-".to_string()),
+        scale: "1".to_string(),
+        interval: format!("{}ms", mapping.interval_ms),
+        range: mapping
+            .range
+            .as_ref()
+            .map(|range| format!("{}-{}", range.min, range.max))
+            .unwrap_or_else(|| "-".to_string()),
+        quality_rule: "timeout->bad".to_string(),
+        status: "启用".to_string(),
+    }
+}
+
+fn next_version(version: &str) -> String {
+    let Some((prefix, suffix)) = version.rsplit_once('-') else {
+        return format!("{version}-001");
+    };
+    let next = suffix.parse::<u64>().unwrap_or(0) + 1;
+    format!("{prefix}-{next:03}")
+}
+
+fn error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        status,
+        Json(ErrorResponse {
+            message: message.into(),
+        }),
+    )
 }
 
 fn format_address(address: &PointAddress) -> String {

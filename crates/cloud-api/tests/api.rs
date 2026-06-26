@@ -93,3 +93,82 @@ async fn releases_endpoint_returns_seeded_apply_results() {
     assert_eq!(payload["draftVersion"], "2026.06.26-001");
     assert_eq!(payload["applyResults"][0]["edgeId"], "edge-dev");
 }
+
+#[tokio::test]
+async fn point_mapping_update_saves_new_draft_version() {
+    let router = app(AppState::default());
+    let payload = json!({
+        "addressKind": "holding_register",
+        "addressValue": "40002",
+        "intervalMs": 2000,
+        "unit": "MPa"
+    });
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/point-mappings/pressure")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = router
+        .oneshot(
+            Request::get("/api/point-mappings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload[0]["address"], "holding_register:40002");
+    assert_eq!(payload[0]["interval"], "2000ms");
+}
+
+#[tokio::test]
+async fn publish_endpoint_releases_latest_draft_and_reports_apply_result() {
+    let router = app(AppState::default());
+    let update = json!({
+        "addressKind": "holding_register",
+        "addressValue": "40002",
+        "intervalMs": 2000,
+        "unit": "MPa"
+    });
+
+    let update_response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/point-mappings/pressure")
+                .header("content-type", "application/json")
+                .body(Body::from(update.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(update_response.status(), StatusCode::OK);
+
+    let publish_response = router
+        .oneshot(
+            Request::post("/api/releases/publish")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(publish_response.status(), StatusCode::OK);
+
+    let body = to_bytes(publish_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["draftVersion"], "2026.06.26-002");
+    assert_eq!(payload["applyResults"][0]["result"], "已应用");
+}
