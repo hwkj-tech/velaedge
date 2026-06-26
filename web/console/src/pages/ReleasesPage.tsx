@@ -1,9 +1,67 @@
 import { GitCompare, Send, ShieldCheck } from 'lucide-react';
 
-const releases = [
-  ['v2026.06.26-002', '草稿', 'edge-lab-03', '等待校验', '新增 2 个点位'],
-  ['v2026.06.26-001', '已发布', 'edge-shanghai-01, edge-suzhou-02', '全部应用成功', '初始配置'],
-  ['v2026.06.25-004', '已归档', 'edge-lab-03', '应用成功', '实验室模拟配置'],
+import { DataTable, type DataTableColumn } from '../components/DataTable';
+import './PointMappingsPage.css';
+
+interface ApplyResult {
+  edgeId: string;
+  desiredVersion: string;
+  reportedVersion: string;
+  result: string;
+  heartbeat: string;
+}
+
+const draftVersion = '2026.06.26-001';
+
+const applyResults: ApplyResult[] = [
+  {
+    edgeId: 'edge-shanghai-01',
+    desiredVersion: draftVersion,
+    reportedVersion: '2026.06.26-001',
+    result: '已应用',
+    heartbeat: '18 秒前',
+  },
+  {
+    edgeId: 'edge-suzhou-02',
+    desiredVersion: draftVersion,
+    reportedVersion: '2026.06.26-001',
+    result: '已应用',
+    heartbeat: '24 秒前',
+  },
+  {
+    edgeId: 'edge-lab-03',
+    desiredVersion: draftVersion,
+    reportedVersion: '2026.06.25-004',
+    result: '等待下发',
+    heartbeat: '11 分钟前',
+  },
+];
+
+const applyColumns: Array<DataTableColumn<ApplyResult>> = [
+  { key: 'edgeId', header: 'Edge ID', width: '180px', render: (row) => row.edgeId },
+  {
+    key: 'desiredVersion',
+    header: '期望版本',
+    width: '160px',
+    render: (row) => row.desiredVersion,
+  },
+  {
+    key: 'reportedVersion',
+    header: '上报版本',
+    width: '160px',
+    render: (row) => row.reportedVersion,
+  },
+  {
+    key: 'result',
+    header: '应用结果',
+    width: '120px',
+    render: (row) => (
+      <span className={row.result === '已应用' ? 'tag ok' : 'tag warn'}>
+        {row.result}
+      </span>
+    ),
+  },
+  { key: 'heartbeat', header: '心跳', width: '120px', render: (row) => row.heartbeat },
 ];
 
 export function ReleasesPage() {
@@ -32,47 +90,39 @@ export function ReleasesPage() {
         </div>
       </section>
 
+      <section className="release-step-list" aria-label="发布流程">
+        <article className="release-step">
+          <span>草稿版本</span>
+          <strong>{draftVersion}</strong>
+          <small>点位与采集任务已生成</small>
+        </article>
+        <article className="release-step">
+          <span>校验状态</span>
+          <strong>已通过</strong>
+          <small>协议连接和点位地址有效</small>
+        </article>
+        <article className="release-step">
+          <span>变更摘要</span>
+          <strong>新增 2 个 Modbus 点位</strong>
+          <small>影响 pump-1 采集任务</small>
+        </article>
+        <article className="release-step">
+          <span>发布策略</span>
+          <strong>先灰度 edge-lab-03</strong>
+          <small>确认回执后全量发布</small>
+        </article>
+      </section>
+
       <section className="panel">
         <div className="panel-header">
-          <h3>版本与回执</h3>
-          <span>发布前人工确认</span>
+          <h3>边端应用回执</h3>
+          <span>desired / reported 对齐检查</span>
         </div>
-        <div className="table-wrap">
-          <table className="ops-table">
-            <thead>
-              <tr>
-                <th>版本</th>
-                <th>状态</th>
-                <th>目标边端</th>
-                <th>应用结果</th>
-                <th>变更摘要</th>
-              </tr>
-            </thead>
-            <tbody>
-              {releases.map(([version, status, target, result, summary]) => (
-                <tr key={version}>
-                  <td>{version}</td>
-                  <td>
-                    <span
-                      className={
-                        status === '已发布'
-                          ? 'tag ok'
-                          : status === '草稿'
-                            ? 'tag warn'
-                            : 'tag'
-                      }
-                    >
-                      {status}
-                    </span>
-                  </td>
-                  <td>{target}</td>
-                  <td>{result}</td>
-                  <td>{summary}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          columns={applyColumns}
+          getRowKey={(row) => row.edgeId}
+          rows={applyResults}
+        />
       </section>
     </div>
   );

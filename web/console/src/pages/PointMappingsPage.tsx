@@ -1,12 +1,94 @@
 import { FileInput, Plus, ShieldCheck } from 'lucide-react';
 
-const points = [
-  ['pressure', 'pump-1', 'pressure', 'Modbus TCP', 'modbus-line-a', 'holding_register 40001', 'Float', 'MPa', '1s'],
-  ['temperature', 'pump-1', 'temperature', 'Simulated', 'sim-main', 'simulated temperature', 'Float', 'C', '1s'],
-  ['running', 'pump-1', 'running', 'MQTT', 'mqtt-main', 'pump/1/running', 'Bool', '-', '5s'],
+import { DataTable, type DataTableColumn } from '../components/DataTable';
+import { Drawer } from '../components/Drawer';
+import './PointMappingsPage.css';
+
+interface PointMapping {
+  pointId: string;
+  pointName: string;
+  deviceId: string;
+  deviceModel: string;
+  semanticTelemetry: string;
+  protocol: string;
+  connection: string;
+  address: string;
+  type: string;
+  readWrite: string;
+  unit: string;
+  scale: string;
+  interval: string;
+  range: string;
+  qualityRule: string;
+  status: string;
+}
+
+const points: PointMapping[] = [
+  {
+    pointId: 'pressure',
+    pointName: '泵出口压力',
+    deviceId: 'pump-1',
+    deviceModel: 'pump@v1',
+    semanticTelemetry: 'pump.pressure',
+    protocol: 'Modbus TCP',
+    connection: 'modbus-line-a',
+    address: 'holding_register:40001',
+    type: 'float32',
+    readWrite: 'read',
+    unit: 'MPa',
+    scale: '0.1',
+    interval: '1000ms',
+    range: '0-20',
+    qualityRule: 'timeout->bad',
+    status: '启用',
+  },
+  {
+    pointId: 'running',
+    pointName: '运行状态',
+    deviceId: 'pump-1',
+    deviceModel: 'pump@v1',
+    semanticTelemetry: 'pump.running',
+    protocol: 'Modbus TCP',
+    connection: 'modbus-line-a',
+    address: 'coil:00001',
+    type: 'bool',
+    readWrite: 'read',
+    unit: '-',
+    scale: '1',
+    interval: '1000ms',
+    range: '-',
+    qualityRule: 'stale->bad',
+    status: '启用',
+  },
+];
+
+const columns: Array<DataTableColumn<PointMapping>> = [
+  { key: 'pointId', header: 'Point ID', width: '130px', render: (row) => row.pointId },
+  { key: 'pointName', header: '点位名称', width: '130px', render: (row) => row.pointName },
+  { key: 'deviceId', header: '设备', width: '110px', render: (row) => row.deviceId },
+  {
+    key: 'semanticTelemetry',
+    header: '语义遥测',
+    width: '150px',
+    render: (row) => row.semanticTelemetry,
+  },
+  { key: 'protocol', header: '协议', width: '120px', render: (row) => row.protocol },
+  { key: 'connection', header: '连接', width: '140px', render: (row) => row.connection },
+  { key: 'address', header: '地址 / NodeId / Topic', width: '180px', render: (row) => row.address },
+  { key: 'type', header: '数据类型', width: '100px', render: (row) => row.type },
+  { key: 'unit', header: '单位', width: '80px', render: (row) => row.unit },
+  { key: 'interval', header: '周期', width: '100px', render: (row) => row.interval },
+  {
+    key: 'status',
+    header: '状态',
+    width: '90px',
+    render: (row) => <span className="tag ok">{row.status}</span>,
+  },
 ];
 
 export function PointMappingsPage() {
+  const selectedPoint = points[0];
+
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -32,38 +114,101 @@ export function PointMappingsPage() {
         </div>
       </section>
 
-      <section className="panel">
-        <div className="panel-header">
-          <h3>点位映射预览</h3>
-          <span>3 个启用点位</span>
-        </div>
-        <div className="table-wrap">
-          <table className="ops-table">
-            <thead>
-              <tr>
-                <th>Point ID</th>
-                <th>设备</th>
-                <th>语义</th>
-                <th>协议</th>
-                <th>连接</th>
-                <th>地址</th>
-                <th>类型</th>
-                <th>单位</th>
-                <th>周期</th>
-              </tr>
-            </thead>
-            <tbody>
-              {points.map((row) => (
-                <tr key={row[0]}>
-                  {row.map((cell) => (
-                    <td key={cell}>{cell}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <div className="point-config-layout">
+        <section className="panel point-table-panel">
+          <div className="panel-header">
+            <h3>点位配置表</h3>
+            <span>{points.length} 个启用点位</span>
+          </div>
+          <DataTable
+            columns={columns}
+            getRowKey={(row) => row.pointId}
+            rows={points}
+          />
+        </section>
+
+        <Drawer
+          subtitle="云端草稿，发布后边端 runtime 执行"
+          title={`编辑点位 ${selectedPoint.pointId}`}
+          footer={
+            <>
+              <button className="secondary-button" type="button">
+                取消
+              </button>
+              <button className="primary-button" type="button">
+                保存草稿
+              </button>
+            </>
+          }
+        >
+          <DrawerSection
+            fields={[
+              ['Point ID', `${selectedPoint.pointId} / 草稿`],
+              ['显示名称', selectedPoint.pointName],
+              ['设备 ID', selectedPoint.deviceId],
+              ['设备模型', selectedPoint.deviceModel],
+              ['语义遥测', selectedPoint.semanticTelemetry],
+              ['启用状态', selectedPoint.status],
+            ]}
+            title="基础信息"
+          />
+          <DrawerSection
+            fields={[
+              ['协议类型', selectedPoint.protocol],
+              ['连接实例', selectedPoint.connection],
+              ['地址类型', 'holding_register'],
+              ['地址值', '40001'],
+              ['数据类型', selectedPoint.type],
+              ['读写类型', selectedPoint.readWrite],
+              ['缩放系数', selectedPoint.scale],
+              ['偏移量', '0'],
+            ]}
+            title="协议映射"
+          />
+          <DrawerSection
+            fields={[
+              ['采集周期', selectedPoint.interval],
+              ['超时', '800ms'],
+              ['重试次数', '2'],
+              ['死区', '0.02'],
+              ['缓存策略', 'local-first'],
+            ]}
+            title="采集策略"
+          />
+          <DrawerSection
+            fields={[
+              ['单位', selectedPoint.unit],
+              ['数值范围', selectedPoint.range],
+              ['精度', '2'],
+              ['质量规则', selectedPoint.qualityRule],
+              ['告警规则', 'pressure-high'],
+            ]}
+            title="数据治理"
+          />
+        </Drawer>
+      </div>
     </div>
+  );
+}
+
+function DrawerSection({
+  fields,
+  title,
+}: {
+  fields: Array<[string, string]>;
+  title: string;
+}) {
+  return (
+    <section className="drawer-section">
+      <h4>{title}</h4>
+      <div className="editor-grid">
+        {fields.map(([label, value]) => (
+          <div className="editor-field" key={label}>
+            <span>{label}</span>
+            <strong>{value}</strong>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
