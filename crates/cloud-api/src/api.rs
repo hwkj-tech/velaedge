@@ -24,6 +24,14 @@ pub struct SummaryResponse {
 pub fn app(state: AppState) -> Router {
     let api = Router::new()
         .route("/api/summary", get(summary))
+        .route(
+            "/api/edges/{edge_id}/desired-config",
+            get(edge_desired_config),
+        )
+        .route(
+            "/api/edges/{edge_id}/reported-config",
+            get(releases).post(edge_reported_config),
+        )
         .route("/api/point-mappings", get(point_mappings))
         .route("/api/point-mappings/{point_id}", put(save_point_mapping))
         .route("/api/releases", get(releases).post(create_release))
@@ -79,6 +87,42 @@ async fn point_mappings(State(state): State<AppState>) -> Json<Vec<PointMappingR
 async fn releases(State(state): State<AppState>) -> Json<ReleaseListResponse> {
     let store = state.store.lock().expect("store mutex poisoned");
     Json(release_list_response(&store))
+}
+
+async fn edge_desired_config(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<Json<EdgeDesiredConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let package = store
+        .latest_config_package_for_edge(&edge_id)
+        .cloned()
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+
+    Ok(Json(EdgeDesiredConfigResponse {
+        edge_id,
+        desired_version: package.version.clone(),
+        package,
+    }))
+}
+
+async fn edge_reported_config(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+    Json(request): Json<EdgeReportedConfigRequest>,
+) -> Result<Json<ReleaseListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    let release_id = store
+        .releases()
+        .filter(|release| release.edge_id == edge_id)
+        .max_by(|left, right| left.desired_version.cmp(&right.desired_version))
+        .map(|release| release.release_id)
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing release for edge"))?;
+
+    ReleaseService::mark_reported(&mut store, release_id, request.reported_version)
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing release for edge"))?;
+
+    Ok(Json(release_list_response(&store)))
 }
 
 async fn save_point_mapping(
@@ -218,6 +262,20 @@ pub struct ReleaseResponse {
 #[derive(Serialize)]
 pub struct ErrorResponse {
     pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeDesiredConfigResponse {
+    pub edge_id: String,
+    pub desired_version: String,
+    pub package: EdgeConfigPackage,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeReportedConfigRequest {
+    pub reported_version: String,
 }
 
 #[derive(Deserialize)]

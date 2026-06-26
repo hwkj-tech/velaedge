@@ -182,3 +182,120 @@ async fn publish_endpoint_releases_latest_draft_and_reports_apply_result() {
     assert_eq!(payload["draftVersion"], "2026.06.26-002");
     assert_eq!(payload["applyResults"][0]["result"], "已应用");
 }
+
+#[tokio::test]
+async fn edge_desired_config_endpoint_returns_latest_package() {
+    let router = app(AppState::default());
+    let update = json!({
+        "addressKind": "holding_register",
+        "addressValue": "40002",
+        "intervalMs": 2000,
+        "unit": "MPa"
+    });
+
+    let update_response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/point-mappings/pressure")
+                .header("content-type", "application/json")
+                .body(Body::from(update.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(update_response.status(), StatusCode::OK);
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/desired-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["edgeId"], "edge-dev");
+    assert_eq!(payload["desiredVersion"], "2026.06.26-002");
+    assert_eq!(payload["package"]["version"], "2026.06.26-002");
+    assert_eq!(
+        payload["package"]["point_mappings"][0]["address"]["value"],
+        "40002"
+    );
+}
+
+#[tokio::test]
+async fn edge_reported_config_endpoint_marks_release_applied() {
+    let router = app(AppState::default());
+    let package = json!({
+        "edge_id": "edge-dev",
+        "version": "2026.06.26-010",
+        "device_models": [],
+        "devices": [{"device_id": "pump-1", "device_type": "pump"}],
+        "protocol_connections": [{"connection_id": "sim-main", "protocol": "Simulated", "endpoint": null}],
+        "point_mappings": [{
+            "point_id": "pressure",
+            "device_id": "pump-1",
+            "semantic_id": "pressure",
+            "protocol_connection_id": "sim-main",
+            "address": {"kind": "simulated", "value": "pressure"},
+            "value_type": "Float",
+            "unit": "MPa",
+            "range": null,
+            "interval_ms": 1000
+        }],
+        "collection_tasks": [{
+            "task_id": "pump-main",
+            "device_id": "pump-1",
+            "point_ids": ["pressure"],
+            "interval_ms": 1000,
+            "enabled": true
+        }],
+        "algorithms": []
+    });
+
+    let release_response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/releases")
+                .header("content-type", "application/json")
+                .body(Body::from(package.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(release_response.status(), StatusCode::CREATED);
+
+    let report = json!({
+        "reportedVersion": "2026.06.26-010"
+    });
+    let response = router
+        .oneshot(
+            Request::post("/api/edges/edge-dev/reported-config")
+                .header("content-type", "application/json")
+                .body(Body::from(report.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["applyResults"][0]["edgeId"], "edge-dev");
+    assert_eq!(
+        payload["applyResults"][0]["desiredVersion"],
+        "2026.06.26-010"
+    );
+    assert_eq!(
+        payload["applyResults"][0]["reportedVersion"],
+        "2026.06.26-010"
+    );
+    assert_eq!(payload["applyResults"][0]["result"], "已应用");
+}
