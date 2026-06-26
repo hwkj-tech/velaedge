@@ -214,7 +214,10 @@ async fn runtime_events_endpoint_accepts_edge_event_and_returns_status() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(payload["events"][0]["code"], "modbus.timeout");
-    assert_eq!(payload["events"][0]["context"]["connection_id"], "modbus-line-a");
+    assert_eq!(
+        payload["events"][0]["context"]["connection_id"],
+        "modbus-line-a"
+    );
 }
 
 #[tokio::test]
