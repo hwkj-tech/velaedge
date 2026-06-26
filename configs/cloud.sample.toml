@@ -1,0 +1,28 @@
+[cloud]
+region = "cn-east-dev"
+tenant = "default"
+
+[mqtt]
+broker = "mqtts://broker.example.com:8883"
+telemetry_topic = "edge/{edge_id}/telemetry/up"
+event_topic = "edge/{edge_id}/event/up"
+config_topic = "edge/{edge_id}/config/down"
+command_topic = "edge/{edge_id}/command/down"
+
+[storage]
+metadata_database = "postgres://edge:edge@localhost:5432/edge"
+timeseries_database = "postgres://edge:edge@localhost:5432/timeseries"
+object_store = "s3://edge-platform-artifacts"
+vector_index = "pgvector://edge-knowledge"
+
+[[fleet.edges]]
+id = "edge-dev"
+display_name = "Development Edge"
+site = "lab"
+capabilities = ["simulated-protocol", "jsonl-storage"]
+
+[agent]
+model_gateway = "https://model-gateway.example.com"
+rag_collection = "device-manuals"
+require_human_confirmation_for_high_risk = true
+

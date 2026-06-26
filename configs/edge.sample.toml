@@ -1,0 +1,36 @@
+[edge]
+id = "edge-dev"
+site = "lab"
+storage_path = "data/telemetry.jsonl"
+
+[cloud_sync]
+endpoint = "mqtts://broker.example.com:8883"
+client_id = "edge-dev"
+ca_cert = "certs/ca.pem"
+client_cert = "certs/edge-dev.pem"
+client_key = "certs/edge-dev.key"
+
+[[devices]]
+id = "pump-1"
+device_type = "pump"
+protocol = "simulated"
+poll_interval_ms = 1000
+
+[[devices.telemetry]]
+id = "pressure"
+value_type = "float"
+unit = "MPa"
+min = 0.0
+max = 20.0
+
+[[devices.telemetry]]
+id = "running"
+value_type = "boolean"
+
+[[algorithms]]
+id = "pump-anomaly"
+version = "1.0.0"
+runtime = "onnx"
+inputs = ["pressure"]
+outputs = ["anomaly_score"]
+
