@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { fetchPointMappings, fetchReleaseList, fetchSummary } from './client';
+import {
+  fetchPointMappings,
+  fetchReleaseList,
+  fetchSummary,
+  publishLatestRelease,
+  savePointMapping,
+} from './client';
 
 describe('fetchSummary', () => {
   it('loads cloud summary from the API', async () => {
@@ -76,5 +82,72 @@ describe('fetchReleaseList', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/releases');
     expect(result.draftVersion).toBe('2026.06.26-001');
     expect(result.applyResults[0].edgeId).toBe('edge-dev');
+  });
+});
+
+describe('savePointMapping', () => {
+  it('sends an editable point mapping draft to the API', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        pointId: 'pressure/main',
+        address: 'holding_register:40002',
+        interval: '2000ms',
+      }),
+    });
+
+    const result = await savePointMapping(
+      'pressure/main',
+      {
+        addressKind: 'holding_register',
+        addressValue: '40002',
+        intervalMs: 2000,
+        unit: 'MPa',
+      },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/point-mappings/pressure%2Fmain', {
+      body: JSON.stringify({
+        addressKind: 'holding_register',
+        addressValue: '40002',
+        intervalMs: 2000,
+        unit: 'MPa',
+      }),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    });
+    expect(result.address).toBe('holding_register:40002');
+  });
+});
+
+describe('publishLatestRelease', () => {
+  it('publishes the latest cloud draft and returns apply results', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        draftVersion: '2026.06.26-002',
+        validationStatus: '已通过',
+        changeSummary: '云端配置包已生成',
+        rolloutPolicy: '单边端发布',
+        applyResults: [
+          {
+            edgeId: 'edge-dev',
+            desiredVersion: '2026.06.26-002',
+            reportedVersion: '2026.06.26-002',
+            result: '已应用',
+            heartbeat: '18 秒前',
+          },
+        ],
+      }),
+    });
+
+    const result = await publishLatestRelease(fetchMock as unknown as typeof fetch);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/releases/publish', {
+      method: 'POST',
+    });
+    expect(result.draftVersion).toBe('2026.06.26-002');
+    expect(result.applyResults[0].result).toBe('已应用');
   });
 });

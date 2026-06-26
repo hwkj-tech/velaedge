@@ -22,6 +22,13 @@ export interface PointMappingResponse {
   status: string;
 }
 
+export interface SavePointMappingRequest {
+  addressKind: string;
+  addressValue: string;
+  intervalMs: number;
+  unit: string;
+}
+
 export interface ApplyResultResponse {
   edgeId: string;
   desiredVersion: string;
