@@ -44,3 +44,94 @@ export interface ReleaseListResponse {
   rolloutPolicy: string;
   applyResults: ApplyResultResponse[];
 }
+
+export type EdgeHealth = 'Healthy' | 'Degraded' | 'Critical' | 'Offline';
+
+export interface SystemRuntimeMetrics {
+  cpu_percent: number;
+  memory_percent: number;
+  disk_percent: number;
+  process_uptime_seconds: number;
+}
+
+export interface CollectionRuntimeMetrics {
+  active_task_count: number;
+  success_rate: number;
+  average_latency_ms: number;
+  bad_point_count: number;
+}
+
+export interface ProtocolRuntimeMetrics {
+  connection_id: string;
+  protocol: string;
+  connected: boolean;
+  latency_ms: number;
+  timeout_count: number;
+  error_count: number;
+  reconnect_count: number;
+}
+
+export interface LocalStoreMetrics {
+  backend: string;
+  buffered_records: number;
+  oldest_buffer_age_seconds: number;
+  disk_usage_percent: number;
+}
+
+export interface AlgorithmRuntimeMetrics {
+  algorithm_id: string;
+  healthy: boolean;
+  last_run_latency_ms: number;
+  error_count: number;
+  alert_count: number;
+}
+
+export interface CloudSyncMetrics {
+  connected: boolean;
+  last_sync_seconds_ago: number;
+  pending_uploads: number;
+  desired_version: string;
+  reported_version: string;
+}
+
+export interface EdgeRuntimeMetricsSnapshot {
+  edge_id: string;
+  runtime_id: string;
+  config_version: string;
+  timestamp: string;
+  health: EdgeHealth;
+  system: SystemRuntimeMetrics;
+  collection: CollectionRuntimeMetrics;
+  protocols: ProtocolRuntimeMetrics[];
+  local_store: LocalStoreMetrics;
+  algorithms: AlgorithmRuntimeMetrics[];
+  cloud_sync: CloudSyncMetrics;
+}
+
+export type RuntimeEventSeverity = 'Info' | 'Warning' | 'Critical';
+export type RuntimeEventCategory =
+  | 'System'
+  | 'Protocol'
+  | 'Collection'
+  | 'Storage'
+  | 'Algorithm'
+  | 'Sync';
+
+export interface EdgeRuntimeEvent {
+  edge_id: string;
+  severity: RuntimeEventSeverity;
+  category: RuntimeEventCategory;
+  code: string;
+  message: string;
+  timestamp: string;
+  context: Record<string, string>;
+}
+
+export interface RuntimeStatusResponse {
+  healthyEdgeCount: number;
+  degradedEdgeCount: number;
+  criticalEdgeCount: number;
+  averageCollectionLatencyMs: number;
+  edges: EdgeRuntimeMetricsSnapshot[];
+  events: EdgeRuntimeEvent[];
+}

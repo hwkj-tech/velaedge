@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   fetchPointMappings,
   fetchReleaseList,
+  fetchRuntimeStatus,
   fetchSummary,
   publishLatestRelease,
   savePointMapping,
@@ -82,6 +83,63 @@ describe('fetchReleaseList', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/releases');
     expect(result.draftVersion).toBe('2026.06.26-001');
     expect(result.applyResults[0].edgeId).toBe('edge-dev');
+  });
+});
+
+describe('fetchRuntimeStatus', () => {
+  it('loads runtime metrics and events from the API', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        healthyEdgeCount: 1,
+        degradedEdgeCount: 0,
+        criticalEdgeCount: 0,
+        averageCollectionLatencyMs: 24,
+        edges: [
+          {
+            edge_id: 'edge-dev',
+            runtime_id: 'runtime-dev',
+            config_version: '2026.06.26-001',
+            timestamp: '2026-06-26T10:00:00Z',
+            health: 'Healthy',
+            system: {
+              cpu_percent: 18.5,
+              memory_percent: 42,
+              disk_percent: 61,
+              process_uptime_seconds: 3600,
+            },
+            collection: {
+              active_task_count: 1,
+              success_rate: 0.995,
+              average_latency_ms: 24,
+              bad_point_count: 0,
+            },
+            protocols: [],
+            local_store: {
+              backend: 'jsonl',
+              buffered_records: 0,
+              oldest_buffer_age_seconds: 0,
+              disk_usage_percent: 35,
+            },
+            algorithms: [],
+            cloud_sync: {
+              connected: true,
+              last_sync_seconds_ago: 8,
+              pending_uploads: 0,
+              desired_version: '2026.06.26-001',
+              reported_version: '2026.06.26-001',
+            },
+          },
+        ],
+        events: [],
+      }),
+    });
+
+    const result = await fetchRuntimeStatus(fetchMock as unknown as typeof fetch);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/runtime-status');
+    expect(result.edges[0].edge_id).toBe('edge-dev');
+    expect(result.averageCollectionLatencyMs).toBe(24);
   });
 });
 

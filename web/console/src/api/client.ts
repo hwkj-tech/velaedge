@@ -1,6 +1,7 @@
 import type {
   PointMappingResponse,
   ReleaseListResponse,
+  RuntimeStatusResponse,
   SavePointMappingRequest,
   SummaryResponse,
 } from './types';
@@ -21,6 +22,12 @@ export async function fetchReleaseList(
   fetcher: typeof fetch = fetch,
 ): Promise<ReleaseListResponse> {
   return requestJson<ReleaseListResponse>('/api/releases', fetcher);
+}
+
+export async function fetchRuntimeStatus(
+  fetcher: typeof fetch = fetch,
+): Promise<RuntimeStatusResponse> {
+  return requestJson<RuntimeStatusResponse>('/api/runtime-status', fetcher);
 }
 
 export async function savePointMapping(

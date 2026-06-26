@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import {
   fetchPointMappings,
   fetchReleaseList,
+  fetchRuntimeStatus,
   fetchSummary,
   publishLatestRelease,
   savePointMapping,
@@ -10,6 +11,7 @@ import {
 import type {
   PointMappingResponse,
   ReleaseListResponse,
+  RuntimeStatusResponse,
   SavePointMappingRequest,
   SummaryResponse,
 } from './api/types';
@@ -34,6 +36,7 @@ const initialSummary: SummaryResponse = {
 interface ConsoleSnapshot {
   pointMappings: PointMappingResponse[];
   releaseList: ReleaseListResponse;
+  runtimeStatus: RuntimeStatusResponse;
   summary: SummaryResponse;
 }
 
@@ -42,6 +45,7 @@ export default function App() {
   const [summary, setSummary] = useState(initialSummary);
   const [pointMappings, setPointMappings] = useState<PointMappingResponse[]>();
   const [releaseList, setReleaseList] = useState<ReleaseListResponse>();
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatusResponse>();
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>(
     'loading',
   );
@@ -50,6 +54,7 @@ export default function App() {
     setSummary(snapshot.summary);
     setPointMappings(snapshot.pointMappings);
     setReleaseList(snapshot.releaseList);
+    setRuntimeStatus(snapshot.runtimeStatus);
     setLoadState('ready');
   };
 
@@ -67,14 +72,16 @@ export default function App() {
 
   const handlePublishLatestRelease = async () => {
     const nextReleaseList = await publishLatestRelease();
-    const [nextSummary, nextPointMappings] = await Promise.all([
+    const [nextSummary, nextPointMappings, nextRuntimeStatus] = await Promise.all([
       fetchSummary(),
       fetchPointMappings(),
+      fetchRuntimeStatus(),
     ]);
 
     setSummary(nextSummary);
     setPointMappings(nextPointMappings);
     setReleaseList(nextReleaseList);
+    setRuntimeStatus(nextRuntimeStatus);
     setLoadState('ready');
   };
 
@@ -98,6 +105,26 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    let mounted = true;
+    const refreshRuntimeStatus = async () => {
+      try {
+        const nextRuntimeStatus = await fetchRuntimeStatus();
+        if (mounted) {
+          setRuntimeStatus(nextRuntimeStatus);
+        }
+      } catch {
+        // Keep the last known runtime snapshot visible if polling misses once.
+      }
+    };
+    const intervalId = window.setInterval(refreshRuntimeStatus, 5000);
+
+    return () => {
+      mounted = false;
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
   return (
     <AppShell activePage={activePage} onNavigate={setActivePage}>
       {renderPage(
@@ -108,19 +135,21 @@ export default function App() {
         handlePublishLatestRelease,
         pointMappings,
         releaseList,
+        runtimeStatus,
       )}
     </AppShell>
   );
 }
 
 async function loadConsoleSnapshot(): Promise<ConsoleSnapshot> {
-  const [summary, pointMappings, releaseList] = await Promise.all([
+  const [summary, pointMappings, releaseList, runtimeStatus] = await Promise.all([
     fetchSummary(),
     fetchPointMappings(),
     fetchReleaseList(),
+    fetchRuntimeStatus(),
   ]);
 
-  return { pointMappings, releaseList, summary };
+  return { pointMappings, releaseList, runtimeStatus, summary };
 }
 
 function renderPage(
@@ -134,6 +163,7 @@ function renderPage(
   onPublish: () => Promise<void>,
   pointMappings?: PointMappingResponse[],
   releaseList?: ReleaseListResponse,
+  runtimeStatus?: RuntimeStatusResponse,
 ) {
   switch (activePage) {
     case 'dashboard':
@@ -153,7 +183,7 @@ function renderPage(
     case 'releases':
       return <ReleasesPage onPublish={onPublish} releaseList={releaseList} />;
     case 'runtimeStatus':
-      return <RuntimeStatusPage />;
+      return <RuntimeStatusPage runtimeStatus={runtimeStatus} />;
     case 'auditLog':
       return <AuditLogPage />;
     case 'agentAssistant':
