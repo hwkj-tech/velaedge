@@ -86,7 +86,9 @@ export function PointMappingsPage({
 
   useEffect(() => {
     setForm(pointToEditorForm(selectedPoint));
-    setSaveState('idle');
+    setSaveState((current) =>
+      current === 'saving' || current === 'saved' ? current : 'idle',
+    );
   }, [selectedPoint]);
 
   const handleSave = async () => {

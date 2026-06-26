@@ -118,6 +118,7 @@ describe('App cloud console write actions', () => {
       });
     });
     expect(await screen.findByText('holding_register:40002')).toBeInTheDocument();
+    expect(screen.getByText('草稿已保存')).toBeInTheDocument();
   });
 
   it('publishes the latest draft and refreshes release apply results', async () => {

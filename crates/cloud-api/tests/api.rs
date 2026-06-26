@@ -118,6 +118,7 @@ async fn point_mapping_update_saves_new_draft_version() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = router
+        .clone()
         .oneshot(
             Request::get("/api/point-mappings")
                 .body(Body::empty())
@@ -130,6 +131,15 @@ async fn point_mapping_update_saves_new_draft_version() {
 
     assert_eq!(payload[0]["address"], "holding_register:40002");
     assert_eq!(payload[0]["interval"], "2000ms");
+
+    let response = router
+        .oneshot(Request::get("/api/releases").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["draftVersion"], "2026.06.26-002");
 }
 
 #[tokio::test]

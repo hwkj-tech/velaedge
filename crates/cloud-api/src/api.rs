@@ -143,9 +143,16 @@ fn release_list_response(store: &cloud_control::CloudControlStore) -> ReleaseLis
     releases.sort_by(|left, right| left.desired_version.cmp(&right.desired_version));
     releases.reverse();
 
-    let draft_version = releases
-        .first()
-        .map(|release| release.desired_version.clone())
+    let draft_version = store
+        .edge_nodes()
+        .filter_map(|edge| store.latest_config_package_for_edge(&edge.edge_id))
+        .map(|package| package.version.clone())
+        .max()
+        .or_else(|| {
+            releases
+                .first()
+                .map(|release| release.desired_version.clone())
+        })
         .unwrap_or_else(|| "-".to_string());
 
     ReleaseListResponse {
