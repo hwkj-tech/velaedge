@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { GitCompare, Send, ShieldCheck } from 'lucide-react';
 
 import type { ReleaseListResponse } from '../api/types';
@@ -62,10 +63,27 @@ const applyColumns: Array<DataTableColumn<ReleaseListResponse['applyResults'][nu
 ];
 
 export function ReleasesPage({
+  onPublish,
   releaseList = fallbackReleaseList,
 }: {
+  onPublish?: () => Promise<void> | void;
   releaseList?: ReleaseListResponse;
 }) {
+  const [publishState, setPublishState] = useState<
+    'idle' | 'publishing' | 'published' | 'error'
+  >('idle');
+
+  const handlePublish = async () => {
+    setPublishState('publishing');
+
+    try {
+      await onPublish?.();
+      setPublishState('published');
+    } catch {
+      setPublishState('error');
+    }
+  };
+
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -84,9 +102,17 @@ export function ReleasesPage({
             <ShieldCheck size={15} aria-hidden="true" />
             校验草稿
           </button>
-          <button className="primary-button" type="button">
+          <span className={`release-status ${publishState}`} role="status">
+            {publishStatusText(publishState)}
+          </span>
+          <button
+            className="primary-button"
+            disabled={publishState === 'publishing'}
+            onClick={handlePublish}
+            type="button"
+          >
             <Send size={15} aria-hidden="true" />
-            创建发布
+            {publishState === 'publishing' ? '发布中' : '创建发布'}
           </button>
         </div>
       </section>
@@ -127,4 +153,19 @@ export function ReleasesPage({
       </section>
     </div>
   );
+}
+
+function publishStatusText(
+  publishState: 'idle' | 'publishing' | 'published' | 'error',
+) {
+  switch (publishState) {
+    case 'publishing':
+      return '发布中';
+    case 'published':
+      return '发布指令已发送';
+    case 'error':
+      return '发布失败';
+    case 'idle':
+      return '';
+  }
 }

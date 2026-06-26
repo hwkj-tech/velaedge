@@ -1,6 +1,7 @@
+import { useEffect, useState } from 'react';
 import { FileInput, Plus, ShieldCheck } from 'lucide-react';
 
-import type { PointMappingResponse } from '../api/types';
+import type { PointMappingResponse, SavePointMappingRequest } from '../api/types';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { Drawer } from '../components/Drawer';
 import './PointMappingsPage.css';
@@ -68,11 +69,37 @@ const columns: Array<DataTableColumn<PointMappingResponse>> = [
 ];
 
 export function PointMappingsPage({
+  onSavePoint,
   points = fallbackPoints,
 }: {
+  onSavePoint?: (
+    pointId: string,
+    request: SavePointMappingRequest,
+  ) => Promise<void> | void;
   points?: PointMappingResponse[];
 }) {
-  const selectedPoint = points[0];
+  const selectedPoint = points[0] ?? fallbackPoints[0];
+  const [form, setForm] = useState(() => pointToEditorForm(selectedPoint));
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>(
+    'idle',
+  );
+
+  useEffect(() => {
+    setForm(pointToEditorForm(selectedPoint));
+    setSaveState('idle');
+  }, [selectedPoint]);
+
+  const handleSave = async () => {
+    const request = formToSaveRequest(form);
+    setSaveState('saving');
+
+    try {
+      await onSavePoint?.(selectedPoint.pointId, request);
+      setSaveState('saved');
+    } catch {
+      setSaveState('error');
+    }
+  };
 
   return (
     <div className="page-stack">
@@ -113,11 +140,26 @@ export function PointMappingsPage({
           title={`编辑点位 ${selectedPoint.pointId}`}
           footer={
             <>
-              <button className="secondary-button" type="button">
+              <span className={`editor-status ${saveState}`} role="status">
+                {saveStatusText(saveState)}
+              </span>
+              <button
+                className="secondary-button"
+                onClick={() => {
+                  setForm(pointToEditorForm(selectedPoint));
+                  setSaveState('idle');
+                }}
+                type="button"
+              >
                 取消
               </button>
-              <button className="primary-button" type="button">
-                保存草稿
+              <button
+                className="primary-button"
+                disabled={saveState === 'saving'}
+                onClick={handleSave}
+                type="button"
+              >
+                {saveState === 'saving' ? '保存中' : '保存草稿'}
               </button>
             </>
           }
@@ -137,8 +179,6 @@ export function PointMappingsPage({
             fields={[
               ['协议类型', selectedPoint.protocol],
               ['连接实例', selectedPoint.connection],
-              ['地址类型', 'holding_register'],
-              ['地址值', '40001'],
               ['数据类型', selectedPoint.valueType],
               ['读写类型', selectedPoint.readWrite],
               ['缩放系数', selectedPoint.scale],
@@ -146,9 +186,44 @@ export function PointMappingsPage({
             ]}
             title="协议映射"
           />
+          <section className="drawer-section">
+            <h4>地址配置</h4>
+            <div className="editor-grid">
+              <label className="editor-control">
+                <span>地址类型</span>
+                <select
+                  value={form.addressKind}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      addressKind: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="holding_register">holding_register</option>
+                  <option value="input_register">input_register</option>
+                  <option value="coil">coil</option>
+                  <option value="node_id">node_id</option>
+                  <option value="topic">topic</option>
+                  <option value="simulated">simulated</option>
+                </select>
+              </label>
+              <label className="editor-control">
+                <span>地址值</span>
+                <input
+                  value={form.addressValue}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      addressValue: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+            </div>
+          </section>
           <DrawerSection
             fields={[
-              ['采集周期', selectedPoint.interval],
               ['超时', '800ms'],
               ['重试次数', '2'],
               ['死区', '0.02'],
@@ -156,9 +231,41 @@ export function PointMappingsPage({
             ]}
             title="采集策略"
           />
+          <section className="drawer-section">
+            <h4>采集参数</h4>
+            <div className="editor-grid">
+              <label className="editor-control">
+                <span>采集周期(ms)</span>
+                <input
+                  min="100"
+                  step="100"
+                  type="number"
+                  value={form.intervalMs}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      intervalMs: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label className="editor-control">
+                <span>单位</span>
+                <input
+                  value={form.unit}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      unit: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+            </div>
+          </section>
           <DrawerSection
             fields={[
-              ['单位', selectedPoint.unit],
+              ['采集周期', `${formToSaveRequest(form).intervalMs}ms`],
               ['数值范围', selectedPoint.range],
               ['精度', '2'],
               ['质量规则', selectedPoint.qualityRule],
@@ -170,6 +277,62 @@ export function PointMappingsPage({
       </div>
     </div>
   );
+}
+
+interface EditorForm {
+  addressKind: string;
+  addressValue: string;
+  intervalMs: string;
+  unit: string;
+}
+
+function pointToEditorForm(point: PointMappingResponse): EditorForm {
+  const address = splitAddress(point.address);
+
+  return {
+    addressKind: address.kind,
+    addressValue: address.value,
+    intervalMs: String(parseIntervalMs(point.interval)),
+    unit: point.unit === '-' ? '' : point.unit,
+  };
+}
+
+function formToSaveRequest(form: EditorForm): SavePointMappingRequest {
+  return {
+    addressKind: form.addressKind.trim() || 'holding_register',
+    addressValue: form.addressValue.trim(),
+    intervalMs: Math.max(Number.parseInt(form.intervalMs, 10) || 1000, 100),
+    unit: form.unit.trim() || '-',
+  };
+}
+
+function splitAddress(address: string): { kind: string; value: string } {
+  const separatorIndex = address.indexOf(':');
+  if (separatorIndex === -1) {
+    return { kind: 'holding_register', value: address };
+  }
+
+  return {
+    kind: address.slice(0, separatorIndex),
+    value: address.slice(separatorIndex + 1),
+  };
+}
+
+function parseIntervalMs(interval: string): number {
+  return Number.parseInt(interval.replace(/[^\d]/g, ''), 10) || 1000;
+}
+
+function saveStatusText(saveState: 'idle' | 'saving' | 'saved' | 'error') {
+  switch (saveState) {
+    case 'saving':
+      return '保存中';
+    case 'saved':
+      return '草稿已保存';
+    case 'error':
+      return '保存失败';
+    case 'idle':
+      return '';
+  }
 }
 
 function DrawerSection({

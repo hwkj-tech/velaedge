@@ -1,9 +1,16 @@
 import { useEffect, useState } from 'react';
 
-import { fetchPointMappings, fetchReleaseList, fetchSummary } from './api/client';
+import {
+  fetchPointMappings,
+  fetchReleaseList,
+  fetchSummary,
+  publishLatestRelease,
+  savePointMapping,
+} from './api/client';
 import type {
   PointMappingResponse,
   ReleaseListResponse,
+  SavePointMappingRequest,
   SummaryResponse,
 } from './api/types';
 import { AppShell, type PageKey } from './layout/AppShell';
@@ -24,6 +31,12 @@ const initialSummary: SummaryResponse = {
   pending_release_count: 0,
 };
 
+interface ConsoleSnapshot {
+  pointMappings: PointMappingResponse[];
+  releaseList: ReleaseListResponse;
+  summary: SummaryResponse;
+}
+
 export default function App() {
   const [activePage, setActivePage] = useState<PageKey>('dashboard');
   const [summary, setSummary] = useState(initialSummary);
@@ -33,16 +46,45 @@ export default function App() {
     'loading',
   );
 
+  const applySnapshot = (snapshot: ConsoleSnapshot) => {
+    setSummary(snapshot.summary);
+    setPointMappings(snapshot.pointMappings);
+    setReleaseList(snapshot.releaseList);
+    setLoadState('ready');
+  };
+
+  const refreshConsoleData = async () => {
+    applySnapshot(await loadConsoleSnapshot());
+  };
+
+  const handleSavePoint = async (
+    pointId: string,
+    request: SavePointMappingRequest,
+  ) => {
+    await savePointMapping(pointId, request);
+    await refreshConsoleData();
+  };
+
+  const handlePublishLatestRelease = async () => {
+    const nextReleaseList = await publishLatestRelease();
+    const [nextSummary, nextPointMappings] = await Promise.all([
+      fetchSummary(),
+      fetchPointMappings(),
+    ]);
+
+    setSummary(nextSummary);
+    setPointMappings(nextPointMappings);
+    setReleaseList(nextReleaseList);
+    setLoadState('ready');
+  };
+
   useEffect(() => {
     let mounted = true;
 
-    Promise.all([fetchSummary(), fetchPointMappings(), fetchReleaseList()])
-      .then(([nextSummary, nextPointMappings, nextReleaseList]) => {
+    loadConsoleSnapshot()
+      .then((snapshot) => {
         if (mounted) {
-          setSummary(nextSummary);
-          setPointMappings(nextPointMappings);
-          setReleaseList(nextReleaseList);
-          setLoadState('ready');
+          applySnapshot(snapshot);
         }
       })
       .catch(() => {
@@ -58,15 +100,38 @@ export default function App() {
 
   return (
     <AppShell activePage={activePage} onNavigate={setActivePage}>
-      {renderPage(activePage, summary, loadState, pointMappings, releaseList)}
+      {renderPage(
+        activePage,
+        summary,
+        loadState,
+        handleSavePoint,
+        handlePublishLatestRelease,
+        pointMappings,
+        releaseList,
+      )}
     </AppShell>
   );
+}
+
+async function loadConsoleSnapshot(): Promise<ConsoleSnapshot> {
+  const [summary, pointMappings, releaseList] = await Promise.all([
+    fetchSummary(),
+    fetchPointMappings(),
+    fetchReleaseList(),
+  ]);
+
+  return { pointMappings, releaseList, summary };
 }
 
 function renderPage(
   activePage: PageKey,
   summary: SummaryResponse,
   loadState: 'loading' | 'ready' | 'error',
+  onSavePoint: (
+    pointId: string,
+    request: SavePointMappingRequest,
+  ) => Promise<void>,
+  onPublish: () => Promise<void>,
   pointMappings?: PointMappingResponse[],
   releaseList?: ReleaseListResponse,
 ) {
@@ -80,13 +145,13 @@ function renderPage(
     case 'protocolConnections':
       return <ProtocolConnectionsPage />;
     case 'pointMappings':
-      return <PointMappingsPage points={pointMappings} />;
+      return <PointMappingsPage onSavePoint={onSavePoint} points={pointMappings} />;
     case 'collectionTasks':
       return <CollectionTasksPage />;
     case 'algorithms':
       return <AlgorithmsPage />;
     case 'releases':
-      return <ReleasesPage releaseList={releaseList} />;
+      return <ReleasesPage onPublish={onPublish} releaseList={releaseList} />;
     case 'runtimeStatus':
       return <RuntimeStatusPage />;
     case 'auditLog':
