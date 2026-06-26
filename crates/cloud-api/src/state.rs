@@ -3,10 +3,11 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use cloud_control::{CloudControlStore, EdgeNode, ReleaseService};
 use edge_core::{
-    CloudSyncMetrics, CollectionRuntimeMetrics, CollectionTask, DeviceInstance, EdgeConfigPackage,
-    EdgeHealth, EdgeRuntimeMetricsSnapshot, LocalStoreMetrics, PointAddress, ProtocolConnection,
-    ProtocolRuntimeMetrics, ProtocolType, SystemRuntimeMetrics, TelemetryPointMapping,
-    TelemetryType,
+    AlgorithmRuntime, AlgorithmSpec, CloudSyncMetrics, CollectionRuntimeMetrics, CollectionTask,
+    CommandRisk, CommandSpec, DeviceInstance, DeviceSpec, EdgeConfigPackage, EdgeHealth,
+    EdgeRuntimeMetricsSnapshot, EventSeverity, EventSpec, LocalStoreMetrics, NumberRange,
+    PointAddress, ProtocolConnection, ProtocolRuntimeMetrics, ProtocolType, SystemRuntimeMetrics,
+    TelemetryPoint, TelemetryPointMapping, TelemetryType,
 };
 
 #[derive(Clone)]
@@ -25,7 +26,22 @@ impl Default for AppState {
                 .with_capability("local-store:jsonl"),
         );
 
-        let package = EdgeConfigPackage::new("edge-dev", "2026.06.26-001")
+        let pump_model = DeviceSpec::new("pump", "v1")
+            .with_telemetry(vec![
+                TelemetryPoint::new("pressure", TelemetryType::Float)
+                    .with_unit("MPa")
+                    .with_range(NumberRange::new(0.0, 20.0))
+                    .with_description("泵出口压力"),
+                TelemetryPoint::new("running", TelemetryType::Boolean)
+                    .with_description("设备运行布尔量"),
+            ])
+            .with_commands(vec![CommandSpec::new("start", CommandRisk::Medium)])
+            .with_events(vec![EventSpec {
+                id: "pressure_high".to_string(),
+                severity: EventSeverity::Warning,
+            }]);
+
+        let mut package = EdgeConfigPackage::new("edge-dev", "2026.06.26-001")
             .with_device(DeviceInstance::new("pump-1", "pump"))
             .with_protocol_connection(ProtocolConnection {
                 connection_id: "modbus-line-a".to_string(),
@@ -64,6 +80,15 @@ impl Default for AppState {
                 vec!["pressure".to_string(), "running".to_string()],
                 1000,
             ));
+        package.device_models.push(pump_model.clone());
+        package.algorithms.push(AlgorithmSpec {
+            id: "pump-anomaly-v1".to_string(),
+            version: "1.0.0".to_string(),
+            runtime: AlgorithmRuntime::Onnx,
+            inputs: vec!["pressure".to_string(), "running".to_string()],
+            outputs: vec!["pump.anomaly_score".to_string()],
+        });
+        store.upsert_device_model(pump_model);
 
         let release = ReleaseService::create_release(&mut store, package)
             .expect("demo config package should be valid");

@@ -4,10 +4,10 @@ use axum::{
     routing::{get, put},
     Json, Router,
 };
-use cloud_control::{ReleaseService, ReleaseStatus};
+use cloud_control::{AuditAction, ReleaseService, ReleaseStatus};
 use edge_core::{
-    EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, PointAddress,
-    ProtocolType, TelemetryPointMapping, TelemetryType,
+    AlgorithmRuntime, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent,
+    EdgeRuntimeMetricsSnapshot, PointAddress, ProtocolType, TelemetryPointMapping, TelemetryType,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -25,6 +25,12 @@ pub struct SummaryResponse {
 pub fn app(state: AppState) -> Router {
     let api = Router::new()
         .route("/api/summary", get(summary))
+        .route("/api/edge-nodes", get(edge_nodes))
+        .route("/api/device-models", get(device_models))
+        .route("/api/protocol-connections", get(protocol_connections))
+        .route("/api/collection-tasks", get(collection_tasks))
+        .route("/api/algorithms", get(algorithms))
+        .route("/api/audit-records", get(audit_records))
         .route("/api/runtime-status", get(runtime_status))
         .route(
             "/api/edges/{edge_id}/desired-config",
@@ -92,6 +98,186 @@ async fn point_mappings(State(state): State<AppState>) -> Json<Vec<PointMappingR
     }
 
     Json(points)
+}
+
+async fn edge_nodes(State(state): State<AppState>) -> Json<Vec<EdgeNodeResponse>> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let mut rows = store
+        .edge_nodes()
+        .map(|edge| {
+            let runtime = store.runtime_metrics(&edge.edge_id);
+            EdgeNodeResponse {
+                edge_id: edge.edge_id.clone(),
+                display_name: edge.display_name.clone(),
+                site: edge.site.clone().unwrap_or_else(|| "-".to_string()),
+                runtime_id: runtime
+                    .map(|snapshot| snapshot.runtime_id.clone())
+                    .unwrap_or_else(|| "-".to_string()),
+                status: runtime
+                    .map(|snapshot| format_health(snapshot.health))
+                    .unwrap_or_else(|| "未上报".to_string()),
+                resources: runtime
+                    .map(|snapshot| {
+                        format!(
+                            "{} / {} / {}",
+                            format_percent(snapshot.system.cpu_percent),
+                            format_percent(snapshot.system.memory_percent),
+                            format_percent(snapshot.system.disk_percent)
+                        )
+                    })
+                    .unwrap_or_else(|| "-".to_string()),
+                heartbeat: runtime
+                    .map(|snapshot| format!("{} 秒前", snapshot.cloud_sync.last_sync_seconds_ago))
+                    .unwrap_or_else(|| "-".to_string()),
+                capabilities: edge.capabilities.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| left.edge_id.cmp(&right.edge_id));
+
+    Json(rows)
+}
+
+async fn device_models(State(state): State<AppState>) -> Json<Vec<DeviceModelResponse>> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let mut rows = Vec::new();
+
+    for package in store.config_packages() {
+        for model in &package.device_models {
+            rows.push(DeviceModelResponse {
+                device_type: model.device_type.clone(),
+                version: model.version.clone(),
+                telemetry: model
+                    .telemetry
+                    .iter()
+                    .map(|telemetry| TelemetryModelResponse {
+                        telemetry_id: telemetry.id.clone(),
+                        name: telemetry.id.clone(),
+                        value_type: format_telemetry_type(telemetry.value_type),
+                        unit: telemetry.unit.clone().unwrap_or_else(|| "-".to_string()),
+                        range: telemetry
+                            .range
+                            .as_ref()
+                            .map(|range| format!("{}-{}", range.min, range.max))
+                            .unwrap_or_else(|| "-".to_string()),
+                        description: telemetry
+                            .description
+                            .clone()
+                            .unwrap_or_else(|| "-".to_string()),
+                    })
+                    .collect(),
+                command_count: model.commands.len(),
+                event_count: model.events.len(),
+            });
+        }
+    }
+    rows.sort_by(|left, right| left.device_type.cmp(&right.device_type));
+
+    Json(rows)
+}
+
+async fn protocol_connections(
+    State(state): State<AppState>,
+) -> Json<Vec<ProtocolConnectionResponse>> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let mut rows = Vec::new();
+
+    for package in store.config_packages() {
+        let runtime = store.runtime_metrics(&package.edge_id);
+        for connection in &package.protocol_connections {
+            let runtime_connection = runtime.and_then(|snapshot| {
+                snapshot
+                    .protocols
+                    .iter()
+                    .find(|protocol| protocol.connection_id == connection.connection_id)
+            });
+            rows.push(ProtocolConnectionResponse {
+                edge_id: package.edge_id.clone(),
+                connection_id: connection.connection_id.clone(),
+                protocol: format_protocol(connection.protocol),
+                endpoint: connection
+                    .endpoint
+                    .clone()
+                    .unwrap_or_else(|| "runtime://simulated".to_string()),
+                status: runtime_connection
+                    .map(|metrics| {
+                        if metrics.connected {
+                            "启用".to_string()
+                        } else {
+                            "异常".to_string()
+                        }
+                    })
+                    .unwrap_or_else(|| "启用".to_string()),
+                policy: "1000ms timeout / 3 retry".to_string(),
+            });
+        }
+    }
+    rows.sort_by(|left, right| left.connection_id.cmp(&right.connection_id));
+
+    Json(rows)
+}
+
+async fn collection_tasks(State(state): State<AppState>) -> Json<Vec<CollectionTaskResponse>> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let mut rows = Vec::new();
+
+    for package in store.config_packages() {
+        for task in &package.collection_tasks {
+            rows.push(CollectionTaskResponse {
+                edge_id: package.edge_id.clone(),
+                task_id: task.task_id.clone(),
+                device_id: task.device_id.clone(),
+                point_list: task.point_ids.join(", "),
+                interval: format!("{}ms", task.interval_ms),
+                status: if task.enabled { "启用" } else { "暂停" }.to_string(),
+            });
+        }
+    }
+    rows.sort_by(|left, right| left.task_id.cmp(&right.task_id));
+
+    Json(rows)
+}
+
+async fn algorithms(State(state): State<AppState>) -> Json<Vec<AlgorithmResponse>> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let mut rows = Vec::new();
+
+    for package in store.config_packages() {
+        for algorithm in &package.algorithms {
+            rows.push(AlgorithmResponse {
+                edge_id: package.edge_id.clone(),
+                algorithm_id: algorithm.id.clone(),
+                version: algorithm.version.clone(),
+                kind: format_algorithm_runtime(algorithm.runtime),
+                inputs: algorithm.inputs.join(", "),
+                outputs: algorithm.outputs.join(", "),
+                execution: "边端本地执行".to_string(),
+                validation: "已通过".to_string(),
+            });
+        }
+    }
+    rows.sort_by(|left, right| left.algorithm_id.cmp(&right.algorithm_id));
+
+    Json(rows)
+}
+
+async fn audit_records(State(state): State<AppState>) -> Json<Vec<AuditRecordResponse>> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let mut rows = store
+        .audit_records()
+        .iter()
+        .map(|record| AuditRecordResponse {
+            created_at: record.created_at.to_rfc3339(),
+            time: record.created_at.format("%H:%M:%S").to_string(),
+            actor: record.actor.clone(),
+            action: format_audit_action(record.action),
+            target: record.target.clone(),
+            result: "成功".to_string(),
+        })
+        .collect::<Vec<_>>();
+    rows.reverse();
+
+    Json(rows)
 }
 
 async fn releases(State(state): State<AppState>) -> Json<ReleaseListResponse> {
@@ -348,6 +534,86 @@ pub struct ReleaseResponse {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EdgeNodeResponse {
+    pub edge_id: String,
+    pub display_name: String,
+    pub site: String,
+    pub runtime_id: String,
+    pub status: String,
+    pub resources: String,
+    pub heartbeat: String,
+    pub capabilities: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceModelResponse {
+    pub device_type: String,
+    pub version: String,
+    pub telemetry: Vec<TelemetryModelResponse>,
+    pub command_count: usize,
+    pub event_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelemetryModelResponse {
+    pub telemetry_id: String,
+    pub name: String,
+    pub value_type: String,
+    pub unit: String,
+    pub range: String,
+    pub description: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtocolConnectionResponse {
+    pub edge_id: String,
+    pub connection_id: String,
+    pub protocol: String,
+    pub endpoint: String,
+    pub status: String,
+    pub policy: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionTaskResponse {
+    pub edge_id: String,
+    pub task_id: String,
+    pub device_id: String,
+    pub point_list: String,
+    pub interval: String,
+    pub status: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlgorithmResponse {
+    pub edge_id: String,
+    pub algorithm_id: String,
+    pub version: String,
+    pub kind: String,
+    pub inputs: String,
+    pub outputs: String,
+    pub execution: String,
+    pub validation: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditRecordResponse {
+    pub created_at: String,
+    pub time: String,
+    pub actor: String,
+    pub action: String,
+    pub target: String,
+    pub result: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeStatusResponse {
     pub healthy_edge_count: usize,
     pub degraded_edge_count: usize,
@@ -494,6 +760,24 @@ fn format_address(address: &PointAddress) -> String {
     format!("{}:{}", address.kind, address.value)
 }
 
+fn format_health(health: EdgeHealth) -> String {
+    match health {
+        EdgeHealth::Healthy => "健康",
+        EdgeHealth::Degraded => "降级",
+        EdgeHealth::Critical => "严重",
+        EdgeHealth::Offline => "离线",
+    }
+    .to_string()
+}
+
+fn format_percent(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{value:.0}%")
+    } else {
+        format!("{value:.1}%")
+    }
+}
+
 fn format_protocol(protocol: ProtocolType) -> String {
     match protocol {
         ProtocolType::Simulated => "Simulated",
@@ -511,6 +795,24 @@ fn format_telemetry_type(value_type: TelemetryType) -> String {
         TelemetryType::Integer => "int64",
         TelemetryType::Float => "float32",
         TelemetryType::Text => "string",
+    }
+    .to_string()
+}
+
+fn format_algorithm_runtime(runtime: AlgorithmRuntime) -> String {
+    match runtime {
+        AlgorithmRuntime::Rule => "规则算法",
+        AlgorithmRuntime::Wasm => "WASM 算法",
+        AlgorithmRuntime::Onnx => "异常检测",
+        AlgorithmRuntime::Python => "Python 算法",
+    }
+    .to_string()
+}
+
+fn format_audit_action(action: AuditAction) -> String {
+    match action {
+        AuditAction::CreateRelease => "create_release",
+        AuditAction::ApplyRelease => "apply_release",
     }
     .to_string()
 }

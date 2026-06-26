@@ -14,7 +14,7 @@ pub use config::{
 pub use message::CloudEnvelope;
 pub use model::{
     AlgorithmRuntime, AlgorithmSpec, CommandCandidate, CommandParameter, CommandRisk, CommandSpec,
-    DataQuality, DeviceSpec, EventSpec, NumberRange, TelemetryPoint, TelemetrySample,
+    DataQuality, DeviceSpec, EventSeverity, EventSpec, NumberRange, TelemetryPoint, TelemetrySample,
     TelemetryType, TelemetryValue,
 };
 pub use observability::{

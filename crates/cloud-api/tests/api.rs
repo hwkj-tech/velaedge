@@ -95,6 +95,100 @@ async fn releases_endpoint_returns_seeded_apply_results() {
 }
 
 #[tokio::test]
+async fn management_endpoints_return_seeded_control_plane_data() {
+    let router = app(AppState::default());
+
+    let edge_response = router
+        .clone()
+        .oneshot(Request::get("/api/edge-nodes").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(edge_response.status(), StatusCode::OK);
+    let body = to_bytes(edge_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let edges: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(edges[0]["edgeId"], "edge-dev");
+    assert_eq!(edges[0]["status"], "健康");
+
+    let models_response = router
+        .clone()
+        .oneshot(
+            Request::get("/api/device-models")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(models_response.status(), StatusCode::OK);
+    let body = to_bytes(models_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let models: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(models[0]["deviceType"], "pump");
+    assert_eq!(models[0]["telemetry"][0]["telemetryId"], "pressure");
+
+    let protocol_response = router
+        .clone()
+        .oneshot(
+            Request::get("/api/protocol-connections")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(protocol_response.status(), StatusCode::OK);
+    let body = to_bytes(protocol_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let connections: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(connections[0]["connectionId"], "modbus-line-a");
+    assert_eq!(connections[0]["protocol"], "Modbus TCP");
+
+    let tasks_response = router
+        .clone()
+        .oneshot(
+            Request::get("/api/collection-tasks")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tasks_response.status(), StatusCode::OK);
+    let body = to_bytes(tasks_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let tasks: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(tasks[0]["taskId"], "pump-main");
+    assert_eq!(tasks[0]["pointList"], "pressure, running");
+
+    let algorithms_response = router
+        .clone()
+        .oneshot(Request::get("/api/algorithms").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(algorithms_response.status(), StatusCode::OK);
+    let body = to_bytes(algorithms_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let algorithms: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(algorithms[0]["algorithmId"], "pump-anomaly-v1");
+    assert_eq!(algorithms[0]["execution"], "边端本地执行");
+
+    let audit_response = router
+        .oneshot(Request::get("/api/audit-records").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(audit_response.status(), StatusCode::OK);
+    let body = to_bytes(audit_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let audit_records: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(audit_records[0]["actor"], "system");
+    assert!(audit_records[0]["action"].is_string());
+}
+
+#[tokio::test]
 async fn runtime_status_endpoint_returns_seeded_edge_metrics() {
     let response = app(AppState::default())
         .oneshot(
