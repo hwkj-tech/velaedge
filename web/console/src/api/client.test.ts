@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  fetchAlgorithms,
+  fetchAuditRecords,
+  fetchCollectionTasks,
+  fetchDeviceModels,
+  fetchEdgeNodes,
   fetchPointMappings,
+  fetchProtocolConnections,
   fetchReleaseList,
   fetchRuntimeStatus,
   fetchSummary,
@@ -140,6 +146,51 @@ describe('fetchRuntimeStatus', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/runtime-status');
     expect(result.edges[0].edge_id).toBe('edge-dev');
     expect(result.averageCollectionLatencyMs).toBe(24);
+  });
+});
+
+describe('management data clients', () => {
+  it('loads API-backed management lists', async () => {
+    const payloads: Record<string, unknown> = {
+      '/api/edge-nodes': [{ edgeId: 'edge-dev' }],
+      '/api/device-models': [{ deviceType: 'pump' }],
+      '/api/protocol-connections': [{ connectionId: 'modbus-line-a' }],
+      '/api/collection-tasks': [{ taskId: 'pump-main' }],
+      '/api/algorithms': [{ algorithmId: 'pump-anomaly-v1' }],
+      '/api/audit-records': [{ action: 'create_release' }],
+    };
+    const fetchMock = vi.fn().mockImplementation((path: string) =>
+      Promise.resolve({
+        ok: true,
+        json: async () => payloads[path],
+      }),
+    );
+
+    await expect(fetchEdgeNodes(fetchMock as unknown as typeof fetch)).resolves.toEqual(
+      payloads['/api/edge-nodes'],
+    );
+    await expect(fetchDeviceModels(fetchMock as unknown as typeof fetch)).resolves.toEqual(
+      payloads['/api/device-models'],
+    );
+    await expect(
+      fetchProtocolConnections(fetchMock as unknown as typeof fetch),
+    ).resolves.toEqual(payloads['/api/protocol-connections']);
+    await expect(
+      fetchCollectionTasks(fetchMock as unknown as typeof fetch),
+    ).resolves.toEqual(payloads['/api/collection-tasks']);
+    await expect(fetchAlgorithms(fetchMock as unknown as typeof fetch)).resolves.toEqual(
+      payloads['/api/algorithms'],
+    );
+    await expect(fetchAuditRecords(fetchMock as unknown as typeof fetch)).resolves.toEqual(
+      payloads['/api/audit-records'],
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/edge-nodes');
+    expect(fetchMock).toHaveBeenCalledWith('/api/device-models');
+    expect(fetchMock).toHaveBeenCalledWith('/api/protocol-connections');
+    expect(fetchMock).toHaveBeenCalledWith('/api/collection-tasks');
+    expect(fetchMock).toHaveBeenCalledWith('/api/algorithms');
+    expect(fetchMock).toHaveBeenCalledWith('/api/audit-records');
   });
 });
 

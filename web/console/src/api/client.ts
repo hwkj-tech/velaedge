@@ -1,5 +1,11 @@
 import type {
+  AlgorithmResponse,
+  AuditRecordResponse,
+  CollectionTaskResponse,
+  DeviceModelResponse,
+  EdgeNodeResponse,
   PointMappingResponse,
+  ProtocolConnectionResponse,
   ReleaseListResponse,
   RuntimeStatusResponse,
   SavePointMappingRequest,
@@ -22,6 +28,45 @@ export async function fetchReleaseList(
   fetcher: typeof fetch = fetch,
 ): Promise<ReleaseListResponse> {
   return requestJson<ReleaseListResponse>('/api/releases', fetcher);
+}
+
+export async function fetchEdgeNodes(
+  fetcher: typeof fetch = fetch,
+): Promise<EdgeNodeResponse[]> {
+  return requestJson<EdgeNodeResponse[]>('/api/edge-nodes', fetcher);
+}
+
+export async function fetchDeviceModels(
+  fetcher: typeof fetch = fetch,
+): Promise<DeviceModelResponse[]> {
+  return requestJson<DeviceModelResponse[]>('/api/device-models', fetcher);
+}
+
+export async function fetchProtocolConnections(
+  fetcher: typeof fetch = fetch,
+): Promise<ProtocolConnectionResponse[]> {
+  return requestJson<ProtocolConnectionResponse[]>(
+    '/api/protocol-connections',
+    fetcher,
+  );
+}
+
+export async function fetchCollectionTasks(
+  fetcher: typeof fetch = fetch,
+): Promise<CollectionTaskResponse[]> {
+  return requestJson<CollectionTaskResponse[]>('/api/collection-tasks', fetcher);
+}
+
+export async function fetchAlgorithms(
+  fetcher: typeof fetch = fetch,
+): Promise<AlgorithmResponse[]> {
+  return requestJson<AlgorithmResponse[]>('/api/algorithms', fetcher);
+}
+
+export async function fetchAuditRecords(
+  fetcher: typeof fetch = fetch,
+): Promise<AuditRecordResponse[]> {
+  return requestJson<AuditRecordResponse[]>('/api/audit-records', fetcher);
 }
 
 export async function fetchRuntimeStatus(

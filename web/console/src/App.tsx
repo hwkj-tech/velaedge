@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react';
 
 import {
+  fetchAlgorithms,
+  fetchAuditRecords,
+  fetchCollectionTasks,
+  fetchDeviceModels,
+  fetchEdgeNodes,
   fetchPointMappings,
+  fetchProtocolConnections,
   fetchReleaseList,
   fetchRuntimeStatus,
   fetchSummary,
@@ -9,7 +15,13 @@ import {
   savePointMapping,
 } from './api/client';
 import type {
+  AlgorithmResponse,
+  AuditRecordResponse,
+  CollectionTaskResponse,
+  DeviceModelResponse,
+  EdgeNodeResponse,
   PointMappingResponse,
+  ProtocolConnectionResponse,
   ReleaseListResponse,
   RuntimeStatusResponse,
   SavePointMappingRequest,
@@ -34,7 +46,13 @@ const initialSummary: SummaryResponse = {
 };
 
 interface ConsoleSnapshot {
+  algorithms: AlgorithmResponse[];
+  auditRecords: AuditRecordResponse[];
+  collectionTasks: CollectionTaskResponse[];
+  deviceModels: DeviceModelResponse[];
+  edgeNodes: EdgeNodeResponse[];
   pointMappings: PointMappingResponse[];
+  protocolConnections: ProtocolConnectionResponse[];
   releaseList: ReleaseListResponse;
   runtimeStatus: RuntimeStatusResponse;
   summary: SummaryResponse;
@@ -43,18 +61,31 @@ interface ConsoleSnapshot {
 export default function App() {
   const [activePage, setActivePage] = useState<PageKey>('dashboard');
   const [summary, setSummary] = useState(initialSummary);
+  const [edgeNodes, setEdgeNodes] = useState<EdgeNodeResponse[]>();
+  const [deviceModels, setDeviceModels] = useState<DeviceModelResponse[]>();
+  const [protocolConnections, setProtocolConnections] =
+    useState<ProtocolConnectionResponse[]>();
   const [pointMappings, setPointMappings] = useState<PointMappingResponse[]>();
+  const [collectionTasks, setCollectionTasks] = useState<CollectionTaskResponse[]>();
+  const [algorithms, setAlgorithms] = useState<AlgorithmResponse[]>();
   const [releaseList, setReleaseList] = useState<ReleaseListResponse>();
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatusResponse>();
+  const [auditRecords, setAuditRecords] = useState<AuditRecordResponse[]>();
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>(
     'loading',
   );
 
   const applySnapshot = (snapshot: ConsoleSnapshot) => {
     setSummary(snapshot.summary);
+    setEdgeNodes(snapshot.edgeNodes);
+    setDeviceModels(snapshot.deviceModels);
+    setProtocolConnections(snapshot.protocolConnections);
     setPointMappings(snapshot.pointMappings);
+    setCollectionTasks(snapshot.collectionTasks);
+    setAlgorithms(snapshot.algorithms);
     setReleaseList(snapshot.releaseList);
     setRuntimeStatus(snapshot.runtimeStatus);
+    setAuditRecords(snapshot.auditRecords);
     setLoadState('ready');
   };
 
@@ -71,18 +102,8 @@ export default function App() {
   };
 
   const handlePublishLatestRelease = async () => {
-    const nextReleaseList = await publishLatestRelease();
-    const [nextSummary, nextPointMappings, nextRuntimeStatus] = await Promise.all([
-      fetchSummary(),
-      fetchPointMappings(),
-      fetchRuntimeStatus(),
-    ]);
-
-    setSummary(nextSummary);
-    setPointMappings(nextPointMappings);
-    setReleaseList(nextReleaseList);
-    setRuntimeStatus(nextRuntimeStatus);
-    setLoadState('ready');
+    await publishLatestRelease();
+    await refreshConsoleData();
   };
 
   useEffect(() => {
@@ -133,23 +154,57 @@ export default function App() {
         loadState,
         handleSavePoint,
         handlePublishLatestRelease,
+        edgeNodes,
+        deviceModels,
+        protocolConnections,
         pointMappings,
+        collectionTasks,
+        algorithms,
         releaseList,
         runtimeStatus,
+        auditRecords,
       )}
     </AppShell>
   );
 }
 
 async function loadConsoleSnapshot(): Promise<ConsoleSnapshot> {
-  const [summary, pointMappings, releaseList, runtimeStatus] = await Promise.all([
+  const [
+    summary,
+    edgeNodes,
+    deviceModels,
+    protocolConnections,
+    pointMappings,
+    collectionTasks,
+    algorithms,
+    releaseList,
+    runtimeStatus,
+    auditRecords,
+  ] = await Promise.all([
     fetchSummary(),
+    fetchEdgeNodes(),
+    fetchDeviceModels(),
+    fetchProtocolConnections(),
     fetchPointMappings(),
+    fetchCollectionTasks(),
+    fetchAlgorithms(),
     fetchReleaseList(),
     fetchRuntimeStatus(),
+    fetchAuditRecords(),
   ]);
 
-  return { pointMappings, releaseList, runtimeStatus, summary };
+  return {
+    algorithms,
+    auditRecords,
+    collectionTasks,
+    deviceModels,
+    edgeNodes,
+    pointMappings,
+    protocolConnections,
+    releaseList,
+    runtimeStatus,
+    summary,
+  };
 }
 
 function renderPage(
@@ -161,31 +216,37 @@ function renderPage(
     request: SavePointMappingRequest,
   ) => Promise<void>,
   onPublish: () => Promise<void>,
+  edgeNodes?: EdgeNodeResponse[],
+  deviceModels?: DeviceModelResponse[],
+  protocolConnections?: ProtocolConnectionResponse[],
   pointMappings?: PointMappingResponse[],
+  collectionTasks?: CollectionTaskResponse[],
+  algorithms?: AlgorithmResponse[],
   releaseList?: ReleaseListResponse,
   runtimeStatus?: RuntimeStatusResponse,
+  auditRecords?: AuditRecordResponse[],
 ) {
   switch (activePage) {
     case 'dashboard':
       return <DashboardPage loadState={loadState} summary={summary} />;
     case 'edges':
-      return <EdgeNodesPage />;
+      return <EdgeNodesPage edges={edgeNodes} />;
     case 'deviceModels':
-      return <DeviceModelsPage />;
+      return <DeviceModelsPage deviceModels={deviceModels} />;
     case 'protocolConnections':
-      return <ProtocolConnectionsPage />;
+      return <ProtocolConnectionsPage connections={protocolConnections} />;
     case 'pointMappings':
       return <PointMappingsPage onSavePoint={onSavePoint} points={pointMappings} />;
     case 'collectionTasks':
-      return <CollectionTasksPage />;
+      return <CollectionTasksPage tasks={collectionTasks} />;
     case 'algorithms':
-      return <AlgorithmsPage />;
+      return <AlgorithmsPage algorithms={algorithms} />;
     case 'releases':
       return <ReleasesPage onPublish={onPublish} releaseList={releaseList} />;
     case 'runtimeStatus':
       return <RuntimeStatusPage runtimeStatus={runtimeStatus} />;
     case 'auditLog':
-      return <AuditLogPage />;
+      return <AuditLogPage auditRecords={auditRecords} />;
     case 'agentAssistant':
       return <AgentAssistantPage />;
   }

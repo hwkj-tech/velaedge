@@ -1,12 +1,23 @@
 import { Plus, ShieldCheck } from 'lucide-react';
 
-const connections = [
-  ['sim-main', 'Simulated', 'runtime://simulated', '启用', '1s timeout / 3 retry'],
-  ['modbus-line-a', 'Modbus TCP', '10.12.0.20:502', '启用', '800ms timeout / 2 retry'],
-  ['opcua-lab', 'OPC UA', 'opc.tcp://10.12.0.31:4840', '禁用', 'Basic256Sha256'],
+import type { ProtocolConnectionResponse } from '../api/types';
+
+const fallbackConnections: ProtocolConnectionResponse[] = [
+  {
+    edgeId: 'edge-dev',
+    connectionId: 'modbus-line-a',
+    protocol: 'Modbus TCP',
+    endpoint: '10.12.0.20:502',
+    status: '启用',
+    policy: '1000ms timeout / 3 retry',
+  },
 ];
 
-export function ProtocolConnectionsPage() {
+export function ProtocolConnectionsPage({
+  connections = fallbackConnections,
+}: {
+  connections?: ProtocolConnectionResponse[];
+}) {
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -45,17 +56,17 @@ export function ProtocolConnectionsPage() {
               </tr>
             </thead>
             <tbody>
-              {connections.map(([id, protocol, endpoint, status, policy]) => (
-                <tr key={id}>
-                  <td>{id}</td>
-                  <td>{protocol}</td>
-                  <td>{endpoint}</td>
+              {connections.map((connection) => (
+                <tr key={`${connection.edgeId}:${connection.connectionId}`}>
+                  <td>{connection.connectionId}</td>
+                  <td>{connection.protocol}</td>
+                  <td>{connection.endpoint}</td>
                   <td>
-                    <span className={status === '启用' ? 'tag ok' : 'tag warn'}>
-                      {status}
+                    <span className={connection.status === '启用' ? 'tag ok' : 'tag warn'}>
+                      {connection.status}
                     </span>
                   </td>
-                  <td>{policy}</td>
+                  <td>{connection.policy}</td>
                 </tr>
               ))}
             </tbody>

@@ -1,12 +1,41 @@
 import { Plus } from 'lucide-react';
 
-const telemetry = [
-  ['pressure', '压力', 'Float', 'MPa', '0-20', '泵出口压力'],
-  ['temperature', '温度', 'Float', 'C', '-20-120', '电机温度'],
-  ['running', '运行状态', 'Bool', '-', '-', '设备运行布尔量'],
+import type { DeviceModelResponse } from '../api/types';
+
+const fallbackDeviceModels: DeviceModelResponse[] = [
+  {
+    deviceType: 'pump',
+    version: 'v1',
+    commandCount: 1,
+    eventCount: 1,
+    telemetry: [
+      {
+        telemetryId: 'pressure',
+        name: 'pressure',
+        valueType: 'float32',
+        unit: 'MPa',
+        range: '0-20',
+        description: '泵出口压力',
+      },
+      {
+        telemetryId: 'running',
+        name: 'running',
+        valueType: 'bool',
+        unit: '-',
+        range: '-',
+        description: '设备运行布尔量',
+      },
+    ],
+  },
 ];
 
-export function DeviceModelsPage() {
+export function DeviceModelsPage({
+  deviceModels = fallbackDeviceModels,
+}: {
+  deviceModels?: DeviceModelResponse[];
+}) {
+  const activeModel = deviceModels[0] ?? fallbackDeviceModels[0];
+
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -24,8 +53,12 @@ export function DeviceModelsPage() {
 
       <section className="panel">
         <div className="panel-header">
-          <h3>pump@v1 遥测定义</h3>
-          <span>命令 2 个 / 事件 3 个</span>
+          <h3>
+            {activeModel.deviceType}@{activeModel.version} 遥测定义
+          </h3>
+          <span>
+            命令 {activeModel.commandCount} 个 / 事件 {activeModel.eventCount} 个
+          </span>
         </div>
         <div className="table-wrap">
           <table className="ops-table">
@@ -40,11 +73,14 @@ export function DeviceModelsPage() {
               </tr>
             </thead>
             <tbody>
-              {telemetry.map((row) => (
-                <tr key={row[0]}>
-                  {row.map((cell) => (
-                    <td key={cell}>{cell}</td>
-                  ))}
+              {activeModel.telemetry.map((telemetry) => (
+                <tr key={telemetry.telemetryId}>
+                  <td>{telemetry.telemetryId}</td>
+                  <td>{telemetry.name}</td>
+                  <td>{telemetry.valueType}</td>
+                  <td>{telemetry.unit}</td>
+                  <td>{telemetry.range}</td>
+                  <td>{telemetry.description}</td>
                 </tr>
               ))}
             </tbody>

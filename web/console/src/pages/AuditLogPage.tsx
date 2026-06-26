@@ -1,10 +1,21 @@
-const auditRows = [
-  ['14:28:09', 'admin', 'validate_config', 'v2026.06.26-002', '通过'],
-  ['14:12:41', 'agent-draft', 'propose_mapping', 'pressure_backup', '待复核'],
-  ['13:52:17', 'ops', 'publish_config', 'v2026.06.26-001', '成功'],
+import type { AuditRecordResponse } from '../api/types';
+
+const fallbackAuditRecords: AuditRecordResponse[] = [
+  {
+    createdAt: '2026-06-26T10:00:00Z',
+    time: '10:00:00',
+    actor: 'system',
+    action: 'create_release',
+    target: '2026.06.26-001',
+    result: '成功',
+  },
 ];
 
-export function AuditLogPage() {
+export function AuditLogPage({
+  auditRecords = fallbackAuditRecords,
+}: {
+  auditRecords?: AuditRecordResponse[];
+}) {
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -33,15 +44,15 @@ export function AuditLogPage() {
               </tr>
             </thead>
             <tbody>
-              {auditRows.map(([time, actor, action, target, result]) => (
-                <tr key={`${time}-${action}`}>
-                  <td>{time}</td>
-                  <td>{actor}</td>
-                  <td>{action}</td>
-                  <td>{target}</td>
+              {auditRecords.map((record) => (
+                <tr key={`${record.createdAt}-${record.action}-${record.target}`}>
+                  <td>{record.time}</td>
+                  <td>{record.actor}</td>
+                  <td>{record.action}</td>
+                  <td>{record.target}</td>
                   <td>
-                    <span className={result === '成功' || result === '通过' ? 'tag ok' : 'tag warn'}>
-                      {result}
+                    <span className={record.result === '成功' ? 'tag ok' : 'tag warn'}>
+                      {record.result}
                     </span>
                   </td>
                 </tr>

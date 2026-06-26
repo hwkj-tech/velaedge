@@ -45,6 +45,72 @@ export interface ReleaseListResponse {
   applyResults: ApplyResultResponse[];
 }
 
+export interface EdgeNodeResponse {
+  edgeId: string;
+  displayName: string;
+  site: string;
+  runtimeId: string;
+  status: string;
+  resources: string;
+  heartbeat: string;
+  capabilities: string[];
+}
+
+export interface TelemetryModelResponse {
+  telemetryId: string;
+  name: string;
+  valueType: string;
+  unit: string;
+  range: string;
+  description: string;
+}
+
+export interface DeviceModelResponse {
+  deviceType: string;
+  version: string;
+  telemetry: TelemetryModelResponse[];
+  commandCount: number;
+  eventCount: number;
+}
+
+export interface ProtocolConnectionResponse {
+  edgeId: string;
+  connectionId: string;
+  protocol: string;
+  endpoint: string;
+  status: string;
+  policy: string;
+}
+
+export interface CollectionTaskResponse {
+  edgeId: string;
+  taskId: string;
+  deviceId: string;
+  pointList: string;
+  interval: string;
+  status: string;
+}
+
+export interface AlgorithmResponse {
+  edgeId: string;
+  algorithmId: string;
+  version: string;
+  kind: string;
+  inputs: string;
+  outputs: string;
+  execution: string;
+  validation: string;
+}
+
+export interface AuditRecordResponse {
+  createdAt: string;
+  time: string;
+  actor: string;
+  action: string;
+  target: string;
+  result: string;
+}
+
 export type EdgeHealth = 'Healthy' | 'Degraded' | 'Critical' | 'Offline';
 
 export interface SystemRuntimeMetrics {

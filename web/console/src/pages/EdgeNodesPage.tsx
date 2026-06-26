@@ -1,12 +1,25 @@
 import { KeyRound, Plus, Wrench } from 'lucide-react';
 
-const rows = [
-  ['edge-shanghai-01', '上海一厂边端', '华东/产线 A', '0.1.0', '在线', '52% / 61% / 44%', '18 秒前'],
-  ['edge-suzhou-02', '苏州测试线', '华东/测试线', '0.1.0', '在线', '37% / 48% / 39%', '24 秒前'],
-  ['edge-lab-03', '研发实验室', '研发/实验室', '0.1.0', '维护', '12% / 28% / 22%', '11 分钟前'],
+import type { EdgeNodeResponse } from '../api/types';
+
+const fallbackEdges: EdgeNodeResponse[] = [
+  {
+    edgeId: 'edge-dev',
+    displayName: '研发实验室边端',
+    site: '研发/实验室',
+    runtimeId: 'runtime-dev',
+    status: '健康',
+    resources: '18.5% / 42% / 61%',
+    heartbeat: '8 秒前',
+    capabilities: ['protocol:modbus-tcp', 'local-store:jsonl'],
+  },
 ];
 
-export function EdgeNodesPage() {
+export function EdgeNodesPage({
+  edges = fallbackEdges,
+}: {
+  edges?: EdgeNodeResponse[];
+}) {
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -35,7 +48,7 @@ export function EdgeNodesPage() {
       <section className="panel">
         <div className="panel-header">
           <h3>边端实例</h3>
-          <span>3 个实例</span>
+          <span>{edges.length} 个实例</span>
         </div>
         <div className="table-wrap">
           <table className="ops-table">
@@ -51,19 +64,19 @@ export function EdgeNodesPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map(([edgeId, name, group, runtime, status, resources, heartbeat]) => (
-                <tr key={edgeId}>
-                  <td>{edgeId}</td>
-                  <td>{name}</td>
-                  <td>{group}</td>
-                  <td>{runtime}</td>
+              {edges.map((edge) => (
+                <tr key={edge.edgeId}>
+                  <td>{edge.edgeId}</td>
+                  <td>{edge.displayName}</td>
+                  <td>{edge.site}</td>
+                  <td>{edge.runtimeId}</td>
                   <td>
-                    <span className={status === '在线' ? 'tag ok' : 'tag warn'}>
-                      {status}
+                    <span className={edge.status === '健康' ? 'tag ok' : 'tag warn'}>
+                      {edge.status}
                     </span>
                   </td>
-                  <td>{resources}</td>
-                  <td>{heartbeat}</td>
+                  <td>{edge.resources}</td>
+                  <td>{edge.heartbeat}</td>
                 </tr>
               ))}
             </tbody>

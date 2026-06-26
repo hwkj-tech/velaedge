@@ -2,7 +2,13 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  fetchAlgorithms,
+  fetchAuditRecords,
+  fetchCollectionTasks,
+  fetchDeviceModels,
+  fetchEdgeNodes,
   fetchPointMappings,
+  fetchProtocolConnections,
   fetchReleaseList,
   fetchRuntimeStatus,
   fetchSummary,
@@ -10,14 +16,26 @@ import {
   savePointMapping,
 } from './api/client';
 import type {
+  AlgorithmResponse,
+  AuditRecordResponse,
+  CollectionTaskResponse,
+  DeviceModelResponse,
+  EdgeNodeResponse,
   PointMappingResponse,
+  ProtocolConnectionResponse,
   ReleaseListResponse,
   RuntimeStatusResponse,
 } from './api/types';
 import App from './App';
 
 vi.mock('./api/client', () => ({
+  fetchAlgorithms: vi.fn(),
+  fetchAuditRecords: vi.fn(),
+  fetchCollectionTasks: vi.fn(),
+  fetchDeviceModels: vi.fn(),
+  fetchEdgeNodes: vi.fn(),
   fetchPointMappings: vi.fn(),
+  fetchProtocolConnections: vi.fn(),
   fetchReleaseList: vi.fn(),
   fetchRuntimeStatus: vi.fn(),
   fetchSummary: vi.fn(),
@@ -73,6 +91,84 @@ const updatedReleaseList: ReleaseListResponse = {
     },
   ],
 };
+
+const edgeNodes: EdgeNodeResponse[] = [
+  {
+    edgeId: 'edge-dev',
+    displayName: '研发实验室边端',
+    site: '研发/实验室',
+    runtimeId: 'runtime-dev',
+    status: '健康',
+    resources: '18.5% / 42% / 61%',
+    heartbeat: '8 秒前',
+    capabilities: ['protocol:modbus-tcp'],
+  },
+];
+
+const deviceModels: DeviceModelResponse[] = [
+  {
+    deviceType: 'pump',
+    version: 'v1',
+    commandCount: 1,
+    eventCount: 1,
+    telemetry: [
+      {
+        telemetryId: 'pressure',
+        name: 'pressure',
+        valueType: 'float32',
+        unit: 'MPa',
+        range: '0-20',
+        description: '泵出口压力',
+      },
+    ],
+  },
+];
+
+const protocolConnections: ProtocolConnectionResponse[] = [
+  {
+    edgeId: 'edge-dev',
+    connectionId: 'modbus-line-a',
+    protocol: 'Modbus TCP',
+    endpoint: '10.12.0.20:502',
+    status: '启用',
+    policy: '1000ms timeout / 3 retry',
+  },
+];
+
+const collectionTasks: CollectionTaskResponse[] = [
+  {
+    edgeId: 'edge-dev',
+    taskId: 'pump-main',
+    deviceId: 'pump-1',
+    pointList: 'pressure, running',
+    interval: '1000ms',
+    status: '启用',
+  },
+];
+
+const algorithms: AlgorithmResponse[] = [
+  {
+    edgeId: 'edge-dev',
+    algorithmId: 'pump-anomaly-v1',
+    version: '1.0.0',
+    kind: '异常检测',
+    inputs: 'pressure, running',
+    outputs: 'pump.anomaly_score',
+    execution: '边端本地执行',
+    validation: '已通过',
+  },
+];
+
+const auditRecords: AuditRecordResponse[] = [
+  {
+    createdAt: '2026-06-26T10:00:00Z',
+    time: '10:00:00',
+    actor: 'system',
+    action: 'create_release',
+    target: 'release-1',
+    result: '成功',
+  },
+];
 
 const runtimeStatus: RuntimeStatusResponse = {
   healthyEdgeCount: 1,
@@ -135,9 +231,15 @@ describe('App cloud console write actions', () => {
       edge_count: 1,
       pending_release_count: 0,
     });
+    vi.mocked(fetchEdgeNodes).mockResolvedValue(edgeNodes);
+    vi.mocked(fetchDeviceModels).mockResolvedValue(deviceModels);
+    vi.mocked(fetchProtocolConnections).mockResolvedValue(protocolConnections);
     vi.mocked(fetchPointMappings).mockResolvedValue([basePoint]);
+    vi.mocked(fetchCollectionTasks).mockResolvedValue(collectionTasks);
+    vi.mocked(fetchAlgorithms).mockResolvedValue(algorithms);
     vi.mocked(fetchReleaseList).mockResolvedValue(initialReleaseList);
     vi.mocked(fetchRuntimeStatus).mockResolvedValue(runtimeStatus);
+    vi.mocked(fetchAuditRecords).mockResolvedValue(auditRecords);
     vi.mocked(savePointMapping).mockResolvedValue({
       ...basePoint,
       address: 'holding_register:40002',
@@ -212,5 +314,27 @@ describe('App cloud console write actions', () => {
     expect((await screen.findAllByText('edge-dev')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('24ms').length).toBeGreaterThan(0);
     expect(screen.getByText('Modbus TCP')).toBeInTheDocument();
+  });
+
+  it('loads backend management lists into formerly static pages', async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
+    expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /设备模型/ }));
+    expect(await screen.findByText('pump@v1 遥测定义')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /协议连接/ }));
+    expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /采集任务/ }));
+    expect(await screen.findByText('pump-main')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /算法配置/ }));
+    expect(await screen.findByText('pump-anomaly-v1')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /审计日志/ }));
+    expect(await screen.findByText('create_release')).toBeInTheDocument();
   });
 });

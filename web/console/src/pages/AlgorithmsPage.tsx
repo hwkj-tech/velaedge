@@ -1,12 +1,25 @@
 import { Plus, ShieldCheck } from 'lucide-react';
 
-const algorithms = [
-  ['pump-anomaly-v1', '异常检测', 'pressure, temperature', '本地执行', '已通过'],
-  ['energy-rollup', '聚合计算', 'current, voltage', '本地执行', '已通过'],
-  ['cloud-draft-advisor', 'Agent 草稿', '配置差异', '云端辅助', '需复核'],
+import type { AlgorithmResponse } from '../api/types';
+
+const fallbackAlgorithms: AlgorithmResponse[] = [
+  {
+    edgeId: 'edge-dev',
+    algorithmId: 'pump-anomaly-v1',
+    version: '1.0.0',
+    kind: '异常检测',
+    inputs: 'pressure, running',
+    outputs: 'pump.anomaly_score',
+    execution: '边端本地执行',
+    validation: '已通过',
+  },
 ];
 
-export function AlgorithmsPage() {
+export function AlgorithmsPage({
+  algorithms = fallbackAlgorithms,
+}: {
+  algorithms?: AlgorithmResponse[];
+}) {
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -45,15 +58,17 @@ export function AlgorithmsPage() {
               </tr>
             </thead>
             <tbody>
-              {algorithms.map(([id, kind, inputs, location, validation]) => (
-                <tr key={id}>
-                  <td>{id}</td>
-                  <td>{kind}</td>
-                  <td>{inputs}</td>
-                  <td>{location}</td>
+              {algorithms.map((algorithm) => (
+                <tr key={`${algorithm.edgeId}:${algorithm.algorithmId}`}>
+                  <td>{algorithm.algorithmId}</td>
+                  <td>{algorithm.kind}</td>
+                  <td>{algorithm.inputs}</td>
+                  <td>{algorithm.execution}</td>
                   <td>
-                    <span className={validation === '已通过' ? 'tag ok' : 'tag warn'}>
-                      {validation}
+                    <span
+                      className={algorithm.validation === '已通过' ? 'tag ok' : 'tag warn'}
+                    >
+                      {algorithm.validation}
                     </span>
                   </td>
                 </tr>

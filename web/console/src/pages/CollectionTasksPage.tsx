@@ -1,12 +1,23 @@
 import { Plus, TimerReset } from 'lucide-react';
 
-const tasks = [
-  ['pump-main-collection', 'pump-1', 'pressure, temperature', '1000ms', '启用'],
-  ['pump-status-collection', 'pump-1', 'running', '5000ms', '启用'],
-  ['lab-diagnostics', 'lab-rig-1', 'vibration, current', '2000ms', '暂停'],
+import type { CollectionTaskResponse } from '../api/types';
+
+const fallbackTasks: CollectionTaskResponse[] = [
+  {
+    edgeId: 'edge-dev',
+    taskId: 'pump-main',
+    deviceId: 'pump-1',
+    pointList: 'pressure, running',
+    interval: '1000ms',
+    status: '启用',
+  },
 ];
 
-export function CollectionTasksPage() {
+export function CollectionTasksPage({
+  tasks = fallbackTasks,
+}: {
+  tasks?: CollectionTaskResponse[];
+}) {
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -45,15 +56,15 @@ export function CollectionTasksPage() {
               </tr>
             </thead>
             <tbody>
-              {tasks.map(([id, device, pointList, interval, status]) => (
-                <tr key={id}>
-                  <td>{id}</td>
-                  <td>{device}</td>
-                  <td>{pointList}</td>
-                  <td>{interval}</td>
+              {tasks.map((task) => (
+                <tr key={`${task.edgeId}:${task.taskId}`}>
+                  <td>{task.taskId}</td>
+                  <td>{task.deviceId}</td>
+                  <td>{task.pointList}</td>
+                  <td>{task.interval}</td>
                   <td>
-                    <span className={status === '启用' ? 'tag ok' : 'tag warn'}>
-                      {status}
+                    <span className={task.status === '启用' ? 'tag ok' : 'tag warn'}>
+                      {task.status}
                     </span>
                   </td>
                 </tr>
