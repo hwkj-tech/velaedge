@@ -1,5 +1,5 @@
 use axum::{
-    body::Body,
+    body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
 use cloud_api::{app, AppState};
@@ -56,4 +56,40 @@ async fn release_endpoint_accepts_valid_edge_config_package() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn point_mappings_endpoint_returns_seeded_config_points() {
+    let response = app(AppState::default())
+        .oneshot(
+            Request::get("/api/point-mappings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload[0]["pointId"], "pressure");
+    assert_eq!(payload[0]["address"], "holding_register:40001");
+}
+
+#[tokio::test]
+async fn releases_endpoint_returns_seeded_apply_results() {
+    let response = app(AppState::default())
+        .oneshot(Request::get("/api/releases").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["draftVersion"], "2026.06.26-001");
+    assert_eq!(payload["applyResults"][0]["edgeId"], "edge-dev");
 }

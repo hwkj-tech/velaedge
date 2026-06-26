@@ -3,10 +3,11 @@ use std::collections::BTreeMap;
 use edge_core::{DeviceSpec, EdgeConfigPackage};
 use uuid::Uuid;
 
-use crate::{AuditAction, AuditRecord, ReleaseRecord};
+use crate::{AuditAction, AuditRecord, EdgeNode, ReleaseRecord};
 
 #[derive(Clone, Debug, Default)]
 pub struct CloudControlStore {
+    edge_nodes: BTreeMap<String, EdgeNode>,
     device_models: BTreeMap<String, DeviceSpec>,
     config_packages: BTreeMap<(String, String), EdgeConfigPackage>,
     releases: BTreeMap<Uuid, ReleaseRecord>,
@@ -14,6 +15,14 @@ pub struct CloudControlStore {
 }
 
 impl CloudControlStore {
+    pub fn register_edge(&mut self, node: EdgeNode) {
+        self.edge_nodes.insert(node.edge_id.clone(), node);
+    }
+
+    pub fn edge_nodes(&self) -> impl Iterator<Item = &EdgeNode> {
+        self.edge_nodes.values()
+    }
+
     pub fn upsert_device_model(&mut self, model: DeviceSpec) {
         self.device_models.insert(model.device_type.clone(), model);
     }
@@ -32,6 +41,10 @@ impl CloudControlStore {
             .get(&(edge_id.to_string(), version.to_string()))
     }
 
+    pub fn config_packages(&self) -> impl Iterator<Item = &EdgeConfigPackage> {
+        self.config_packages.values()
+    }
+
     pub fn insert_release(&mut self, release: ReleaseRecord) {
         self.releases.insert(release.release_id, release);
     }
@@ -42,6 +55,10 @@ impl CloudControlStore {
 
     pub fn release_mut(&mut self, release_id: Uuid) -> Option<&mut ReleaseRecord> {
         self.releases.get_mut(&release_id)
+    }
+
+    pub fn releases(&self) -> impl Iterator<Item = &ReleaseRecord> {
+        self.releases.values()
     }
 
     pub fn push_audit(&mut self, action: AuditAction, target: impl Into<String>) {
