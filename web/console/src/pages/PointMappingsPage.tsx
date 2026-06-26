@@ -1,29 +1,11 @@
 import { FileInput, Plus, ShieldCheck } from 'lucide-react';
 
+import type { PointMappingResponse } from '../api/types';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { Drawer } from '../components/Drawer';
 import './PointMappingsPage.css';
 
-interface PointMapping {
-  pointId: string;
-  pointName: string;
-  deviceId: string;
-  deviceModel: string;
-  semanticTelemetry: string;
-  protocol: string;
-  connection: string;
-  address: string;
-  type: string;
-  readWrite: string;
-  unit: string;
-  scale: string;
-  interval: string;
-  range: string;
-  qualityRule: string;
-  status: string;
-}
-
-const points: PointMapping[] = [
+const fallbackPoints: PointMappingResponse[] = [
   {
     pointId: 'pressure',
     pointName: '泵出口压力',
@@ -33,7 +15,7 @@ const points: PointMapping[] = [
     protocol: 'Modbus TCP',
     connection: 'modbus-line-a',
     address: 'holding_register:40001',
-    type: 'float32',
+    valueType: 'float32',
     readWrite: 'read',
     unit: 'MPa',
     scale: '0.1',
@@ -51,7 +33,7 @@ const points: PointMapping[] = [
     protocol: 'Modbus TCP',
     connection: 'modbus-line-a',
     address: 'coil:00001',
-    type: 'bool',
+    valueType: 'bool',
     readWrite: 'read',
     unit: '-',
     scale: '1',
@@ -62,7 +44,7 @@ const points: PointMapping[] = [
   },
 ];
 
-const columns: Array<DataTableColumn<PointMapping>> = [
+const columns: Array<DataTableColumn<PointMappingResponse>> = [
   { key: 'pointId', header: 'Point ID', width: '110px', render: (row) => row.pointId },
   { key: 'address', header: '地址 / NodeId / Topic', width: '180px', render: (row) => row.address },
   { key: 'deviceId', header: '设备', width: '90px', render: (row) => row.deviceId },
@@ -74,7 +56,7 @@ const columns: Array<DataTableColumn<PointMapping>> = [
     width: '130px',
     render: (row) => row.semanticTelemetry,
   },
-  { key: 'type', header: '数据类型', width: '90px', render: (row) => row.type },
+  { key: 'type', header: '数据类型', width: '90px', render: (row) => row.valueType },
   { key: 'unit', header: '单位', width: '80px', render: (row) => row.unit },
   { key: 'interval', header: '周期', width: '90px', render: (row) => row.interval },
   {
@@ -85,7 +67,11 @@ const columns: Array<DataTableColumn<PointMapping>> = [
   },
 ];
 
-export function PointMappingsPage() {
+export function PointMappingsPage({
+  points = fallbackPoints,
+}: {
+  points?: PointMappingResponse[];
+}) {
   const selectedPoint = points[0];
 
   return (
@@ -119,11 +105,7 @@ export function PointMappingsPage() {
             <h3>点位配置表</h3>
             <span>{points.length} 个启用点位</span>
           </div>
-          <DataTable
-            columns={columns}
-            getRowKey={(row) => row.pointId}
-            rows={points}
-          />
+          <DataTable columns={columns} getRowKey={(row) => row.pointId} rows={points} />
         </section>
 
         <Drawer
@@ -157,7 +139,7 @@ export function PointMappingsPage() {
               ['连接实例', selectedPoint.connection],
               ['地址类型', 'holding_register'],
               ['地址值', '40001'],
-              ['数据类型', selectedPoint.type],
+              ['数据类型', selectedPoint.valueType],
               ['读写类型', selectedPoint.readWrite],
               ['缩放系数', selectedPoint.scale],
               ['偏移量', '0'],

@@ -1,43 +1,40 @@
 import { GitCompare, Send, ShieldCheck } from 'lucide-react';
 
+import type { ReleaseListResponse } from '../api/types';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import './PointMappingsPage.css';
 
-interface ApplyResult {
-  edgeId: string;
-  desiredVersion: string;
-  reportedVersion: string;
-  result: string;
-  heartbeat: string;
-}
+const fallbackReleaseList: ReleaseListResponse = {
+  draftVersion: '2026.06.26-001',
+  validationStatus: '已通过',
+  changeSummary: '新增 2 个 Modbus 点位',
+  rolloutPolicy: '先灰度 edge-lab-03',
+  applyResults: [
+    {
+      edgeId: 'edge-shanghai-01',
+      desiredVersion: '2026.06.26-001',
+      reportedVersion: '2026.06.26-001',
+      result: '已应用',
+      heartbeat: '18 秒前',
+    },
+    {
+      edgeId: 'edge-suzhou-02',
+      desiredVersion: '2026.06.26-001',
+      reportedVersion: '2026.06.26-001',
+      result: '已应用',
+      heartbeat: '24 秒前',
+    },
+    {
+      edgeId: 'edge-lab-03',
+      desiredVersion: '2026.06.26-001',
+      reportedVersion: '2026.06.25-004',
+      result: '等待下发',
+      heartbeat: '11 分钟前',
+    },
+  ],
+};
 
-const draftVersion = '2026.06.26-001';
-
-const applyResults: ApplyResult[] = [
-  {
-    edgeId: 'edge-shanghai-01',
-    desiredVersion: draftVersion,
-    reportedVersion: '2026.06.26-001',
-    result: '已应用',
-    heartbeat: '18 秒前',
-  },
-  {
-    edgeId: 'edge-suzhou-02',
-    desiredVersion: draftVersion,
-    reportedVersion: '2026.06.26-001',
-    result: '已应用',
-    heartbeat: '24 秒前',
-  },
-  {
-    edgeId: 'edge-lab-03',
-    desiredVersion: draftVersion,
-    reportedVersion: '2026.06.25-004',
-    result: '等待下发',
-    heartbeat: '11 分钟前',
-  },
-];
-
-const applyColumns: Array<DataTableColumn<ApplyResult>> = [
+const applyColumns: Array<DataTableColumn<ReleaseListResponse['applyResults'][number]>> = [
   { key: 'edgeId', header: 'Edge ID', width: '180px', render: (row) => row.edgeId },
   {
     key: 'desiredVersion',
@@ -64,7 +61,11 @@ const applyColumns: Array<DataTableColumn<ApplyResult>> = [
   { key: 'heartbeat', header: '心跳', width: '120px', render: (row) => row.heartbeat },
 ];
 
-export function ReleasesPage() {
+export function ReleasesPage({
+  releaseList = fallbackReleaseList,
+}: {
+  releaseList?: ReleaseListResponse;
+}) {
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -93,22 +94,22 @@ export function ReleasesPage() {
       <section className="release-step-list" aria-label="发布流程">
         <article className="release-step">
           <span>草稿版本</span>
-          <strong>{draftVersion}</strong>
+          <strong>{releaseList.draftVersion}</strong>
           <small>点位与采集任务已生成</small>
         </article>
         <article className="release-step">
           <span>校验状态</span>
-          <strong>已通过</strong>
+          <strong>{releaseList.validationStatus}</strong>
           <small>协议连接和点位地址有效</small>
         </article>
         <article className="release-step">
           <span>变更摘要</span>
-          <strong>新增 2 个 Modbus 点位</strong>
+          <strong>{releaseList.changeSummary}</strong>
           <small>影响 pump-1 采集任务</small>
         </article>
         <article className="release-step">
           <span>发布策略</span>
-          <strong>先灰度 edge-lab-03</strong>
+          <strong>{releaseList.rolloutPolicy}</strong>
           <small>确认回执后全量发布</small>
         </article>
       </section>
@@ -121,7 +122,7 @@ export function ReleasesPage() {
         <DataTable
           columns={applyColumns}
           getRowKey={(row) => row.edgeId}
-          rows={applyResults}
+          rows={releaseList.applyResults}
         />
       </section>
     </div>
