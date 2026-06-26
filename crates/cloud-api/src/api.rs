@@ -6,8 +6,8 @@ use axum::{
 };
 use cloud_control::{AuditAction, ReleaseService, ReleaseStatus};
 use edge_core::{
-    AlgorithmRuntime, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent,
-    EdgeRuntimeMetricsSnapshot, PointAddress, ProtocolType, TelemetryPointMapping, TelemetryType,
+    AlgorithmRuntime, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot,
+    PointAddress, ProtocolType, TelemetryPointMapping, TelemetryType,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

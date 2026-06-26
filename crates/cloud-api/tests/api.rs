@@ -176,7 +176,11 @@ async fn management_endpoints_return_seeded_control_plane_data() {
     assert_eq!(algorithms[0]["execution"], "边端本地执行");
 
     let audit_response = router
-        .oneshot(Request::get("/api/audit-records").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::get("/api/audit-records")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(audit_response.status(), StatusCode::OK);
