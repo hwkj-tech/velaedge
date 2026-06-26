@@ -1,8 +1,19 @@
-import { Activity, Cloud, Server } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { fetchSummary } from './api/client';
 import type { SummaryResponse } from './api/types';
+import { AppShell, type PageKey } from './layout/AppShell';
+import { AgentAssistantPage } from './pages/AgentAssistantPage';
+import { AlgorithmsPage } from './pages/AlgorithmsPage';
+import { AuditLogPage } from './pages/AuditLogPage';
+import { CollectionTasksPage } from './pages/CollectionTasksPage';
+import { DashboardPage } from './pages/DashboardPage';
+import { DeviceModelsPage } from './pages/DeviceModelsPage';
+import { EdgeNodesPage } from './pages/EdgeNodesPage';
+import { PointMappingsPage } from './pages/PointMappingsPage';
+import { ProtocolConnectionsPage } from './pages/ProtocolConnectionsPage';
+import { ReleasesPage } from './pages/ReleasesPage';
+import { RuntimeStatusPage } from './pages/RuntimeStatusPage';
 
 const initialSummary: SummaryResponse = {
   edge_count: 0,
@@ -10,6 +21,7 @@ const initialSummary: SummaryResponse = {
 };
 
 export default function App() {
+  const [activePage, setActivePage] = useState<PageKey>('dashboard');
   const [summary, setSummary] = useState(initialSummary);
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>(
     'loading',
@@ -37,37 +49,39 @@ export default function App() {
   }, []);
 
   return (
-    <main className="console-preview">
-      <section className="preview-panel" aria-labelledby="preview-title">
-        <div className="preview-panel__eyebrow">
-          <Cloud size={16} aria-hidden="true" />
-          云端边缘管理台
-        </div>
-        <h1 id="preview-title">EdgeOps Console</h1>
-        <p>
-          集中配置边端设备协议、点位映射、采集任务与配置发布，边端 runtime
-          负责执行采集、算法和本地存储。
-        </p>
-
-        <div className="summary-grid" aria-label="运行摘要">
-          <article>
-            <Server size={18} aria-hidden="true" />
-            <span>边端实例</span>
-            <strong>{summary.edge_count}</strong>
-          </article>
-          <article>
-            <Activity size={18} aria-hidden="true" />
-            <span>待发布配置</span>
-            <strong>{summary.pending_release_count}</strong>
-          </article>
-        </div>
-
-        <p className="load-state" role="status">
-          {loadState === 'loading' && '正在连接云端 API'}
-          {loadState === 'ready' && '云端 API 已连接'}
-          {loadState === 'error' && '暂未连接云端 API，显示默认视图'}
-        </p>
-      </section>
-    </main>
+    <AppShell activePage={activePage} onNavigate={setActivePage}>
+      {renderPage(activePage, summary, loadState)}
+    </AppShell>
   );
+}
+
+function renderPage(
+  activePage: PageKey,
+  summary: SummaryResponse,
+  loadState: 'loading' | 'ready' | 'error',
+) {
+  switch (activePage) {
+    case 'dashboard':
+      return <DashboardPage loadState={loadState} summary={summary} />;
+    case 'edges':
+      return <EdgeNodesPage />;
+    case 'deviceModels':
+      return <DeviceModelsPage />;
+    case 'protocolConnections':
+      return <ProtocolConnectionsPage />;
+    case 'pointMappings':
+      return <PointMappingsPage />;
+    case 'collectionTasks':
+      return <CollectionTasksPage />;
+    case 'algorithms':
+      return <AlgorithmsPage />;
+    case 'releases':
+      return <ReleasesPage />;
+    case 'runtimeStatus':
+      return <RuntimeStatusPage />;
+    case 'auditLog':
+      return <AuditLogPage />;
+    case 'agentAssistant':
+      return <AgentAssistantPage />;
+  }
 }
