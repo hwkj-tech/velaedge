@@ -1,0 +1,77 @@
+use cloud_control::{
+    AuditAction, CloudControlStore, ConfigValidator, ReleaseService, ReleaseStatus,
+};
+use edge_core::{
+    CollectionTask, DeviceInstance, DeviceSpec, EdgeConfigPackage, PointAddress,
+    ProtocolConnection, TelemetryPoint, TelemetryPointMapping, TelemetryType,
+};
+
+fn valid_package() -> EdgeConfigPackage {
+    EdgeConfigPackage::new("edge-dev", "2026.06.26-001")
+        .with_device(DeviceInstance::new("pump-1", "pump"))
+        .with_protocol_connection(ProtocolConnection::simulated("sim-main"))
+        .with_point_mapping(TelemetryPointMapping::new(
+            "pressure",
+            "pump-1",
+            "pressure",
+            "sim-main",
+            PointAddress::simulated("pressure"),
+            TelemetryType::Float,
+        ))
+        .with_collection_task(CollectionTask::interval(
+            "pump-main",
+            "pump-1",
+            vec!["pressure".to_string()],
+            1000,
+        ))
+}
+
+#[test]
+fn store_keeps_edges_models_and_config_packages() {
+    let mut store = CloudControlStore::default();
+    let model = DeviceSpec::new("pump", "1.0.0")
+        .with_telemetry(vec![TelemetryPoint::new("pressure", TelemetryType::Float)]);
+
+    store.upsert_device_model(model.clone());
+    store.upsert_config_package(valid_package());
+
+    assert_eq!(store.device_model("pump").unwrap(), &model);
+    assert_eq!(
+        store
+            .config_package("edge-dev", "2026.06.26-001")
+            .unwrap()
+            .edge_id,
+        "edge-dev"
+    );
+}
+
+#[test]
+fn validator_rejects_point_mapping_with_missing_connection() {
+    let mut package = valid_package();
+    package.point_mappings[0].protocol_connection_id = "missing".to_string();
+
+    let errors = ConfigValidator::validate_package(&package);
+
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].message.contains("missing protocol connection"));
+}
+
+#[test]
+fn release_service_tracks_desired_and_reported_versions() {
+    let mut store = CloudControlStore::default();
+    let release = ReleaseService::create_release(&mut store, valid_package()).unwrap();
+
+    assert_eq!(release.edge_id, "edge-dev");
+    assert_eq!(release.desired_version, "2026.06.26-001");
+    assert_eq!(release.status, ReleaseStatus::Pending);
+
+    let applied =
+        ReleaseService::mark_reported(&mut store, release.release_id, "2026.06.26-001").unwrap();
+
+    assert_eq!(
+        applied.reported_version.as_deref(),
+        Some("2026.06.26-001")
+    );
+    assert_eq!(applied.status, ReleaseStatus::Applied);
+    assert_eq!(store.audit_records()[0].action, AuditAction::CreateRelease);
+}
