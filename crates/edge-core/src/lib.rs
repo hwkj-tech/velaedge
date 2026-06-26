@@ -3,6 +3,7 @@
 pub mod config;
 pub mod message;
 pub mod model;
+pub mod observability;
 pub mod policy;
 pub mod shadow;
 
@@ -15,6 +16,11 @@ pub use model::{
     AlgorithmRuntime, AlgorithmSpec, CommandCandidate, CommandParameter, CommandRisk, CommandSpec,
     DataQuality, DeviceSpec, EventSpec, NumberRange, TelemetryPoint, TelemetrySample,
     TelemetryType, TelemetryValue,
+};
+pub use observability::{
+    AlgorithmRuntimeMetrics, CloudSyncMetrics, CollectionRuntimeMetrics, EdgeHealth,
+    EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, LocalStoreMetrics, ProtocolRuntimeMetrics,
+    RuntimeEventCategory, RuntimeEventSeverity, SystemRuntimeMetrics,
 };
 pub use policy::{PolicyEngine, PolicyViolation};
 pub use shadow::DeviceShadow;
