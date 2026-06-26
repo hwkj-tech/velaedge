@@ -3,6 +3,7 @@
 pub mod config;
 pub mod metrics;
 pub mod protocol;
+pub mod reporting;
 pub mod runtime;
 pub mod storage;
 pub mod sync;
@@ -10,6 +11,10 @@ pub mod sync;
 pub use config::{AppliedEdgeConfig, ConfiguredSimulatedRuntime};
 pub use metrics::SimulatedRuntimeMetricsCollector;
 pub use protocol::{ProtocolAdapter, SimulatedProtocolAdapter};
+pub use reporting::{report_runtime_status_once, HttpRuntimeStatusReporter, RuntimeStatusReporter};
 pub use runtime::{CollectionReport, EdgeRuntime};
 pub use storage::{JsonlLocalStore, LocalStore};
-pub use sync::{sync_once, EdgeConfigSyncClient, EdgeConfigSyncReport, EdgeDesiredConfig};
+pub use sync::{
+    sync_and_report_once, sync_once, EdgeConfigSyncClient, EdgeConfigSyncReport, EdgeDesiredConfig,
+    HttpEdgeConfigSyncClient,
+};
