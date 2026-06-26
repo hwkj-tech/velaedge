@@ -63,21 +63,20 @@ const points: PointMapping[] = [
 ];
 
 const columns: Array<DataTableColumn<PointMapping>> = [
-  { key: 'pointId', header: 'Point ID', width: '130px', render: (row) => row.pointId },
-  { key: 'pointName', header: '点位名称', width: '130px', render: (row) => row.pointName },
-  { key: 'deviceId', header: '设备', width: '110px', render: (row) => row.deviceId },
+  { key: 'pointId', header: 'Point ID', width: '110px', render: (row) => row.pointId },
+  { key: 'address', header: '地址 / NodeId / Topic', width: '180px', render: (row) => row.address },
+  { key: 'deviceId', header: '设备', width: '90px', render: (row) => row.deviceId },
+  { key: 'protocol', header: '协议', width: '110px', render: (row) => row.protocol },
+  { key: 'connection', header: '连接', width: '130px', render: (row) => row.connection },
   {
     key: 'semanticTelemetry',
     header: '语义遥测',
-    width: '150px',
+    width: '130px',
     render: (row) => row.semanticTelemetry,
   },
-  { key: 'protocol', header: '协议', width: '120px', render: (row) => row.protocol },
-  { key: 'connection', header: '连接', width: '140px', render: (row) => row.connection },
-  { key: 'address', header: '地址 / NodeId / Topic', width: '180px', render: (row) => row.address },
-  { key: 'type', header: '数据类型', width: '100px', render: (row) => row.type },
+  { key: 'type', header: '数据类型', width: '90px', render: (row) => row.type },
   { key: 'unit', header: '单位', width: '80px', render: (row) => row.unit },
-  { key: 'interval', header: '周期', width: '100px', render: (row) => row.interval },
+  { key: 'interval', header: '周期', width: '90px', render: (row) => row.interval },
   {
     key: 'status',
     header: '状态',

@@ -416,8 +416,7 @@
     padding: 18px 14px 22px;
   }
 
-  .metric-grid,
-  .nav-list {
+  .metric-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -68,10 +68,7 @@ fn release_service_tracks_desired_and_reported_versions() {
     let applied =
         ReleaseService::mark_reported(&mut store, release.release_id, "2026.06.26-001").unwrap();
 
-    assert_eq!(
-        applied.reported_version.as_deref(),
-        Some("2026.06.26-001")
-    );
+    assert_eq!(applied.reported_version.as_deref(), Some("2026.06.26-001"));
     assert_eq!(applied.status, ReleaseStatus::Applied);
     assert_eq!(store.audit_records()[0].action, AuditAction::CreateRelease);
 }

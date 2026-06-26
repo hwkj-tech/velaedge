@@ -2,9 +2,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{bail, Result};
 use chrono::Utc;
-use edge_core::{
-    DataQuality, DeviceShadow, EdgeConfigPackage, TelemetrySample, TelemetryValue,
-};
+use edge_core::{DataQuality, DeviceShadow, EdgeConfigPackage, TelemetrySample, TelemetryValue};
 
 use crate::CollectionReport;
 

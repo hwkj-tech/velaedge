@@ -23,6 +23,7 @@ Shared contracts used by both edge and cloud:
 - `DeviceShadow`: latest known local device state.
 - `CloudEnvelope`: versioned message wrapper for edge-cloud communication.
 - `AlgorithmSpec`: descriptor for rule, WASM, ONNX, and Python algorithms.
+- `EdgeConfigPackage`: edge-targeted configuration bundle with devices, protocol connections, point mappings, collection tasks, and algorithms.
 
 ### `crates/edge-runtime`
 
@@ -33,6 +34,7 @@ Deterministic edge runtime:
 - `LocalStore`: trait for local persistence.
 - `JsonlLocalStore`: simple inspectable local store for telemetry samples.
 - `EdgeRuntime`: collection pipeline that reads telemetry, persists it, and updates `DeviceShadow`.
+- `ConfiguredSimulatedRuntime`: first-version config apply path that validates an `EdgeConfigPackage`, records the applied version, and produces simulated telemetry.
 
 Real device protocols should be added as separate crates that implement `ProtocolAdapter`, then registered by the runtime.
 
@@ -43,8 +45,28 @@ Cloud control-plane primitives:
 - `FleetRegistry`: stores edge node metadata.
 - `ConfigPackage`: versioned deployment package for edge-specific device specs and algorithms.
 - `AgentCommandDraft`: output from an Agent that becomes an `edge-core::CommandCandidate`.
+- `ConfigAuthoringService`: creates cloud-side point mappings, collection tasks, and edge-targeted config packages.
+- `ReleaseService`: validates config packages, records desired versions, and tracks reported edge versions.
 
 This crate plans and governs. It does not execute protocol actions.
+
+### `crates/cloud-api`
+
+Cloud API and console hosting:
+
+- `GET /api/summary`: fleet and release summary for the console.
+- `POST /api/releases`: accepts an `EdgeConfigPackage` and creates a release through `cloud-control`.
+- Static fallback: serves `web/console/dist` so the built React console is available from the same service.
+
+The first API state is in-memory and intended for design validation. A database-backed implementation should preserve the same release and audit contracts.
+
+### `web/console`
+
+Built-in management UI:
+
+- Workbench, edge management, device models, protocol connections, point mappings, collection tasks, algorithms, releases, runtime status, audit log, and Agent assistant views.
+- Point configuration page owns the central cloud-side mapping workflow.
+- Release page shows validation, change summary, desired versions, reported versions, and edge apply status.
 
 ## Command Lifecycle
 
@@ -54,6 +76,20 @@ This crate plans and governs. It does not execute protocol actions.
 4. Edge validates command id, target device, parameters, ranges, risk, and confirmation requirements.
 5. Edge protocol adapter executes only after policy approval.
 6. Edge records command result locally and reports the result to cloud.
+
+## Configuration Lifecycle
+
+1. Cloud user registers or selects an edge node.
+2. Cloud user defines semantic device models.
+3. Cloud user configures reusable protocol connections.
+4. Cloud user maps semantic telemetry points to protocol addresses.
+5. Cloud user groups point mappings into collection tasks and attaches algorithms.
+6. Cloud creates a versioned `EdgeConfigPackage`.
+7. Release validation checks references, duplicate ids, and edge target consistency.
+8. Edge runtime receives the desired version, validates locally, applies it, and reports the applied version.
+9. Cloud compares desired and reported versions and records audit events.
+
+The cloud console owns authoring, validation, release planning, and auditability. The edge runtime owns real protocol execution, local storage, policy checks, and offline behavior.
 
 ## Storage Direction
 
@@ -93,4 +129,3 @@ Recommended Agent services:
 - Safety Review Agent: reviews risky configuration or command changes.
 
 All Agent outputs stay advisory until converted into governed configuration or policy-checked command candidates.
-
