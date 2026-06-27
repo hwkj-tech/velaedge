@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use cloud_control::{CloudControlStore, ReleaseService, ReleaseStatus};
+use cloud_control::{CloudControlStore, ReleaseService, ReleaseStatus, SqliteCloudStore};
 use edge_core::{
     decode_edgelink_frame, encode_edgelink_frame, EdgeConfigPackage, EdgeLinkConfigReport,
     EdgeLinkMessage, EdgeLinkPayload, EDGELINK_MAX_FRAME_BYTES,
@@ -104,6 +104,33 @@ pub async fn serve_edgelink_gateway(
     }
 }
 
+pub async fn serve_edgelink_gateway_with_sqlite(
+    listener: TcpListener,
+    store: Arc<Mutex<CloudControlStore>>,
+    sqlite_store: SqliteCloudStore,
+) -> Result<()> {
+    loop {
+        let (stream, peer_addr) = listener
+            .accept()
+            .await
+            .context("failed to accept EdgeLink runtime connection")?;
+        let session_store = store.clone();
+        let session_sqlite_store = sqlite_store.clone();
+        tokio::spawn(async move {
+            if let Err(error) = handle_edgelink_session_with_store_and_sqlite(
+                stream,
+                peer_addr,
+                session_store,
+                session_sqlite_store,
+            )
+            .await
+            {
+                warn!(%peer_addr, error = %error, "EdgeLink runtime session failed");
+            }
+        });
+    }
+}
+
 pub async fn serve_edgelink_gateway_for_sessions(
     listener: TcpListener,
     store: Arc<Mutex<CloudControlStore>>,
@@ -126,11 +153,34 @@ pub async fn handle_edgelink_session_with_store(
     peer_addr: SocketAddr,
     store: Arc<Mutex<CloudControlStore>>,
 ) -> Result<EdgeGatewaySessionReport> {
-    let session = handle_edgelink_stream(&mut stream, peer_addr).await?;
+    handle_edgelink_session_with_optional_sqlite(&mut stream, peer_addr, store, None).await
+}
+
+pub async fn handle_edgelink_session_with_store_and_sqlite(
+    mut stream: TcpStream,
+    peer_addr: SocketAddr,
+    store: Arc<Mutex<CloudControlStore>>,
+    sqlite_store: SqliteCloudStore,
+) -> Result<EdgeGatewaySessionReport> {
+    handle_edgelink_session_with_optional_sqlite(&mut stream, peer_addr, store, Some(sqlite_store))
+        .await
+}
+
+async fn handle_edgelink_session_with_optional_sqlite<S>(
+    stream: &mut S,
+    peer_addr: SocketAddr,
+    store: Arc<Mutex<CloudControlStore>>,
+    sqlite_store: Option<SqliteCloudStore>,
+) -> Result<EdgeGatewaySessionReport>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let session = handle_edgelink_stream(stream, peer_addr).await?;
     let config_report_count =
-        deploy_pending_config_if_available(&mut stream, &session, store.clone()).await?;
+        deploy_pending_config_if_available(stream, &session, store.clone(), sqlite_store.as_ref())
+            .await?;
     let accepted_message_count =
-        handle_edgelink_runtime_messages(&mut stream, &session, store).await?;
+        handle_edgelink_runtime_messages(stream, &session, store, sqlite_store).await?;
 
     Ok(EdgeGatewaySessionReport {
         session,
@@ -165,9 +215,9 @@ pub async fn handle_edgelink_tls_session_with_store(
         .context("failed to accept EdgeLink TLS session")?;
     let session = handle_edgelink_stream(&mut stream, peer_addr).await?;
     let config_report_count =
-        deploy_pending_config_if_available(&mut stream, &session, store.clone()).await?;
+        deploy_pending_config_if_available(&mut stream, &session, store.clone(), None).await?;
     let accepted_message_count =
-        handle_edgelink_runtime_messages(&mut stream, &session, store).await?;
+        handle_edgelink_runtime_messages(&mut stream, &session, store, None).await?;
 
     Ok(EdgeGatewaySessionReport {
         session,
@@ -219,13 +269,15 @@ async fn handle_edgelink_runtime_messages<S>(
     stream: &mut S,
     session: &EdgeGatewaySession,
     store: Arc<Mutex<CloudControlStore>>,
+    sqlite_store: Option<SqliteCloudStore>,
 ) -> Result<usize>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut accepted = 0;
     while let Some(message) = read_optional_edgelink_message(stream).await? {
-        let response = persist_runtime_message(session, message, store.clone())?;
+        let response =
+            persist_runtime_message(session, message, store.clone(), sqlite_store.as_ref()).await?;
         let acked = matches!(&response.payload, EdgeLinkPayload::Ack(ack) if ack.accepted);
         write_edgelink_message(stream, &response)
             .await
@@ -242,6 +294,7 @@ async fn deploy_pending_config_if_available<S>(
     stream: &mut S,
     session: &EdgeGatewaySession,
     store: Arc<Mutex<CloudControlStore>>,
+    sqlite_store: Option<&SqliteCloudStore>,
 ) -> Result<usize>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -274,7 +327,16 @@ where
     let EdgeLinkPayload::ConfigReport(report) = report_message.payload.clone() else {
         bail!("expected EdgeLink config report after config deploy");
     };
-    persist_config_report(&store, &session.edge_id, &desired_version, &report)?;
+    if let Some((release_id, reported_version)) =
+        persist_config_report(&store, &session.edge_id, &desired_version, &report)?
+    {
+        if let Some(sqlite_store) = sqlite_store {
+            sqlite_store
+                .mark_release_reported(release_id, reported_version)
+                .await
+                .context("persist EdgeLink config report to sqlite")?;
+        }
+    }
 
     let ack = EdgeLinkMessage::ack(
         session.edge_id.clone(),
@@ -314,7 +376,7 @@ fn persist_config_report(
     edge_id: &str,
     expected_version: &str,
     report: &EdgeLinkConfigReport,
-) -> Result<()> {
+) -> Result<Option<(uuid::Uuid, String)>> {
     if report.desired_version != expected_version {
         bail!(
             "config report desired version {} does not match deployed version {}",
@@ -335,21 +397,22 @@ fn persist_config_report(
         })
         .map(|release| release.release_id)
     else {
-        return Ok(());
+        return Ok(None);
     };
 
     let reported_version = report
         .applied_version
         .clone()
         .unwrap_or_else(|| "rejected".to_string());
-    ReleaseService::mark_reported(&mut store, release_id, reported_version);
-    Ok(())
+    ReleaseService::mark_reported(&mut store, release_id, reported_version.clone());
+    Ok(Some((release_id, reported_version)))
 }
 
-fn persist_runtime_message(
+async fn persist_runtime_message(
     session: &EdgeGatewaySession,
     message: EdgeLinkMessage,
     store: Arc<Mutex<CloudControlStore>>,
+    sqlite_store: Option<&SqliteCloudStore>,
 ) -> Result<EdgeLinkMessage> {
     if message.edge_id != session.edge_id {
         bail!(
@@ -372,7 +435,13 @@ fn persist_runtime_message(
             store
                 .lock()
                 .map_err(|_| anyhow!("cloud control store mutex poisoned"))?
-                .upsert_runtime_metrics(snapshot);
+                .upsert_runtime_metrics(snapshot.clone());
+            if let Some(sqlite_store) = sqlite_store {
+                sqlite_store
+                    .upsert_runtime_metrics(snapshot)
+                    .await
+                    .context("persist EdgeLink runtime metrics to sqlite")?;
+            }
             Ok(EdgeLinkMessage::ack(
                 session.edge_id.clone(),
                 session.runtime_id.clone(),
@@ -387,7 +456,13 @@ fn persist_runtime_message(
             store
                 .lock()
                 .map_err(|_| anyhow!("cloud control store mutex poisoned"))?
-                .push_runtime_event(event);
+                .push_runtime_event(event.clone());
+            if let Some(sqlite_store) = sqlite_store {
+                sqlite_store
+                    .push_runtime_event(event)
+                    .await
+                    .context("persist EdgeLink runtime event to sqlite")?;
+            }
             Ok(EdgeLinkMessage::ack(
                 session.edge_id.clone(),
                 session.runtime_id.clone(),

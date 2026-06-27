@@ -3,9 +3,9 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use cloud_api::gateway::{
     handle_edgelink_session, handle_edgelink_session_with_store,
-    serve_edgelink_gateway_for_sessions,
+    handle_edgelink_session_with_store_and_sqlite, serve_edgelink_gateway_for_sessions,
 };
-use cloud_control::{CloudControlStore, ReleaseService, ReleaseStatus};
+use cloud_control::{CloudControlStore, ReleaseService, ReleaseStatus, SqliteCloudStore};
 use edge_core::{
     decode_edgelink_frame, encode_edgelink_frame, CloudSyncMetrics, CollectionRuntimeMetrics,
     EdgeConfigPackage, EdgeHealth, EdgeLinkMessage, EdgeLinkMessageKind, EdgeLinkPayload,
@@ -127,6 +127,83 @@ async fn gateway_ingests_runtime_metrics_and_events_after_hello() {
     assert_eq!(stored_metrics.config_version, "2026.06.27-001");
     assert_eq!(store.runtime_events().len(), 1);
     assert_eq!(store.runtime_events()[0].code, "modbus.timeout");
+}
+
+#[tokio::test]
+async fn gateway_persists_runtime_metrics_and_events_to_sqlite() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let database_url = format!("sqlite://{}", tempdir.path().join("cloud.db").display());
+    let sqlite_store = SqliteCloudStore::connect(&database_url).await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let gateway_addr = listener.local_addr().expect("listener should expose addr");
+    let store = Arc::new(Mutex::new(CloudControlStore::default()));
+    let gateway_store = store.clone();
+
+    let gateway = tokio::spawn(async move {
+        let (stream, peer_addr) = listener.accept().await.expect("runtime should connect");
+        handle_edgelink_session_with_store_and_sqlite(
+            stream,
+            peer_addr,
+            gateway_store,
+            sqlite_store,
+        )
+        .await
+        .expect("session should process runtime messages")
+    });
+
+    let mut runtime = TcpStream::connect(gateway_addr)
+        .await
+        .expect("runtime should connect to gateway");
+    let hello = EdgeLinkMessage::hello(
+        "edge-sqlite",
+        "runtime-sqlite",
+        "0.1.0",
+        Some("2026.06.27-001".to_string()),
+        vec!["protocol:modbus-tcp".to_string()],
+    );
+    write_one_message(&mut runtime, &hello).await;
+    assert_ack_for(&mut runtime, &hello).await;
+
+    let metrics = EdgeLinkMessage::runtime_metrics(
+        "edge-sqlite",
+        "runtime-sqlite",
+        2,
+        runtime_metrics("edge-sqlite", "runtime-sqlite"),
+    );
+    write_one_message(&mut runtime, &metrics).await;
+    assert_ack_for(&mut runtime, &metrics).await;
+
+    let event = EdgeLinkMessage::runtime_event(
+        "edge-sqlite",
+        "runtime-sqlite",
+        3,
+        EdgeRuntimeEvent::new(
+            "edge-sqlite",
+            RuntimeEventSeverity::Warning,
+            RuntimeEventCategory::Protocol,
+            "modbus.timeout",
+            "Modbus request timed out",
+        ),
+    );
+    write_one_message(&mut runtime, &event).await;
+    assert_ack_for(&mut runtime, &event).await;
+    drop(runtime);
+
+    let report = gateway.await.expect("gateway task should finish");
+    assert_eq!(report.accepted_message_count, 2);
+
+    let reopened = SqliteCloudStore::connect(&database_url).await.unwrap();
+    let stored_metrics = reopened
+        .runtime_metrics("edge-sqlite")
+        .await
+        .unwrap()
+        .expect("metrics should be persisted");
+    assert_eq!(stored_metrics.runtime_id, "runtime-sqlite");
+    let events = reopened.runtime_events().await.unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].code, "modbus.timeout");
 }
 
 #[tokio::test]

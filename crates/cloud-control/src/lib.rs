@@ -5,6 +5,7 @@ pub mod audit;
 pub mod config;
 pub mod fleet;
 pub mod release;
+pub mod sqlite;
 pub mod store;
 pub mod validation;
 
@@ -13,5 +14,6 @@ pub use audit::{AuditAction, AuditRecord};
 pub use config::ConfigPackage;
 pub use fleet::{EdgeNode, FleetRegistry};
 pub use release::{ReleaseRecord, ReleaseService, ReleaseStatus};
+pub use sqlite::SqliteCloudStore;
 pub use store::CloudControlStore;
 pub use validation::{ConfigValidator, ValidationError};

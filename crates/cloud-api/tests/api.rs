@@ -367,6 +367,48 @@ async fn point_mapping_update_saves_new_draft_version() {
 }
 
 #[tokio::test]
+async fn sqlite_app_state_persists_point_mapping_update_across_reopen() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let database_url = format!("sqlite://{}", tempdir.path().join("cloud.db").display());
+
+    let router = app(AppState::with_sqlite(&database_url).await.unwrap());
+    let update = json!({
+        "addressKind": "holding_register",
+        "addressValue": "40033",
+        "intervalMs": 3000,
+        "unit": "MPa"
+    });
+
+    let update_response = router
+        .oneshot(
+            Request::put("/api/point-mappings/pressure")
+                .header("content-type", "application/json")
+                .body(Body::from(update.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(update_response.status(), StatusCode::OK);
+
+    let reopened = app(AppState::with_sqlite(&database_url).await.unwrap());
+    let response = reopened
+        .oneshot(
+            Request::get("/api/point-mappings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload[0]["address"], "holding_register:40033");
+    assert_eq!(payload[0]["interval"], "3000ms");
+}
+
+#[tokio::test]
 async fn publish_endpoint_releases_latest_draft_and_reports_apply_result() {
     let router = app(AppState::default());
     let update = json!({

@@ -312,18 +312,28 @@ async fn edge_reported_config(
     Path(edge_id): Path<String>,
     Json(request): Json<EdgeReportedConfigRequest>,
 ) -> Result<Json<ReleaseListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let mut store = state.store.lock().expect("store mutex poisoned");
-    let release_id = store
-        .releases()
-        .filter(|release| release.edge_id == edge_id)
-        .max_by(|left, right| left.desired_version.cmp(&right.desired_version))
-        .map(|release| release.release_id)
-        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing release for edge"))?;
+    let reported_version = request.reported_version;
+    let (release_id, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let release_id = store
+            .releases()
+            .filter(|release| release.edge_id == edge_id)
+            .max_by(|left, right| left.desired_version.cmp(&right.desired_version))
+            .map(|release| release.release_id)
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing release for edge"))?;
 
-    ReleaseService::mark_reported(&mut store, release_id, request.reported_version)
-        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing release for edge"))?;
+        ReleaseService::mark_reported(&mut store, release_id, reported_version.clone())
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing release for edge"))?;
 
-    Ok(Json(release_list_response(&store)))
+        (release_id, release_list_response(&store))
+    };
+
+    state
+        .persist_release_report(release_id, reported_version)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(Json(response))
 }
 
 async fn report_runtime_metrics(
@@ -338,10 +348,18 @@ async fn report_runtime_metrics(
         ));
     }
 
-    let mut store = state.store.lock().expect("store mutex poisoned");
-    store.upsert_runtime_metrics(snapshot);
+    let response = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        store.upsert_runtime_metrics(snapshot.clone());
+        runtime_status_response(&store)
+    };
 
-    Ok(Json(runtime_status_response(&store)))
+    state
+        .persist_runtime_metrics(snapshot)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(Json(response))
 }
 
 async fn report_runtime_event(
@@ -356,10 +374,18 @@ async fn report_runtime_event(
         ));
     }
 
-    let mut store = state.store.lock().expect("store mutex poisoned");
-    store.push_runtime_event(event);
+    let response = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        store.push_runtime_event(event.clone());
+        runtime_status_response(&store)
+    };
 
-    Ok(Json(runtime_status_response(&store)))
+    state
+        .persist_runtime_event(event)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(Json(response))
 }
 
 async fn save_point_mapping(
@@ -367,31 +393,39 @@ async fn save_point_mapping(
     Path(point_id): Path<String>,
     Json(request): Json<SavePointMappingRequest>,
 ) -> Result<Json<PointMappingResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let mut store = state.store.lock().expect("store mutex poisoned");
-    let mut package = store
-        .latest_config_package_for_edge("edge-dev")
-        .cloned()
-        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
-    package.version = next_version(&package.version);
+    let (package, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut package = store
+            .latest_config_package_for_edge("edge-dev")
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+        package.version = next_version(&package.version);
 
-    let mapping_index = package
-        .point_mappings
-        .iter()
-        .position(|mapping| mapping.point_id == point_id)
-        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing point mapping"))?;
+        let mapping_index = package
+            .point_mappings
+            .iter()
+            .position(|mapping| mapping.point_id == point_id)
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing point mapping"))?;
 
-    {
-        let mapping = &mut package.point_mappings[mapping_index];
-        mapping.address = PointAddress {
-            kind: request.address_kind,
-            value: request.address_value,
-        };
-        mapping.interval_ms = request.interval_ms;
-        mapping.unit = Some(request.unit);
-    }
+        {
+            let mapping = &mut package.point_mappings[mapping_index];
+            mapping.address = PointAddress {
+                kind: request.address_kind,
+                value: request.address_value,
+            };
+            mapping.interval_ms = request.interval_ms;
+            mapping.unit = Some(request.unit);
+        }
 
-    let response = point_mapping_response(&package, &package.point_mappings[mapping_index]);
-    store.upsert_config_package(package);
+        let response = point_mapping_response(&package, &package.point_mappings[mapping_index]);
+        store.upsert_config_package(package.clone());
+        (package, response)
+    };
+
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
 
     Ok(Json(response))
 }
@@ -399,24 +433,35 @@ async fn save_point_mapping(
 async fn publish_latest_release(
     State(state): State<AppState>,
 ) -> Result<Json<ReleaseListResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let mut store = state.store.lock().expect("store mutex poisoned");
-    let package = store
-        .latest_config_package_for_edge("edge-dev")
-        .cloned()
-        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
-    let release = ReleaseService::create_release(&mut store, package).map_err(|errors| {
-        error(
-            StatusCode::BAD_REQUEST,
-            errors
-                .into_iter()
-                .map(|error| error.message)
-                .collect::<Vec<_>>()
-                .join("; "),
-        )
-    })?;
-    ReleaseService::mark_reported(&mut store, release.release_id, release.desired_version);
+    let (release, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let package = store
+            .latest_config_package_for_edge("edge-dev")
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+        let release = ReleaseService::create_release(&mut store, package).map_err(|errors| {
+            error(
+                StatusCode::BAD_REQUEST,
+                errors
+                    .into_iter()
+                    .map(|error| error.message)
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
+        })?;
+        let release =
+            ReleaseService::mark_reported(&mut store, release.release_id, release.desired_version)
+                .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing release for edge"))?;
 
-    Ok(Json(release_list_response(&store)))
+        (release, release_list_response(&store))
+    };
+
+    state
+        .persist_release(release)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(Json(response))
 }
 
 fn release_list_response(store: &cloud_control::CloudControlStore) -> ReleaseListResponse {
@@ -499,19 +544,31 @@ async fn create_release(
     State(state): State<AppState>,
     Json(package): Json<EdgeConfigPackage>,
 ) -> Result<(StatusCode, Json<ReleaseResponse>), (StatusCode, Json<ErrorResponse>)> {
-    let mut store = state.store.lock().expect("store mutex poisoned");
-    let release = ReleaseService::create_release(&mut store, package).map_err(|errors| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                message: errors
-                    .into_iter()
-                    .map(|error| error.message)
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            }),
-        )
-    })?;
+    let package_for_persist = package.clone();
+    let release = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        ReleaseService::create_release(&mut store, package).map_err(|errors| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    message: errors
+                        .into_iter()
+                        .map(|error| error.message)
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                }),
+            )
+        })?
+    };
+
+    state
+        .persist_config_package(package_for_persist)
+        .await
+        .map_err(persistence_error)?;
+    state
+        .persist_release(release.clone())
+        .await
+        .map_err(persistence_error)?;
 
     Ok((
         StatusCode::CREATED,
@@ -753,6 +810,13 @@ fn error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Er
         Json(ErrorResponse {
             message: message.into(),
         }),
+    )
+}
+
+fn persistence_error(cause: anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
+    error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("persist cloud state failed: {cause}"),
     )
 }
 
