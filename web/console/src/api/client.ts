@@ -92,11 +92,16 @@ export async function savePointMapping(
 }
 
 export async function publishLatestRelease(
+  edgeId = 'edge-dev',
   fetcher: typeof fetch = fetch,
 ): Promise<ReleaseListResponse> {
-  return requestJson<ReleaseListResponse>('/api/releases/publish', fetcher, {
-    method: 'POST',
-  });
+  return requestJson<ReleaseListResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/releases/publish`,
+    fetcher,
+    {
+      method: 'POST',
+    },
+  );
 }
 
 async function requestJson<T>(

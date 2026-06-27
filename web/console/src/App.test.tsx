@@ -299,7 +299,7 @@ describe('App cloud console write actions', () => {
     fireEvent.click(screen.getByRole('button', { name: '创建发布' }));
 
     await waitFor(() => {
-      expect(publishLatestRelease).toHaveBeenCalledOnce();
+      expect(publishLatestRelease).toHaveBeenCalledWith('edge-dev');
     });
     await waitFor(() => {
       expect(screen.getAllByText('2026.06.26-002').length).toBeGreaterThan(0);

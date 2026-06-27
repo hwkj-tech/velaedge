@@ -101,8 +101,8 @@ export default function App() {
     await refreshConsoleData();
   };
 
-  const handlePublishLatestRelease = async () => {
-    await publishLatestRelease();
+  const handlePublishLatestRelease = async (edgeId: string) => {
+    await publishLatestRelease(edgeId);
     await refreshConsoleData();
   };
 
@@ -215,7 +215,7 @@ function renderPage(
     pointId: string,
     request: SavePointMappingRequest,
   ) => Promise<void>,
-  onPublish: () => Promise<void>,
+  onPublish: (edgeId: string) => Promise<void>,
   edgeNodes?: EdgeNodeResponse[],
   deviceModels?: DeviceModelResponse[],
   protocolConnections?: ProtocolConnectionResponse[],
@@ -242,7 +242,13 @@ function renderPage(
     case 'algorithms':
       return <AlgorithmsPage algorithms={algorithms} />;
     case 'releases':
-      return <ReleasesPage onPublish={onPublish} releaseList={releaseList} />;
+      return (
+        <ReleasesPage
+          edges={edgeNodes}
+          onPublish={onPublish}
+          releaseList={releaseList}
+        />
+      );
     case 'runtimeStatus':
       return <RuntimeStatusPage runtimeStatus={runtimeStatus} />;
     case 'auditLog':

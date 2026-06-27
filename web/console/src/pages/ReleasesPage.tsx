@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { GitCompare, Send, ShieldCheck } from 'lucide-react';
 
-import type { ReleaseListResponse } from '../api/types';
+import type { EdgeNodeResponse, ReleaseListResponse } from '../api/types';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import './PointMappingsPage.css';
 
@@ -35,6 +35,19 @@ const fallbackReleaseList: ReleaseListResponse = {
   ],
 };
 
+const fallbackEdges: EdgeNodeResponse[] = [
+  {
+    edgeId: 'edge-dev',
+    displayName: '研发实验室边端',
+    site: '研发/实验室',
+    runtimeId: 'runtime-dev',
+    status: '健康',
+    resources: '18% / 42% / 61%',
+    heartbeat: '8 秒前',
+    capabilities: ['protocol:modbus-tcp'],
+  },
+];
+
 const applyColumns: Array<DataTableColumn<ReleaseListResponse['applyResults'][number]>> = [
   { key: 'edgeId', header: 'Edge ID', width: '180px', render: (row) => row.edgeId },
   {
@@ -63,12 +76,17 @@ const applyColumns: Array<DataTableColumn<ReleaseListResponse['applyResults'][nu
 ];
 
 export function ReleasesPage({
+  edges = fallbackEdges,
   onPublish,
   releaseList = fallbackReleaseList,
 }: {
-  onPublish?: () => Promise<void> | void;
+  edges?: EdgeNodeResponse[];
+  onPublish?: (edgeId: string) => Promise<void> | void;
   releaseList?: ReleaseListResponse;
 }) {
+  const [selectedEdgeId, setSelectedEdgeId] = useState(
+    () => edges[0]?.edgeId ?? 'edge-dev',
+  );
   const [publishState, setPublishState] = useState<
     'idle' | 'publishing' | 'published' | 'error'
   >('idle');
@@ -77,7 +95,7 @@ export function ReleasesPage({
     setPublishState('publishing');
 
     try {
-      await onPublish?.();
+      await onPublish?.(selectedEdgeId);
       setPublishState('published');
     } catch {
       setPublishState('error');
@@ -102,6 +120,22 @@ export function ReleasesPage({
             <ShieldCheck size={15} aria-hidden="true" />
             校验草稿
           </button>
+          <label className="release-edge-select">
+            <span>发布边端</span>
+            <select
+              value={selectedEdgeId}
+              onChange={(event) => {
+                setSelectedEdgeId(event.target.value);
+                setPublishState('idle');
+              }}
+            >
+              {edges.map((edge) => (
+                <option key={edge.edgeId} value={edge.edgeId}>
+                  {edge.edgeId}
+                </option>
+              ))}
+            </select>
+          </label>
           <span className={`release-status ${publishState}`} role="status">
             {publishStatusText(publishState)}
           </span>
@@ -162,7 +196,7 @@ function publishStatusText(
     case 'publishing':
       return '发布中';
     case 'published':
-      return '发布指令已发送';
+      return '已创建发布，等待 runtime 回报';
     case 'error':
       return '发布失败';
     case 'idle':

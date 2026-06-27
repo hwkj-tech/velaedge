@@ -409,7 +409,7 @@ async fn sqlite_app_state_persists_point_mapping_update_across_reopen() {
 }
 
 #[tokio::test]
-async fn publish_endpoint_releases_latest_draft_and_reports_apply_result() {
+async fn publish_endpoint_releases_latest_draft_as_pending_runtime_deploy() {
     let router = app(AppState::default());
     let update = json!({
         "addressKind": "holding_register",
@@ -446,7 +446,31 @@ async fn publish_endpoint_releases_latest_draft_and_reports_apply_result() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(payload["draftVersion"], "2026.06.26-002");
-    assert_eq!(payload["applyResults"][0]["result"], "已应用");
+    assert_eq!(payload["applyResults"][0]["result"], "等待下发");
+    assert_eq!(payload["applyResults"][0]["reportedVersion"], "-");
+}
+
+#[tokio::test]
+async fn edge_scoped_publish_endpoint_releases_selected_edge_draft() {
+    let router = app(AppState::default());
+
+    let publish_response = router
+        .oneshot(
+            Request::post("/api/edges/edge-dev/releases/publish")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(publish_response.status(), StatusCode::OK);
+
+    let body = to_bytes(publish_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["applyResults"][0]["edgeId"], "edge-dev");
+    assert_eq!(payload["applyResults"][0]["result"], "等待下发");
 }
 
 #[tokio::test]

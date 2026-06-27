@@ -231,7 +231,7 @@ describe('savePointMapping', () => {
 });
 
 describe('publishLatestRelease', () => {
-  it('publishes the latest cloud draft and returns apply results', async () => {
+  it('publishes the latest cloud draft for the selected edge and returns apply results', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -243,20 +243,26 @@ describe('publishLatestRelease', () => {
           {
             edgeId: 'edge-dev',
             desiredVersion: '2026.06.26-002',
-            reportedVersion: '2026.06.26-002',
-            result: '已应用',
+            reportedVersion: '-',
+            result: '等待下发',
             heartbeat: '18 秒前',
           },
         ],
       }),
     });
 
-    const result = await publishLatestRelease(fetchMock as unknown as typeof fetch);
+    const result = await publishLatestRelease(
+      'edge-dev',
+      fetchMock as unknown as typeof fetch,
+    );
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/releases/publish', {
-      method: 'POST',
-    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/edges/edge-dev/releases/publish',
+      {
+        method: 'POST',
+      },
+    );
     expect(result.draftVersion).toBe('2026.06.26-002');
-    expect(result.applyResults[0].result).toBe('已应用');
+    expect(result.applyResults[0].result).toBe('等待下发');
   });
 });

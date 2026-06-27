@@ -37,4 +37,27 @@ describe('PointMappingsPage', () => {
     });
     expect(screen.getByText('草稿已保存')).toBeInTheDocument();
   });
+
+  it('switches the editor to the selected point row before saving', async () => {
+    const onSavePoint = vi.fn().mockResolvedValue(undefined);
+
+    render(<PointMappingsPage onSavePoint={onSavePoint} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '选择点位 running' }));
+    expect(screen.getByText('编辑点位 running')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('地址值'), {
+      target: { value: '00002' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+
+    await waitFor(() => {
+      expect(onSavePoint).toHaveBeenCalledWith('running', {
+        addressKind: 'coil',
+        addressValue: '00002',
+        intervalMs: 1000,
+        unit: '-',
+      });
+    });
+  });
 });

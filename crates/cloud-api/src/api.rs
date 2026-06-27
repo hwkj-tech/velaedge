@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{get, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use cloud_control::{AuditAction, ReleaseService, ReleaseStatus};
@@ -54,6 +54,10 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/api/releases/publish",
             get(releases).post(publish_latest_release),
+        )
+        .route(
+            "/api/edges/{edge_id}/releases/publish",
+            post(publish_latest_release_for_edge),
         )
         .with_state(state);
 
@@ -433,10 +437,24 @@ async fn save_point_mapping(
 async fn publish_latest_release(
     State(state): State<AppState>,
 ) -> Result<Json<ReleaseListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    publish_latest_release_for_edge_id(state, "edge-dev").await
+}
+
+async fn publish_latest_release_for_edge(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<Json<ReleaseListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    publish_latest_release_for_edge_id(state, &edge_id).await
+}
+
+async fn publish_latest_release_for_edge_id(
+    state: AppState,
+    edge_id: &str,
+) -> Result<Json<ReleaseListResponse>, (StatusCode, Json<ErrorResponse>)> {
     let (release, response) = {
         let mut store = state.store.lock().expect("store mutex poisoned");
         let package = store
-            .latest_config_package_for_edge("edge-dev")
+            .latest_config_package_for_edge(edge_id)
             .cloned()
             .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
         let release = ReleaseService::create_release(&mut store, package).map_err(|errors| {
@@ -449,10 +467,6 @@ async fn publish_latest_release(
                     .join("; "),
             )
         })?;
-        let release =
-            ReleaseService::mark_reported(&mut store, release.release_id, release.desired_version)
-                .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing release for edge"))?;
-
         (release, release_list_response(&store))
     };
 
@@ -466,8 +480,13 @@ async fn publish_latest_release(
 
 fn release_list_response(store: &cloud_control::CloudControlStore) -> ReleaseListResponse {
     let mut releases = store.releases().cloned().collect::<Vec<_>>();
-    releases.sort_by(|left, right| left.desired_version.cmp(&right.desired_version));
-    releases.reverse();
+    releases.sort_by(|left, right| {
+        right
+            .desired_version
+            .cmp(&left.desired_version)
+            .then_with(|| release_status_rank(left.status).cmp(&release_status_rank(right.status)))
+            .then_with(|| left.release_id.cmp(&right.release_id))
+    });
 
     let draft_version = store
         .edge_nodes()
@@ -501,6 +520,14 @@ fn release_list_response(store: &cloud_control::CloudControlStore) -> ReleaseLis
                 heartbeat: "18 秒前".to_string(),
             })
             .collect(),
+    }
+}
+
+fn release_status_rank(status: ReleaseStatus) -> u8 {
+    match status {
+        ReleaseStatus::Pending => 0,
+        ReleaseStatus::Failed => 1,
+        ReleaseStatus::Applied => 2,
     }
 }
 

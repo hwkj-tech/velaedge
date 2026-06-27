@@ -13,6 +13,31 @@
   table-layout: fixed;
 }
 
+.point-id-button {
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #245fc7;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  line-height: 1.25;
+  padding: 5px 6px;
+  text-align: left;
+}
+
+.point-id-button:hover,
+.point-id-button[aria-pressed='true'] {
+  background: #eef4ff;
+  color: #153f91;
+}
+
+.point-id-button:focus-visible {
+  outline: 2px solid rgba(47, 111, 237, 0.28);
+  outline-offset: 1px;
+}
+
 .drawer {
   display: grid;
   gap: 14px;
@@ -161,6 +186,31 @@
   color: var(--color-muted);
   font-size: 12px;
   font-weight: 800;
+}
+
+.release-edge-select {
+  display: inline-grid;
+  gap: 4px;
+  min-width: 150px;
+}
+
+.release-edge-select span {
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.release-edge-select select {
+  width: 100%;
+  border: 1px solid #c7d1df;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #243248;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.35;
+  padding: 6px 8px;
 }
 
 .release-status.published {

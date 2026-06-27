@@ -45,29 +45,6 @@ const fallbackPoints: PointMappingResponse[] = [
   },
 ];
 
-const columns: Array<DataTableColumn<PointMappingResponse>> = [
-  { key: 'pointId', header: 'Point ID', width: '110px', render: (row) => row.pointId },
-  { key: 'address', header: '地址 / NodeId / Topic', width: '180px', render: (row) => row.address },
-  { key: 'deviceId', header: '设备', width: '90px', render: (row) => row.deviceId },
-  { key: 'protocol', header: '协议', width: '110px', render: (row) => row.protocol },
-  { key: 'connection', header: '连接', width: '130px', render: (row) => row.connection },
-  {
-    key: 'semanticTelemetry',
-    header: '语义遥测',
-    width: '130px',
-    render: (row) => row.semanticTelemetry,
-  },
-  { key: 'type', header: '数据类型', width: '90px', render: (row) => row.valueType },
-  { key: 'unit', header: '单位', width: '80px', render: (row) => row.unit },
-  { key: 'interval', header: '周期', width: '90px', render: (row) => row.interval },
-  {
-    key: 'status',
-    header: '状态',
-    width: '90px',
-    render: (row) => <span className="tag ok">{row.status}</span>,
-  },
-];
-
 export function PointMappingsPage({
   onSavePoint,
   points = fallbackPoints,
@@ -78,11 +55,18 @@ export function PointMappingsPage({
   ) => Promise<void> | void;
   points?: PointMappingResponse[];
 }) {
-  const selectedPoint = points[0] ?? fallbackPoints[0];
+  const [selectedPointId, setSelectedPointId] = useState(
+    () => points[0]?.pointId ?? fallbackPoints[0].pointId,
+  );
+  const selectedPoint =
+    points.find((point) => point.pointId === selectedPointId) ??
+    points[0] ??
+    fallbackPoints[0];
   const [form, setForm] = useState(() => pointToEditorForm(selectedPoint));
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>(
     'idle',
   );
+  const columns = pointColumns(selectedPoint.pointId, setSelectedPointId);
 
   useEffect(() => {
     setForm(pointToEditorForm(selectedPoint));
@@ -90,6 +74,12 @@ export function PointMappingsPage({
       current === 'saving' || current === 'saved' ? current : 'idle',
     );
   }, [selectedPoint]);
+
+  useEffect(() => {
+    if (points.length > 0 && !points.some((point) => point.pointId === selectedPointId)) {
+      setSelectedPointId(points[0].pointId);
+    }
+  }, [points, selectedPointId]);
 
   const handleSave = async () => {
     const request = formToSaveRequest(form);
@@ -279,6 +269,54 @@ export function PointMappingsPage({
       </div>
     </div>
   );
+}
+
+function pointColumns(
+  selectedPointId: string,
+  onSelectPoint: (pointId: string) => void,
+): Array<DataTableColumn<PointMappingResponse>> {
+  return [
+    {
+      key: 'pointId',
+      header: 'Point ID',
+      width: '110px',
+      render: (row) => (
+        <button
+          aria-label={`选择点位 ${row.pointId}`}
+          aria-pressed={row.pointId === selectedPointId}
+          className="point-id-button"
+          onClick={() => onSelectPoint(row.pointId)}
+          type="button"
+        >
+          {row.pointId}
+        </button>
+      ),
+    },
+    {
+      key: 'address',
+      header: '地址 / NodeId / Topic',
+      width: '180px',
+      render: (row) => row.address,
+    },
+    { key: 'deviceId', header: '设备', width: '90px', render: (row) => row.deviceId },
+    { key: 'protocol', header: '协议', width: '110px', render: (row) => row.protocol },
+    { key: 'connection', header: '连接', width: '130px', render: (row) => row.connection },
+    {
+      key: 'semanticTelemetry',
+      header: '语义遥测',
+      width: '130px',
+      render: (row) => row.semanticTelemetry,
+    },
+    { key: 'type', header: '数据类型', width: '90px', render: (row) => row.valueType },
+    { key: 'unit', header: '单位', width: '80px', render: (row) => row.unit },
+    { key: 'interval', header: '周期', width: '90px', render: (row) => row.interval },
+    {
+      key: 'status',
+      header: '状态',
+      width: '90px',
+      render: (row) => <span className="tag ok">{row.status}</span>,
+    },
+  ];
 }
 
 interface EditorForm {
