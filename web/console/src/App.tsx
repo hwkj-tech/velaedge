@@ -5,6 +5,7 @@ import {
   fetchAuditRecords,
   fetchCollectionTasks,
   fetchDeviceModels,
+  fetchEdgeCollectionTasks,
   fetchEdgePointMappings,
   fetchEdgeNodes,
   fetchPointMappings,
@@ -13,6 +14,7 @@ import {
   fetchRuntimeStatus,
   fetchSummary,
   publishLatestRelease,
+  saveEdgeCollectionTask,
   saveEdgePointMapping,
 } from './api/client';
 import type {
@@ -25,6 +27,7 @@ import type {
   ProtocolConnectionResponse,
   ReleaseListResponse,
   RuntimeStatusResponse,
+  SaveCollectionTaskRequest,
   SavePointMappingRequest,
   SummaryResponse,
 } from './api/types';
@@ -69,6 +72,7 @@ export default function App() {
   const [pointMappings, setPointMappings] = useState<PointMappingResponse[]>();
   const [selectedPointEdgeId, setSelectedPointEdgeId] = useState('edge-dev');
   const [collectionTasks, setCollectionTasks] = useState<CollectionTaskResponse[]>();
+  const [selectedCollectionEdgeId, setSelectedCollectionEdgeId] = useState('edge-dev');
   const [algorithms, setAlgorithms] = useState<AlgorithmResponse[]>();
   const [releaseList, setReleaseList] = useState<ReleaseListResponse>();
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatusResponse>();
@@ -113,6 +117,26 @@ export default function App() {
   const handleSelectPointEdge = async (edgeId: string) => {
     setSelectedPointEdgeId(edgeId);
     setPointMappings(await fetchEdgePointMappings(edgeId));
+  };
+
+  const handleSaveCollectionTask = async (
+    edgeId: string,
+    taskId: string,
+    request: SaveCollectionTaskRequest,
+  ) => {
+    await saveEdgeCollectionTask(edgeId, taskId, request);
+    const [nextCollectionTasks, nextReleaseList] = await Promise.all([
+      fetchEdgeCollectionTasks(edgeId),
+      fetchReleaseList(),
+    ]);
+    setCollectionTasks(nextCollectionTasks);
+    setReleaseList(nextReleaseList);
+    setSelectedCollectionEdgeId(edgeId);
+  };
+
+  const handleSelectCollectionEdge = async (edgeId: string) => {
+    setSelectedCollectionEdgeId(edgeId);
+    setCollectionTasks(await fetchEdgeCollectionTasks(edgeId));
   };
 
   const handlePublishLatestRelease = async (edgeId: string) => {
@@ -169,6 +193,9 @@ export default function App() {
         handleSavePoint,
         handleSelectPointEdge,
         selectedPointEdgeId,
+        handleSaveCollectionTask,
+        handleSelectCollectionEdge,
+        selectedCollectionEdgeId,
         handlePublishLatestRelease,
         edgeNodes,
         deviceModels,
@@ -234,6 +261,13 @@ function renderPage(
   ) => Promise<void>,
   onSelectPointEdge: (edgeId: string) => Promise<void>,
   selectedPointEdgeId: string,
+  onSaveCollectionTask: (
+    edgeId: string,
+    taskId: string,
+    request: SaveCollectionTaskRequest,
+  ) => Promise<void>,
+  onSelectCollectionEdge: (edgeId: string) => Promise<void>,
+  selectedCollectionEdgeId: string,
   onPublish: (edgeId: string) => Promise<void>,
   edgeNodes?: EdgeNodeResponse[],
   deviceModels?: DeviceModelResponse[],
@@ -265,7 +299,15 @@ function renderPage(
         />
       );
     case 'collectionTasks':
-      return <CollectionTasksPage tasks={collectionTasks} />;
+      return (
+        <CollectionTasksPage
+          edges={edgeNodes}
+          onSaveTask={onSaveCollectionTask}
+          onSelectEdge={onSelectCollectionEdge}
+          selectedEdgeId={selectedCollectionEdgeId}
+          tasks={collectionTasks}
+        />
+      );
     case 'algorithms':
       return <AlgorithmsPage algorithms={algorithms} />;
     case 'releases':

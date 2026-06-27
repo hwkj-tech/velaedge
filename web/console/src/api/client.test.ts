@@ -5,6 +5,7 @@ import {
   fetchAuditRecords,
   fetchCollectionTasks,
   fetchDeviceModels,
+  fetchEdgeCollectionTasks,
   fetchEdgeNodes,
   fetchEdgePointMappings,
   fetchPointMappings,
@@ -13,6 +14,7 @@ import {
   fetchRuntimeStatus,
   fetchSummary,
   publishLatestRelease,
+  saveEdgeCollectionTask,
   saveEdgePointMapping,
   savePointMapping,
 } from './client';
@@ -235,6 +237,36 @@ describe('management data clients', () => {
   });
 });
 
+describe('fetchEdgeCollectionTasks', () => {
+  it('loads collection tasks for the selected edge from the API', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          edgeId: 'edge-dev',
+          taskId: 'pump-main',
+          deviceId: 'pump-1',
+          pointIds: ['pressure', 'running'],
+          pointList: 'pressure, running',
+          intervalMs: 1000,
+          interval: '1000ms',
+          enabled: true,
+          status: '启用',
+        },
+      ],
+    });
+
+    const result = await fetchEdgeCollectionTasks(
+      'edge-dev',
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/collection-tasks');
+    expect(result[0].taskId).toBe('pump-main');
+    expect(result[0].pointIds).toEqual(['pressure', 'running']);
+  });
+});
+
 describe('savePointMapping', () => {
   it('sends an editable point mapping draft to the API', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
@@ -268,6 +300,52 @@ describe('savePointMapping', () => {
       method: 'PUT',
     });
     expect(result.address).toBe('holding_register:40002');
+  });
+});
+
+describe('saveEdgeCollectionTask', () => {
+  it('sends an editable collection task draft to the selected edge API', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        edgeId: 'edge-dev',
+        taskId: 'pump-main',
+        deviceId: 'pump-1',
+        pointIds: ['pressure'],
+        pointList: 'pressure',
+        intervalMs: 2500,
+        interval: '2500ms',
+        enabled: false,
+        status: '暂停',
+      }),
+    });
+
+    const result = await saveEdgeCollectionTask(
+      'edge-dev',
+      'pump-main',
+      {
+        deviceId: 'pump-1',
+        pointIds: ['pressure'],
+        intervalMs: 2500,
+        enabled: false,
+      },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/edges/edge-dev/collection-tasks/pump-main',
+      {
+        body: JSON.stringify({
+          deviceId: 'pump-1',
+          pointIds: ['pressure'],
+          intervalMs: 2500,
+          enabled: false,
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'PUT',
+      },
+    );
+    expect(result.status).toBe('暂停');
   });
 });
 

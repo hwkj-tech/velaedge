@@ -6,8 +6,8 @@ use axum::{
 };
 use cloud_control::{AuditAction, ReleaseService, ReleaseStatus};
 use edge_core::{
-    AlgorithmRuntime, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot,
-    PointAddress, ProtocolType, TelemetryPointMapping, TelemetryType,
+    AlgorithmRuntime, CollectionTask, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent,
+    EdgeRuntimeMetricsSnapshot, PointAddress, ProtocolType, TelemetryPointMapping, TelemetryType,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -29,6 +29,14 @@ pub fn app(state: AppState) -> Router {
         .route("/api/device-models", get(device_models))
         .route("/api/protocol-connections", get(protocol_connections))
         .route("/api/collection-tasks", get(collection_tasks))
+        .route(
+            "/api/edges/{edge_id}/collection-tasks",
+            get(edge_collection_tasks),
+        )
+        .route(
+            "/api/edges/{edge_id}/collection-tasks/{task_id}",
+            put(save_edge_collection_task),
+        )
         .route("/api/algorithms", get(algorithms))
         .route("/api/audit-records", get(audit_records))
         .route("/api/runtime-status", get(runtime_status))
@@ -253,19 +261,30 @@ async fn collection_tasks(State(state): State<AppState>) -> Json<Vec<CollectionT
 
     for package in store.config_packages() {
         for task in &package.collection_tasks {
-            rows.push(CollectionTaskResponse {
-                edge_id: package.edge_id.clone(),
-                task_id: task.task_id.clone(),
-                device_id: task.device_id.clone(),
-                point_list: task.point_ids.join(", "),
-                interval: format!("{}ms", task.interval_ms),
-                status: if task.enabled { "启用" } else { "暂停" }.to_string(),
-            });
+            rows.push(collection_task_response(package, task));
         }
     }
     rows.sort_by(|left, right| left.task_id.cmp(&right.task_id));
 
     Json(rows)
+}
+
+async fn edge_collection_tasks(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<Json<Vec<CollectionTaskResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let package = store
+        .latest_config_package_for_edge(&edge_id)
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+    let mut tasks = package
+        .collection_tasks
+        .iter()
+        .map(|task| collection_task_response(package, task))
+        .collect::<Vec<_>>();
+    tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));
+
+    Ok(Json(tasks))
 }
 
 async fn algorithms(State(state): State<AppState>) -> Json<Vec<AlgorithmResponse>> {
@@ -465,6 +484,74 @@ async fn save_point_mapping_for_edge_id(
         }
 
         let response = point_mapping_response(&package, &package.point_mappings[mapping_index]);
+        store.upsert_config_package(package.clone());
+        (package, response)
+    };
+
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(Json(response))
+}
+
+async fn save_edge_collection_task(
+    State(state): State<AppState>,
+    Path((edge_id, task_id)): Path<(String, String)>,
+    Json(request): Json<SaveCollectionTaskRequest>,
+) -> Result<Json<CollectionTaskResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let (package, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut package = store
+            .latest_config_package_for_edge(&edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+
+        if !package
+            .devices
+            .iter()
+            .any(|device| device.device_id == request.device_id)
+        {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "collection task device missing",
+            ));
+        }
+        if request.point_ids.is_empty() {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "collection task must include at least one point",
+            ));
+        }
+        if let Some(missing_point_id) = request.point_ids.iter().find(|point_id| {
+            !package
+                .point_mappings
+                .iter()
+                .any(|mapping| mapping.point_id == **point_id)
+        }) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!("collection task point `{missing_point_id}` missing"),
+            ));
+        }
+
+        let task_index = package
+            .collection_tasks
+            .iter()
+            .position(|task| task.task_id == task_id)
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing collection task"))?;
+
+        package.version = next_version(&package.version);
+        {
+            let task = &mut package.collection_tasks[task_index];
+            task.device_id = request.device_id;
+            task.point_ids = request.point_ids;
+            task.interval_ms = request.interval_ms.max(100);
+            task.enabled = request.enabled;
+        }
+
+        let response = collection_task_response(&package, &package.collection_tasks[task_index]);
         store.upsert_config_package(package.clone());
         (package, response)
     };
@@ -710,8 +797,11 @@ pub struct CollectionTaskResponse {
     pub edge_id: String,
     pub task_id: String,
     pub device_id: String,
+    pub point_ids: Vec<String>,
     pub point_list: String,
+    pub interval_ms: u64,
     pub interval: String,
+    pub enabled: bool,
     pub status: String,
 }
 
@@ -776,6 +866,15 @@ pub struct SavePointMappingRequest {
     pub address_value: String,
     pub interval_ms: u64,
     pub unit: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveCollectionTaskRequest {
+    pub device_id: String,
+    pub point_ids: Vec<String>,
+    pub interval_ms: u64,
+    pub enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -865,6 +964,23 @@ fn point_mapping_response(
             .unwrap_or_else(|| "-".to_string()),
         quality_rule: "timeout->bad".to_string(),
         status: "启用".to_string(),
+    }
+}
+
+fn collection_task_response(
+    package: &EdgeConfigPackage,
+    task: &CollectionTask,
+) -> CollectionTaskResponse {
+    CollectionTaskResponse {
+        edge_id: package.edge_id.clone(),
+        task_id: task.task_id.clone(),
+        device_id: task.device_id.clone(),
+        point_ids: task.point_ids.clone(),
+        point_list: task.point_ids.join(", "),
+        interval_ms: task.interval_ms,
+        interval: format!("{}ms", task.interval_ms),
+        enabled: task.enabled,
+        status: if task.enabled { "启用" } else { "暂停" }.to_string(),
     }
 }
 

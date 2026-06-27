@@ -8,6 +8,7 @@ import type {
   ProtocolConnectionResponse,
   ReleaseListResponse,
   RuntimeStatusResponse,
+  SaveCollectionTaskRequest,
   SavePointMappingRequest,
   SummaryResponse,
 } from './types';
@@ -67,6 +68,16 @@ export async function fetchCollectionTasks(
   return requestJson<CollectionTaskResponse[]>('/api/collection-tasks', fetcher);
 }
 
+export async function fetchEdgeCollectionTasks(
+  edgeId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<CollectionTaskResponse[]> {
+  return requestJson<CollectionTaskResponse[]>(
+    `/api/edges/${encodeURIComponent(edgeId)}/collection-tasks`,
+    fetcher,
+  );
+}
+
 export async function fetchAlgorithms(
   fetcher: typeof fetch = fetch,
 ): Promise<AlgorithmResponse[]> {
@@ -109,6 +120,23 @@ export async function saveEdgePointMapping(
 ): Promise<PointMappingResponse> {
   return requestJson<PointMappingResponse>(
     `/api/edges/${encodeURIComponent(edgeId)}/point-mappings/${encodeURIComponent(pointId)}`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    },
+  );
+}
+
+export async function saveEdgeCollectionTask(
+  edgeId: string,
+  taskId: string,
+  request: SaveCollectionTaskRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<CollectionTaskResponse> {
+  return requestJson<CollectionTaskResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/collection-tasks/${encodeURIComponent(taskId)}`,
     fetcher,
     {
       body: JSON.stringify(request),

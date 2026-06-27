@@ -6,6 +6,7 @@ import {
   fetchAuditRecords,
   fetchCollectionTasks,
   fetchDeviceModels,
+  fetchEdgeCollectionTasks,
   fetchEdgePointMappings,
   fetchEdgeNodes,
   fetchPointMappings,
@@ -14,6 +15,7 @@ import {
   fetchRuntimeStatus,
   fetchSummary,
   publishLatestRelease,
+  saveEdgeCollectionTask,
   saveEdgePointMapping,
 } from './api/client';
 import type {
@@ -26,6 +28,7 @@ import type {
   ProtocolConnectionResponse,
   ReleaseListResponse,
   RuntimeStatusResponse,
+  SaveCollectionTaskRequest,
 } from './api/types';
 import App from './App';
 
@@ -34,6 +37,7 @@ vi.mock('./api/client', () => ({
   fetchAuditRecords: vi.fn(),
   fetchCollectionTasks: vi.fn(),
   fetchDeviceModels: vi.fn(),
+  fetchEdgeCollectionTasks: vi.fn(),
   fetchEdgePointMappings: vi.fn(),
   fetchEdgeNodes: vi.fn(),
   fetchPointMappings: vi.fn(),
@@ -42,6 +46,7 @@ vi.mock('./api/client', () => ({
   fetchRuntimeStatus: vi.fn(),
   fetchSummary: vi.fn(),
   publishLatestRelease: vi.fn(),
+  saveEdgeCollectionTask: vi.fn(),
   saveEdgePointMapping: vi.fn(),
 }));
 
@@ -143,8 +148,11 @@ const collectionTasks: CollectionTaskResponse[] = [
     edgeId: 'edge-dev',
     taskId: 'pump-main',
     deviceId: 'pump-1',
+    pointIds: ['pressure', 'running'],
     pointList: 'pressure, running',
+    intervalMs: 1000,
     interval: '1000ms',
+    enabled: true,
     status: '启用',
   },
 ];
@@ -240,6 +248,7 @@ describe('App cloud console write actions', () => {
     vi.mocked(fetchPointMappings).mockResolvedValue([basePoint]);
     vi.mocked(fetchEdgePointMappings).mockResolvedValue([basePoint]);
     vi.mocked(fetchCollectionTasks).mockResolvedValue(collectionTasks);
+    vi.mocked(fetchEdgeCollectionTasks).mockResolvedValue(collectionTasks);
     vi.mocked(fetchAlgorithms).mockResolvedValue(algorithms);
     vi.mocked(fetchReleaseList).mockResolvedValue(initialReleaseList);
     vi.mocked(fetchRuntimeStatus).mockResolvedValue(runtimeStatus);
@@ -248,6 +257,15 @@ describe('App cloud console write actions', () => {
       ...basePoint,
       address: 'holding_register:40002',
       interval: '2000ms',
+    });
+    vi.mocked(saveEdgeCollectionTask).mockResolvedValue({
+      ...collectionTasks[0],
+      enabled: false,
+      interval: '2500ms',
+      intervalMs: 2500,
+      pointIds: ['pressure'],
+      pointList: 'pressure',
+      status: '暂停',
     });
     vi.mocked(publishLatestRelease).mockResolvedValue(updatedReleaseList);
   });
@@ -288,6 +306,51 @@ describe('App cloud console write actions', () => {
       );
     });
     expect(await screen.findByText('holding_register:40002')).toBeInTheDocument();
+    expect(screen.getByText('草稿已保存')).toBeInTheDocument();
+  });
+
+  it('saves collection task drafts through the selected edge API', async () => {
+    vi.mocked(fetchCollectionTasks).mockResolvedValueOnce(collectionTasks);
+    vi.mocked(fetchEdgeCollectionTasks).mockResolvedValueOnce([
+      {
+        ...collectionTasks[0],
+        enabled: false,
+        interval: '2500ms',
+        intervalMs: 2500,
+        pointIds: ['pressure'],
+        pointList: 'pressure',
+        status: '暂停',
+      },
+    ]);
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /采集任务/ }));
+    expect((await screen.findAllByText('pressure, running')).length).toBeGreaterThan(0);
+
+    fireEvent.change(screen.getByLabelText('采集点位'), {
+      target: { value: 'pressure' },
+    });
+    fireEvent.change(screen.getByLabelText('采集周期(ms)'), {
+      target: { value: '2500' },
+    });
+    fireEvent.click(screen.getByLabelText('启用任务'));
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+
+    const expectedRequest: SaveCollectionTaskRequest = {
+      deviceId: 'pump-1',
+      enabled: false,
+      intervalMs: 2500,
+      pointIds: ['pressure'],
+    };
+    await waitFor(() => {
+      expect(saveEdgeCollectionTask).toHaveBeenCalledWith(
+        'edge-dev',
+        'pump-main',
+        expectedRequest,
+      );
+    });
+    expect((await screen.findAllByText('pressure')).length).toBeGreaterThan(0);
     expect(screen.getByText('草稿已保存')).toBeInTheDocument();
   });
 
@@ -336,7 +399,9 @@ describe('App cloud console write actions', () => {
     expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /采集任务/ }));
-    expect(await screen.findByText('pump-main')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: '选择任务 pump-main' }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /算法配置/ }));
     expect(await screen.findByText('pump-anomaly-v1')).toBeInTheDocument();

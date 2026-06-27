@@ -87,9 +87,19 @@ export interface CollectionTaskResponse {
   edgeId: string;
   taskId: string;
   deviceId: string;
+  pointIds: string[];
   pointList: string;
+  intervalMs: number;
   interval: string;
+  enabled: boolean;
   status: string;
+}
+
+export interface SaveCollectionTaskRequest {
+  deviceId: string;
+  pointIds: string[];
+  intervalMs: number;
+  enabled: boolean;
 }
 
 export interface AlgorithmResponse {

@@ -1,0 +1,82 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+
+import { CollectionTasksPage } from './CollectionTasksPage';
+
+describe('CollectionTasksPage', () => {
+  it('shows collection task table and editor fields', () => {
+    render(<CollectionTasksPage selectedEdgeId="edge-dev" />);
+
+    expect(screen.getByText('任务清单')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '选择任务 pump-main' })).toBeInTheDocument();
+    expect(screen.getAllByText('pressure, running').length).toBeGreaterThan(0);
+    expect(screen.getByText('编辑任务 pump-main')).toBeInTheDocument();
+    expect(screen.getByLabelText('采集周期(ms)')).toBeInTheDocument();
+  });
+
+  it('saves edited collection task drafts from the editor drawer', async () => {
+    const onSaveTask = vi.fn().mockResolvedValue(undefined);
+
+    render(<CollectionTasksPage selectedEdgeId="edge-dev" onSaveTask={onSaveTask} />);
+
+    fireEvent.change(screen.getByLabelText('采集点位'), {
+      target: { value: 'pressure' },
+    });
+    fireEvent.change(screen.getByLabelText('采集周期(ms)'), {
+      target: { value: '2500' },
+    });
+    fireEvent.click(screen.getByLabelText('启用任务'));
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+
+    await waitFor(() => {
+      expect(onSaveTask).toHaveBeenCalledWith('edge-dev', 'pump-main', {
+        deviceId: 'pump-1',
+        pointIds: ['pressure'],
+        intervalMs: 2500,
+        enabled: false,
+      });
+    });
+    expect(screen.getByText('草稿已保存')).toBeInTheDocument();
+  });
+
+  it('switches the active edge before editing collection tasks', async () => {
+    const onSelectEdge = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <CollectionTasksPage
+        edges={[
+          {
+            edgeId: 'edge-dev',
+            displayName: '研发实验室边端',
+            site: '研发/实验室',
+            runtimeId: 'runtime-dev',
+            status: '健康',
+            resources: '18% / 42% / 61%',
+            heartbeat: '8 秒前',
+            capabilities: ['protocol:modbus-tcp'],
+          },
+          {
+            edgeId: 'edge-prod',
+            displayName: '产线边端',
+            site: '制造/一线',
+            runtimeId: 'runtime-prod',
+            status: '健康',
+            resources: '22% / 48% / 66%',
+            heartbeat: '6 秒前',
+            capabilities: ['protocol:opcua'],
+          },
+        ]}
+        selectedEdgeId="edge-dev"
+        onSelectEdge={onSelectEdge}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('配置边端'), {
+      target: { value: 'edge-prod' },
+    });
+
+    await waitFor(() => {
+      expect(onSelectEdge).toHaveBeenCalledWith('edge-prod');
+    });
+  });
+});

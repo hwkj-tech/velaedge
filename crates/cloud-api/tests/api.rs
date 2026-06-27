@@ -237,6 +237,8 @@ async fn management_endpoints_return_seeded_control_plane_data() {
     let tasks: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(tasks[0]["taskId"], "pump-main");
     assert_eq!(tasks[0]["pointList"], "pressure, running");
+    assert_eq!(tasks[0]["pointIds"][0], "pressure");
+    assert_eq!(tasks[0]["intervalMs"], 1000);
 
     let algorithms_response = router
         .clone()
@@ -266,6 +268,86 @@ async fn management_endpoints_return_seeded_control_plane_data() {
     let audit_records: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(audit_records[0]["actor"], "system");
     assert!(audit_records[0]["action"].is_string());
+}
+
+#[tokio::test]
+async fn edge_collection_tasks_endpoint_returns_selected_edge_tasks() {
+    let response = app(AppState::default())
+        .oneshot(
+            Request::get("/api/edges/edge-dev/collection-tasks")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload[0]["edgeId"], "edge-dev");
+    assert_eq!(payload[0]["taskId"], "pump-main");
+    assert_eq!(payload[0]["pointIds"], json!(["pressure", "running"]));
+    assert_eq!(payload[0]["intervalMs"], 1000);
+    assert_eq!(payload[0]["enabled"], true);
+}
+
+#[tokio::test]
+async fn edge_collection_task_save_updates_selected_edge_draft() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/edges/edge-dev/collection-tasks/pump-main")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "deviceId": "pump-1",
+                        "pointIds": ["pressure"],
+                        "intervalMs": 2500,
+                        "enabled": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(saved["edgeId"], "edge-dev");
+    assert_eq!(saved["taskId"], "pump-main");
+    assert_eq!(saved["pointIds"], json!(["pressure"]));
+    assert_eq!(saved["interval"], "2500ms");
+    assert_eq!(saved["status"], "暂停");
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/desired-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(config["desiredVersion"], "2026.06.26-002");
+    assert_eq!(
+        config["package"]["collection_tasks"][0]["point_ids"],
+        json!(["pressure"])
+    );
+    assert_eq!(
+        config["package"]["collection_tasks"][0]["interval_ms"],
+        2500
+    );
+    assert_eq!(config["package"]["collection_tasks"][0]["enabled"], false);
 }
 
 #[tokio::test]
