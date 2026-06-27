@@ -608,16 +608,25 @@ describe('App cloud console write actions', () => {
     expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '新建连接' })).not.toBeInTheDocument();
     expect(screen.queryByText('编辑连接 modbus-line-a')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('查看边端')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /点位配置/ }));
     expect(await screen.findByText('holding_register:40001')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '新建点位' })).not.toBeInTheDocument();
     expect(screen.queryByText('编辑点位 pressure')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('查看边端')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /采集任务/ }));
     expect(await screen.findByText('pump-main')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '新建任务' })).not.toBeInTheDocument();
     expect(screen.queryByText('编辑任务 pump-main')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('查看边端')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /算法配置/ }));
+    expect(await screen.findByText('pump-anomaly-v1')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '新建算法' })).not.toBeInTheDocument();
+    expect(screen.queryByText('编辑算法 pump-anomaly-v1')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('查看边端')).not.toBeInTheDocument();
   });
 
   it('opens selected edge configuration from the edge management row', async () => {

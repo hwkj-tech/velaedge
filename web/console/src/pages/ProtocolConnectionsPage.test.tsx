@@ -87,6 +87,14 @@ describe('ProtocolConnectionsPage', () => {
     });
   });
 
+  it('hides the edge selector in sidebar list mode', () => {
+    render(<ProtocolConnectionsPage mode="list" selectedEdgeId="edge-dev" />);
+
+    expect(screen.getByText('连接清单')).toBeInTheDocument();
+    expect(screen.queryByLabelText('查看边端')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('配置边端')).not.toBeInTheDocument();
+  });
+
   it('shows visible feedback for toolbar actions', async () => {
     render(<ProtocolConnectionsPage selectedEdgeId="edge-dev" />);
 

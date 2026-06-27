@@ -5,6 +5,10 @@
   align-items: start;
 }
 
+.point-config-layout.list-only {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .point-table-panel {
   min-width: 0;
 }

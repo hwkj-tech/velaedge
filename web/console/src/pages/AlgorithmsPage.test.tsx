@@ -92,6 +92,14 @@ describe('AlgorithmsPage', () => {
     });
   });
 
+  it('hides the edge selector in sidebar list mode', () => {
+    render(<AlgorithmsPage mode="list" selectedEdgeId="edge-dev" />);
+
+    expect(screen.getByText('算法模板')).toBeInTheDocument();
+    expect(screen.queryByLabelText('查看边端')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('配置边端')).not.toBeInTheDocument();
+  });
+
   it('runs algorithm toolbar actions through handlers', async () => {
     const onAssessRisk = vi.fn().mockResolvedValue({
       status: '已通过',

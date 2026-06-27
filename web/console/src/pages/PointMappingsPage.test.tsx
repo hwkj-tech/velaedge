@@ -110,6 +110,14 @@ describe('PointMappingsPage', () => {
     });
   });
 
+  it('hides the edge selector in sidebar list mode', () => {
+    render(<PointMappingsPage mode="list" selectedEdgeId="edge-dev" />);
+
+    expect(screen.getByText('点位配置表')).toBeInTheDocument();
+    expect(screen.queryByLabelText('查看边端')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('配置边端')).not.toBeInTheDocument();
+  });
+
   it('runs point toolbar actions through handlers', async () => {
     const onCreatePoint = vi.fn().mockResolvedValue({
       pointId: 'point-draft-3',

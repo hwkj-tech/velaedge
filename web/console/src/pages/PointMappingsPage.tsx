@@ -205,22 +205,24 @@ export function PointMappingsPage({
           </p>
         </div>
         <div className="toolbar">
-          <label className="release-edge-select">
-            <span>{isConfigureMode ? '配置边端' : '查看边端'}</span>
-            <select
-              aria-label={isConfigureMode ? '配置边端' : '查看边端'}
-              value={selectedEdgeId}
-              onChange={(event) => {
-                void handleSelectEdge(event.target.value);
-              }}
-            >
-              {edges.map((edge) => (
-                <option key={edge.edgeId} value={edge.edgeId}>
-                  {edge.displayName} / {edge.edgeId}
-                </option>
-              ))}
-            </select>
-          </label>
+          {isConfigureMode ? (
+            <label className="release-edge-select">
+              <span>配置边端</span>
+              <select
+                aria-label="配置边端"
+                value={selectedEdgeId}
+                onChange={(event) => {
+                  void handleSelectEdge(event.target.value);
+                }}
+              >
+                {edges.map((edge) => (
+                  <option key={edge.edgeId} value={edge.edgeId}>
+                    {edge.displayName} / {edge.edgeId}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           {toolbarMessage ? (
             <span className="toolbar-status" role="status">
               {toolbarMessage}
@@ -266,7 +268,7 @@ export function PointMappingsPage({
         </div>
       </section>
 
-      <div className="point-config-layout">
+      <div className={isConfigureMode ? 'point-config-layout' : 'point-config-layout list-only'}>
         <section className="panel point-table-panel">
           <div className="panel-header">
             <h3>点位配置表</h3>

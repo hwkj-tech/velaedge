@@ -80,6 +80,14 @@ describe('CollectionTasksPage', () => {
     });
   });
 
+  it('hides the edge selector in sidebar list mode', () => {
+    render(<CollectionTasksPage mode="list" selectedEdgeId="edge-dev" />);
+
+    expect(screen.getByText('任务清单')).toBeInTheDocument();
+    expect(screen.queryByLabelText('查看边端')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('配置边端')).not.toBeInTheDocument();
+  });
+
   it('runs collection task toolbar actions through handlers', async () => {
     const onGenerateSchedule = vi.fn().mockResolvedValue({
       message: '调度策略已生成',
