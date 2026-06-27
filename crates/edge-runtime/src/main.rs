@@ -3,10 +3,14 @@ use std::path::PathBuf;
 use anyhow::Result;
 use chrono::Utc;
 use clap::Parser;
-use edge_core::{DataQuality, TelemetrySample, TelemetryValue};
+use edge_core::{
+    CloudSyncMetrics, CollectionRuntimeMetrics, DataQuality, EdgeHealth,
+    EdgeRuntimeMetricsSnapshot, LocalStoreMetrics, ProtocolRuntimeMetrics, SystemRuntimeMetrics,
+    TelemetrySample, TelemetryValue,
+};
 use edge_runtime::{
-    connect_edgelink_once, sync_and_report_once, EdgeRuntime, HttpEdgeConfigSyncClient,
-    HttpRuntimeStatusReporter, JsonlLocalStore, SimulatedProtocolAdapter,
+    publish_edgelink_runtime_status_once, sync_and_report_once, EdgeRuntime,
+    HttpEdgeConfigSyncClient, HttpRuntimeStatusReporter, JsonlLocalStore, SimulatedProtocolAdapter,
 };
 use tracing::info;
 
@@ -39,12 +43,14 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
     if let Some(cloud_gateway_addr) = args.cloud_gateway_addr {
-        let report = connect_edgelink_once(
+        let snapshot = runtime_metrics_snapshot(&args.edge_id, &args.runtime_id, &args.storage);
+        let report = publish_edgelink_runtime_status_once(
             &cloud_gateway_addr,
             &args.edge_id,
             &args.runtime_id,
             env!("CARGO_PKG_VERSION"),
-            None,
+            snapshot,
+            Vec::new(),
         )
         .await?;
 
@@ -52,8 +58,8 @@ async fn main() -> Result<()> {
             edge_id = %report.edge_id,
             runtime_id = %report.runtime_id,
             gateway_addr = %report.gateway_addr,
-            acked = report.acked,
-            "edgelink gateway handshake completed"
+            acked_message_count = report.acked_message_count,
+            "edgelink runtime status report completed"
         );
 
         return Ok(());
@@ -103,4 +109,57 @@ async fn main() -> Result<()> {
     );
 
     Ok(())
+}
+
+fn runtime_metrics_snapshot(
+    edge_id: &str,
+    runtime_id: &str,
+    storage: &std::path::Path,
+) -> EdgeRuntimeMetricsSnapshot {
+    EdgeRuntimeMetricsSnapshot {
+        edge_id: edge_id.to_string(),
+        runtime_id: runtime_id.to_string(),
+        config_version: "local-runtime".to_string(),
+        timestamp: Utc::now(),
+        health: EdgeHealth::Healthy,
+        system: SystemRuntimeMetrics {
+            cpu_percent: 0.0,
+            memory_percent: 0.0,
+            disk_percent: 0.0,
+            process_uptime_seconds: 0,
+        },
+        collection: CollectionRuntimeMetrics {
+            active_task_count: 0,
+            success_rate: 1.0,
+            average_latency_ms: 0,
+            bad_point_count: 0,
+        },
+        protocols: vec![ProtocolRuntimeMetrics {
+            connection_id: "simulated-local".to_string(),
+            protocol: "Simulated".to_string(),
+            connected: true,
+            latency_ms: 0,
+            timeout_count: 0,
+            error_count: 0,
+            reconnect_count: 0,
+        }],
+        local_store: LocalStoreMetrics {
+            backend: storage
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .unwrap_or("jsonl")
+                .to_string(),
+            buffered_records: 0,
+            oldest_buffer_age_seconds: 0,
+            disk_usage_percent: 0.0,
+        },
+        algorithms: Vec::new(),
+        cloud_sync: CloudSyncMetrics {
+            connected: true,
+            last_sync_seconds_ago: 0,
+            pending_uploads: 0,
+            desired_version: "local-runtime".to_string(),
+            reported_version: "local-runtime".to_string(),
+        },
+    }
 }

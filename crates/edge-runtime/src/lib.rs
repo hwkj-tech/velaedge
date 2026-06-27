@@ -11,8 +11,8 @@ pub mod sync;
 
 pub use config::{AppliedEdgeConfig, ConfiguredSimulatedRuntime};
 pub use edgelink_client::{
-    connect_edgelink_once, connect_edgelink_tls_once, EdgeLinkClientTlsConfig,
-    EdgeLinkConnectReport,
+    connect_edgelink_once, connect_edgelink_tls_once, publish_edgelink_runtime_status_once,
+    EdgeLinkClientTlsConfig, EdgeLinkConnectReport, EdgeLinkPublishReport,
 };
 pub use metrics::SimulatedRuntimeMetricsCollector;
 pub use protocol::{ProtocolAdapter, SimulatedProtocolAdapter};

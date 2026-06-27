@@ -3,7 +3,7 @@ use std::{io::Cursor, sync::Arc};
 use anyhow::{bail, Context, Result};
 use edge_core::{
     decode_edgelink_frame, encode_edgelink_frame, EdgeLinkMessage, EdgeLinkPayload,
-    EDGELINK_MAX_FRAME_BYTES,
+    EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, EDGELINK_MAX_FRAME_BYTES,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -22,6 +22,14 @@ pub struct EdgeLinkConnectReport {
     pub runtime_id: String,
     pub gateway_addr: String,
     pub acked: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EdgeLinkPublishReport {
+    pub edge_id: String,
+    pub runtime_id: String,
+    pub gateway_addr: String,
+    pub acked_message_count: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,6 +122,58 @@ pub async fn connect_edgelink_tls_once(
     .await
 }
 
+pub async fn publish_edgelink_runtime_status_once(
+    gateway_addr: &str,
+    edge_id: &str,
+    runtime_id: &str,
+    runtime_version: &str,
+    snapshot: EdgeRuntimeMetricsSnapshot,
+    events: Vec<EdgeRuntimeEvent>,
+) -> Result<EdgeLinkPublishReport> {
+    if snapshot.edge_id != edge_id {
+        bail!("runtime metrics edge_id does not match EdgeLink edge_id");
+    }
+    if snapshot.runtime_id != runtime_id {
+        bail!("runtime metrics runtime_id does not match EdgeLink runtime_id");
+    }
+    for event in &events {
+        if event.edge_id != edge_id {
+            bail!("runtime event edge_id does not match EdgeLink edge_id");
+        }
+    }
+
+    let mut stream = TcpStream::connect(gateway_addr)
+        .await
+        .with_context(|| format!("failed to connect EdgeLink gateway at {gateway_addr}"))?;
+    connect_edgelink_over_stream(
+        &mut stream,
+        gateway_addr,
+        edge_id,
+        runtime_id,
+        runtime_version,
+        Some(snapshot.config_version.clone()),
+    )
+    .await?;
+
+    let mut acked_message_count = 0;
+    let metrics = EdgeLinkMessage::runtime_metrics(edge_id, runtime_id, 2, snapshot);
+    write_edgelink_message_and_expect_ack(&mut stream, &metrics).await?;
+    acked_message_count += 1;
+
+    for (index, event) in events.into_iter().enumerate() {
+        let message = EdgeLinkMessage::runtime_event(edge_id, runtime_id, index as u64 + 3, event);
+        write_edgelink_message_and_expect_ack(&mut stream, &message).await?;
+        acked_message_count += 1;
+    }
+
+    Ok(EdgeLinkPublishReport {
+        edge_id: edge_id.to_string(),
+        runtime_id: runtime_id.to_string(),
+        gateway_addr: gateway_addr.to_string(),
+        acked_message_count,
+    })
+}
+
 async fn connect_edgelink_over_stream<S>(
     stream: &mut S,
     gateway_addr: &str,
@@ -152,6 +212,30 @@ where
         gateway_addr: gateway_addr.to_string(),
         acked: payload.accepted,
     })
+}
+
+async fn write_edgelink_message_and_expect_ack<S>(
+    stream: &mut S,
+    message: &EdgeLinkMessage,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    write_edgelink_message(stream, message).await?;
+    let ack = read_edgelink_message(stream).await?;
+    let EdgeLinkPayload::Ack(payload) = ack.payload else {
+        bail!("EdgeLink gateway did not return an ack");
+    };
+    if payload.ack_message_id != message.message_id || payload.ack_sequence != message.sequence {
+        bail!("EdgeLink gateway ack does not match message");
+    }
+    if !payload.accepted {
+        bail!(
+            "EdgeLink gateway rejected message: {}",
+            payload.reason.unwrap_or_else(|| "no reason".to_string())
+        );
+    }
+    Ok(())
 }
 
 async fn read_edgelink_message<S>(stream: &mut S) -> Result<EdgeLinkMessage>
