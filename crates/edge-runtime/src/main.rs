@@ -5,8 +5,8 @@ use chrono::Utc;
 use clap::Parser;
 use edge_core::{DataQuality, TelemetrySample, TelemetryValue};
 use edge_runtime::{
-    sync_and_report_once, EdgeRuntime, HttpEdgeConfigSyncClient, HttpRuntimeStatusReporter,
-    JsonlLocalStore, SimulatedProtocolAdapter,
+    connect_edgelink_once, sync_and_report_once, EdgeRuntime, HttpEdgeConfigSyncClient,
+    HttpRuntimeStatusReporter, JsonlLocalStore, SimulatedProtocolAdapter,
 };
 use tracing::info;
 
@@ -24,6 +24,8 @@ struct Args {
     storage: PathBuf,
     #[arg(long)]
     cloud_api_url: Option<String>,
+    #[arg(long)]
+    cloud_gateway_addr: Option<String>,
 }
 
 #[tokio::main]
@@ -36,6 +38,27 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+    if let Some(cloud_gateway_addr) = args.cloud_gateway_addr {
+        let report = connect_edgelink_once(
+            &cloud_gateway_addr,
+            &args.edge_id,
+            &args.runtime_id,
+            env!("CARGO_PKG_VERSION"),
+            None,
+        )
+        .await?;
+
+        info!(
+            edge_id = %report.edge_id,
+            runtime_id = %report.runtime_id,
+            gateway_addr = %report.gateway_addr,
+            acked = report.acked,
+            "edgelink gateway handshake completed"
+        );
+
+        return Ok(());
+    }
+
     if let Some(cloud_api_url) = args.cloud_api_url {
         let mut config_client = HttpEdgeConfigSyncClient::new(&cloud_api_url)?;
         let mut runtime_reporter = HttpRuntimeStatusReporter::new(&cloud_api_url)?;
