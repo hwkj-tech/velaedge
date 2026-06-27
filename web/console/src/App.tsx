@@ -1,17 +1,13 @@
 import { useEffect, useState } from 'react';
 
 import {
-  fetchAlgorithms,
   fetchAuditRecords,
-  fetchCollectionTasks,
   fetchDeviceModels,
   fetchEdgeAlgorithms,
   fetchEdgeCollectionTasks,
   fetchEdgePointMappings,
   fetchEdgeProtocolConnections,
   fetchEdgeNodes,
-  fetchPointMappings,
-  fetchProtocolConnections,
   fetchReleaseList,
   fetchRuntimeStatus,
   fetchSummary,
@@ -54,6 +50,8 @@ const initialSummary: SummaryResponse = {
   edge_count: 0,
   pending_release_count: 0,
 };
+
+const defaultConfigEdgeId = 'edge-dev';
 
 interface ConsoleSnapshot {
   algorithms: AlgorithmResponse[];
@@ -281,10 +279,10 @@ async function loadConsoleSnapshot(): Promise<ConsoleSnapshot> {
     fetchSummary(),
     fetchEdgeNodes(),
     fetchDeviceModels(),
-    fetchProtocolConnections(),
-    fetchPointMappings(),
-    fetchCollectionTasks(),
-    fetchAlgorithms(),
+    fetchEdgeProtocolConnections(defaultConfigEdgeId),
+    fetchEdgePointMappings(defaultConfigEdgeId),
+    fetchEdgeCollectionTasks(defaultConfigEdgeId),
+    fetchEdgeAlgorithms(defaultConfigEdgeId),
     fetchReleaseList(),
     fetchRuntimeStatus(),
     fetchAuditRecords(),

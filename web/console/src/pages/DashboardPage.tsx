@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Plus, Send, Wrench } from 'lucide-react';
 
 import type { SummaryResponse } from '../api/types';
@@ -22,6 +23,7 @@ export function DashboardPage({
   summary: SummaryResponse;
 }) {
   const onlineRate = summary.edge_count > 0 ? '66.7%' : '--';
+  const [toolbarMessage, setToolbarMessage] = useState('');
 
   return (
     <div className="page-stack">
@@ -33,15 +35,32 @@ export function DashboardPage({
           </p>
         </div>
         <div className="toolbar" aria-label="快捷操作">
-          <button className="secondary-button" type="button">
+          {toolbarMessage ? (
+            <span className="toolbar-status" role="status">
+              {toolbarMessage}
+            </span>
+          ) : null}
+          <button
+            className="secondary-button"
+            onClick={() => setToolbarMessage('已创建边端注册草稿')}
+            type="button"
+          >
             <Plus size={15} aria-hidden="true" />
             注册边端
           </button>
-          <button className="secondary-button" type="button">
+          <button
+            className="secondary-button"
+            onClick={() => setToolbarMessage('已创建点位配置草稿')}
+            type="button"
+          >
             <Wrench size={15} aria-hidden="true" />
             创建点位
           </button>
-          <button className="primary-button" type="button">
+          <button
+            className="primary-button"
+            onClick={() => setToolbarMessage('发布配置流程已准备')}
+            type="button"
+          >
             <Send size={15} aria-hidden="true" />
             发布配置
           </button>

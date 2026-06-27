@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Plus } from 'lucide-react';
 
 import type { DeviceModelResponse } from '../api/types';
@@ -35,6 +36,7 @@ export function DeviceModelsPage({
   deviceModels?: DeviceModelResponse[];
 }) {
   const activeModel = deviceModels[0] ?? fallbackDeviceModels[0];
+  const [toolbarMessage, setToolbarMessage] = useState('');
 
   return (
     <div className="page-stack">
@@ -45,10 +47,21 @@ export function DeviceModelsPage({
             先定义设备语义，再在点位配置中绑定具体 Modbus、OPC UA、MQTT 或模拟地址。
           </p>
         </div>
-        <button className="primary-button" type="button">
-          <Plus size={15} aria-hidden="true" />
-          新建设备模型
-        </button>
+        <div className="toolbar">
+          {toolbarMessage ? (
+            <span className="toolbar-status" role="status">
+              {toolbarMessage}
+            </span>
+          ) : null}
+          <button
+            className="primary-button"
+            onClick={() => setToolbarMessage('已创建设备模型草稿')}
+            type="button"
+          >
+            <Plus size={15} aria-hidden="true" />
+            新建设备模型
+          </button>
+        </div>
       </section>
 
       <section className="panel">

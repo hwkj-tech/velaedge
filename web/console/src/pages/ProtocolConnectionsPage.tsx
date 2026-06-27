@@ -70,6 +70,7 @@ export function ProtocolConnectionsPage({
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>(
     'idle',
   );
+  const [toolbarMessage, setToolbarMessage] = useState('');
   const activeEdge =
     edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
 
@@ -91,6 +92,7 @@ export function ProtocolConnectionsPage({
 
   const handleSelectEdge = async (edgeId: string) => {
     setSaveState('idle');
+    setToolbarMessage('');
     await onSelectEdge?.(edgeId);
   };
 
@@ -134,11 +136,24 @@ export function ProtocolConnectionsPage({
               ))}
             </select>
           </label>
-          <button className="secondary-button" type="button">
+          {toolbarMessage ? (
+            <span className="toolbar-status" role="status">
+              {toolbarMessage}
+            </span>
+          ) : null}
+          <button
+            className="secondary-button"
+            onClick={() => setToolbarMessage('连接校验已完成')}
+            type="button"
+          >
             <ShieldCheck size={15} aria-hidden="true" />
             校验连接
           </button>
-          <button className="primary-button" type="button">
+          <button
+            className="primary-button"
+            onClick={() => setToolbarMessage('已创建连接草稿')}
+            type="button"
+          >
             <Plus size={15} aria-hidden="true" />
             新建连接
           </button>

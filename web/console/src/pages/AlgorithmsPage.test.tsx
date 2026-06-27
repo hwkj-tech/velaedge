@@ -91,4 +91,14 @@ describe('AlgorithmsPage', () => {
       expect(onSelectEdge).toHaveBeenCalledWith('edge-prod');
     });
   });
+
+  it('shows visible feedback for toolbar actions', () => {
+    render(<AlgorithmsPage selectedEdgeId="edge-dev" />);
+
+    fireEvent.click(screen.getByRole('button', { name: '风险评估' }));
+    expect(screen.getByText('算法风险评估已完成')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '新建算法' }));
+    expect(screen.getByText('已创建算法草稿')).toBeInTheDocument();
+  });
 });

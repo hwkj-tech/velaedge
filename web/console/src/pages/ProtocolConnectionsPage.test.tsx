@@ -86,4 +86,14 @@ describe('ProtocolConnectionsPage', () => {
       expect(onSelectEdge).toHaveBeenCalledWith('edge-prod');
     });
   });
+
+  it('shows visible feedback for toolbar actions', () => {
+    render(<ProtocolConnectionsPage selectedEdgeId="edge-dev" />);
+
+    fireEvent.click(screen.getByRole('button', { name: '校验连接' }));
+    expect(screen.getByText('连接校验已完成')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '新建连接' }));
+    expect(screen.getByText('已创建连接草稿')).toBeInTheDocument();
+  });
 });

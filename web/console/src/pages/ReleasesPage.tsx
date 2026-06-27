@@ -90,9 +90,11 @@ export function ReleasesPage({
   const [publishState, setPublishState] = useState<
     'idle' | 'publishing' | 'published' | 'error'
   >('idle');
+  const [toolbarMessage, setToolbarMessage] = useState('');
 
   const handlePublish = async () => {
     setPublishState('publishing');
+    setToolbarMessage('');
 
     try {
       await onPublish?.(selectedEdgeId);
@@ -112,11 +114,24 @@ export function ReleasesPage({
           </p>
         </div>
         <div className="toolbar">
-          <button className="secondary-button" type="button">
+          {toolbarMessage ? (
+            <span className="toolbar-status" role="status">
+              {toolbarMessage}
+            </span>
+          ) : null}
+          <button
+            className="secondary-button"
+            onClick={() => setToolbarMessage('配置差异摘要已生成')}
+            type="button"
+          >
             <GitCompare size={15} aria-hidden="true" />
             查看差异
           </button>
-          <button className="secondary-button" type="button">
+          <button
+            className="secondary-button"
+            onClick={() => setToolbarMessage('发布草稿校验已通过')}
+            type="button"
+          >
             <ShieldCheck size={15} aria-hidden="true" />
             校验草稿
           </button>
@@ -127,6 +142,7 @@ export function ReleasesPage({
               onChange={(event) => {
                 setSelectedEdgeId(event.target.value);
                 setPublishState('idle');
+                setToolbarMessage('');
               }}
             >
               {edges.map((edge) => (

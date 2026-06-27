@@ -73,6 +73,7 @@ export function AlgorithmsPage({
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>(
     'idle',
   );
+  const [toolbarMessage, setToolbarMessage] = useState('');
   const activeEdge =
     edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
 
@@ -94,6 +95,7 @@ export function AlgorithmsPage({
 
   const handleSelectEdge = async (edgeId: string) => {
     setSaveState('idle');
+    setToolbarMessage('');
     await onSelectEdge?.(edgeId);
   };
 
@@ -138,11 +140,24 @@ export function AlgorithmsPage({
               ))}
             </select>
           </label>
-          <button className="secondary-button" type="button">
+          {toolbarMessage ? (
+            <span className="toolbar-status" role="status">
+              {toolbarMessage}
+            </span>
+          ) : null}
+          <button
+            className="secondary-button"
+            onClick={() => setToolbarMessage('算法风险评估已完成')}
+            type="button"
+          >
             <ShieldCheck size={15} aria-hidden="true" />
             风险评估
           </button>
-          <button className="primary-button" type="button">
+          <button
+            className="primary-button"
+            onClick={() => setToolbarMessage('已创建算法草稿')}
+            type="button"
+          >
             <Plus size={15} aria-hidden="true" />
             新建算法
           </button>

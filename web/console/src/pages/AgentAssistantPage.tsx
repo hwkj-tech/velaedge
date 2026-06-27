@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { ShieldCheck, Sparkles } from 'lucide-react';
 
 const suggestions = [
@@ -7,6 +8,8 @@ const suggestions = [
 ];
 
 export function AgentAssistantPage() {
+  const [toolbarMessage, setToolbarMessage] = useState('');
+
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -17,11 +20,24 @@ export function AgentAssistantPage() {
           </p>
         </div>
         <div className="toolbar">
-          <button className="secondary-button" type="button">
+          {toolbarMessage ? (
+            <span className="toolbar-status" role="status">
+              {toolbarMessage}
+            </span>
+          ) : null}
+          <button
+            className="secondary-button"
+            onClick={() => setToolbarMessage('安全策略检查已完成')}
+            type="button"
+          >
             <ShieldCheck size={15} aria-hidden="true" />
             安全策略
           </button>
-          <button className="primary-button" type="button">
+          <button
+            className="primary-button"
+            onClick={() => setToolbarMessage('Agent 建议已生成')}
+            type="button"
+          >
             <Sparkles size={15} aria-hidden="true" />
             生成建议
           </button>

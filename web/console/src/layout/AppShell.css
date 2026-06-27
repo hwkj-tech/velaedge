@@ -166,8 +166,22 @@
 .toolbar {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.toolbar-status {
+  min-height: 34px;
+  align-content: center;
+  border: 1px solid #b9e3cc;
+  border-radius: 8px;
+  background: #ecfdf3;
+  color: #0f7a4b;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.25;
+  padding: 0 10px;
 }
 
 .primary-button,

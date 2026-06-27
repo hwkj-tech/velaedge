@@ -79,4 +79,14 @@ describe('CollectionTasksPage', () => {
       expect(onSelectEdge).toHaveBeenCalledWith('edge-prod');
     });
   });
+
+  it('shows visible feedback for toolbar actions', () => {
+    render(<CollectionTasksPage selectedEdgeId="edge-dev" />);
+
+    fireEvent.click(screen.getByRole('button', { name: '统一调度策略' }));
+    expect(screen.getByText('调度策略已生成')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '新建任务' }));
+    expect(screen.getByText('已创建任务草稿')).toBeInTheDocument();
+  });
 });

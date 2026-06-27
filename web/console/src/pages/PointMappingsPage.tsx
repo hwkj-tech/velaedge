@@ -92,6 +92,7 @@ export function PointMappingsPage({
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>(
     'idle',
   );
+  const [toolbarMessage, setToolbarMessage] = useState('');
   const columns = pointColumns(selectedPoint.pointId, setSelectedPointId);
   const activeEdge =
     edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
@@ -111,6 +112,7 @@ export function PointMappingsPage({
 
   const handleSelectEdge = async (edgeId: string) => {
     setSaveState('idle');
+    setToolbarMessage('');
     await onSelectEdge?.(edgeId);
   };
 
@@ -152,15 +154,32 @@ export function PointMappingsPage({
               ))}
             </select>
           </label>
-          <button className="secondary-button" type="button">
+          {toolbarMessage ? (
+            <span className="toolbar-status" role="status">
+              {toolbarMessage}
+            </span>
+          ) : null}
+          <button
+            className="secondary-button"
+            onClick={() => setToolbarMessage('批量导入任务已准备')}
+            type="button"
+          >
             <FileInput size={15} aria-hidden="true" />
             批量导入
           </button>
-          <button className="secondary-button" type="button">
+          <button
+            className="secondary-button"
+            onClick={() => setToolbarMessage('点位草稿校验已完成')}
+            type="button"
+          >
             <ShieldCheck size={15} aria-hidden="true" />
             校验草稿
           </button>
-          <button className="primary-button" type="button">
+          <button
+            className="primary-button"
+            onClick={() => setToolbarMessage('已创建点位草稿')}
+            type="button"
+          >
             <Plus size={15} aria-hidden="true" />
             新建点位
           </button>

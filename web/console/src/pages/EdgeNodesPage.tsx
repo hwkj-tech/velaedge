@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { KeyRound, Plus, Wrench } from 'lucide-react';
 
 import type { EdgeNodeResponse } from '../api/types';
@@ -20,6 +21,8 @@ export function EdgeNodesPage({
 }: {
   edges?: EdgeNodeResponse[];
 }) {
+  const [toolbarMessage, setToolbarMessage] = useState('');
+
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -30,15 +33,32 @@ export function EdgeNodesPage({
           </p>
         </div>
         <div className="toolbar">
-          <button className="secondary-button" type="button">
+          {toolbarMessage ? (
+            <span className="toolbar-status" role="status">
+              {toolbarMessage}
+            </span>
+          ) : null}
+          <button
+            className="secondary-button"
+            onClick={() => setToolbarMessage('凭证轮换任务已创建')}
+            type="button"
+          >
             <KeyRound size={15} aria-hidden="true" />
             轮换凭证
           </button>
-          <button className="secondary-button" type="button">
+          <button
+            className="secondary-button"
+            onClick={() => setToolbarMessage('维护模式策略已生成')}
+            type="button"
+          >
             <Wrench size={15} aria-hidden="true" />
             维护模式
           </button>
-          <button className="primary-button" type="button">
+          <button
+            className="primary-button"
+            onClick={() => setToolbarMessage('已创建边端注册草稿')}
+            type="button"
+          >
             <Plus size={15} aria-hidden="true" />
             注册边端
           </button>

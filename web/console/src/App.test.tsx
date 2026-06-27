@@ -303,14 +303,15 @@ describe('App cloud console write actions', () => {
   });
 
   it('saves point drafts through the API and refreshes point mappings', async () => {
-    vi.mocked(fetchPointMappings).mockResolvedValueOnce([basePoint]);
-    vi.mocked(fetchEdgePointMappings).mockResolvedValueOnce([
-      {
-        ...basePoint,
-        address: 'holding_register:40002',
-        interval: '2000ms',
-      },
-    ]);
+    vi.mocked(fetchEdgePointMappings)
+      .mockResolvedValueOnce([basePoint])
+      .mockResolvedValueOnce([
+        {
+          ...basePoint,
+          address: 'holding_register:40002',
+          interval: '2000ms',
+        },
+      ]);
 
     render(<App />);
 
@@ -342,18 +343,19 @@ describe('App cloud console write actions', () => {
   });
 
   it('saves collection task drafts through the selected edge API', async () => {
-    vi.mocked(fetchCollectionTasks).mockResolvedValueOnce(collectionTasks);
-    vi.mocked(fetchEdgeCollectionTasks).mockResolvedValueOnce([
-      {
-        ...collectionTasks[0],
-        enabled: false,
-        interval: '2500ms',
-        intervalMs: 2500,
-        pointIds: ['pressure'],
-        pointList: 'pressure',
-        status: '暂停',
-      },
-    ]);
+    vi.mocked(fetchEdgeCollectionTasks)
+      .mockResolvedValueOnce(collectionTasks)
+      .mockResolvedValueOnce([
+        {
+          ...collectionTasks[0],
+          enabled: false,
+          interval: '2500ms',
+          intervalMs: 2500,
+          pointIds: ['pressure'],
+          pointList: 'pressure',
+          status: '暂停',
+        },
+      ]);
 
     render(<App />);
 
@@ -387,15 +389,16 @@ describe('App cloud console write actions', () => {
   });
 
   it('saves protocol connection drafts through the selected edge API', async () => {
-    vi.mocked(fetchProtocolConnections).mockResolvedValueOnce(protocolConnections);
-    vi.mocked(fetchEdgeProtocolConnections).mockResolvedValueOnce([
-      {
-        ...protocolConnections[0],
-        endpoint: 'opc.tcp://10.12.0.80:4840',
-        protocol: 'OPC UA',
-        protocolType: 'OpcUa',
-      },
-    ]);
+    vi.mocked(fetchEdgeProtocolConnections)
+      .mockResolvedValueOnce(protocolConnections)
+      .mockResolvedValueOnce([
+        {
+          ...protocolConnections[0],
+          endpoint: 'opc.tcp://10.12.0.80:4840',
+          protocol: 'OPC UA',
+          protocolType: 'OpcUa',
+        },
+      ]);
 
     render(<App />);
 
@@ -426,19 +429,20 @@ describe('App cloud console write actions', () => {
   });
 
   it('saves algorithm drafts through the selected edge API', async () => {
-    vi.mocked(fetchAlgorithms).mockResolvedValueOnce(algorithms);
-    vi.mocked(fetchEdgeAlgorithms).mockResolvedValueOnce([
-      {
-        ...algorithms[0],
-        inputIds: ['pressure'],
-        inputs: 'pressure',
-        kind: 'WASM 算法',
-        outputIds: ['pump.pressure_score'],
-        outputs: 'pump.pressure_score',
-        runtime: 'Wasm',
-        version: '1.1.0',
-      },
-    ]);
+    vi.mocked(fetchEdgeAlgorithms)
+      .mockResolvedValueOnce(algorithms)
+      .mockResolvedValueOnce([
+        {
+          ...algorithms[0],
+          inputIds: ['pressure'],
+          inputs: 'pressure',
+          kind: 'WASM 算法',
+          outputIds: ['pump.pressure_score'],
+          outputs: 'pump.pressure_score',
+          runtime: 'Wasm',
+          version: '1.1.0',
+        },
+      ]);
 
     render(<App />);
 
@@ -532,5 +536,28 @@ describe('App cloud console write actions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /审计日志/ }));
     expect(await screen.findByText('create_release')).toBeInTheDocument();
+  });
+
+  it('loads edge-scoped configuration lists on first render', async () => {
+    vi.mocked(fetchProtocolConnections).mockResolvedValueOnce([
+      protocolConnections[0],
+      {
+        ...protocolConnections[0],
+        endpoint: 'opc.tcp://historical-draft:4840',
+      },
+    ]);
+    vi.mocked(fetchEdgeProtocolConnections).mockResolvedValueOnce(protocolConnections);
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /协议连接/ }));
+
+    await waitFor(() => {
+      expect(fetchEdgeProtocolConnections).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(
+      await screen.findAllByRole('button', { name: '选择连接 modbus-line-a' }),
+    ).toHaveLength(1);
+    expect(screen.queryByText('opc.tcp://historical-draft:4840')).not.toBeInTheDocument();
   });
 });
