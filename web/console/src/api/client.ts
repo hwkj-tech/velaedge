@@ -12,6 +12,7 @@ import type {
   SaveCollectionTaskRequest,
   SavePointMappingRequest,
   SaveProtocolConnectionRequest,
+  CreateProtocolConnectionRequest,
   SummaryResponse,
 } from './types';
 
@@ -181,6 +182,22 @@ export async function saveEdgeProtocolConnection(
       body: JSON.stringify(request),
       headers: { 'content-type': 'application/json' },
       method: 'PUT',
+    },
+  );
+}
+
+export async function createEdgeProtocolConnection(
+  edgeId: string,
+  request: CreateProtocolConnectionRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<ProtocolConnectionResponse> {
+  return requestJson<ProtocolConnectionResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/protocol-connections`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
     },
   );
 }

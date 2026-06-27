@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { KeyRound, Plus, Wrench } from 'lucide-react';
+import { Activity, KeyRound, Plus, Settings2, Wrench } from 'lucide-react';
 
 import type { EdgeNodeResponse } from '../api/types';
 
@@ -18,8 +18,12 @@ const fallbackEdges: EdgeNodeResponse[] = [
 
 export function EdgeNodesPage({
   edges = fallbackEdges,
+  onConfigureEdge,
+  onMonitorEdge,
 }: {
   edges?: EdgeNodeResponse[];
+  onConfigureEdge?: (edgeId: string) => void;
+  onMonitorEdge?: (edgeId: string) => void;
 }) {
   const [toolbarMessage, setToolbarMessage] = useState('');
 
@@ -81,6 +85,7 @@ export function EdgeNodesPage({
                 <th>状态</th>
                 <th>CPU / 内存 / 磁盘</th>
                 <th>心跳</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -97,6 +102,28 @@ export function EdgeNodesPage({
                   </td>
                   <td>{edge.resources}</td>
                   <td>{edge.heartbeat}</td>
+                  <td>
+                    <div className="row-actions">
+                      <button
+                        aria-label={`配置边端 ${edge.edgeId}`}
+                        className="secondary-button compact"
+                        onClick={() => onConfigureEdge?.(edge.edgeId)}
+                        type="button"
+                      >
+                        <Settings2 size={14} aria-hidden="true" />
+                        配置
+                      </button>
+                      <button
+                        aria-label={`运行监控 ${edge.edgeId}`}
+                        className="secondary-button compact"
+                        onClick={() => onMonitorEdge?.(edge.edgeId)}
+                        type="button"
+                      >
+                        <Activity size={14} aria-hidden="true" />
+                        监控
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -17,6 +17,7 @@ import {
   fetchRuntimeStatus,
   fetchSummary,
   publishLatestRelease,
+  createEdgeProtocolConnection,
   saveEdgeAlgorithm,
   saveEdgeCollectionTask,
   saveEdgePointMapping,
@@ -54,6 +55,7 @@ vi.mock('./api/client', () => ({
   fetchRuntimeStatus: vi.fn(),
   fetchSummary: vi.fn(),
   publishLatestRelease: vi.fn(),
+  createEdgeProtocolConnection: vi.fn(),
   saveEdgeAlgorithm: vi.fn(),
   saveEdgeCollectionTask: vi.fn(),
   saveEdgePointMapping: vi.fn(),
@@ -153,6 +155,16 @@ const protocolConnections: ProtocolConnectionResponse[] = [
     policy: '1000ms timeout / 3 retry',
   },
 ];
+
+const createdProtocolConnection: ProtocolConnectionResponse = {
+  edgeId: 'edge-dev',
+  connectionId: 'connection-draft-2',
+  protocol: 'Modbus TCP',
+  protocolType: 'ModbusTcp',
+  endpoint: 'runtime://pending',
+  status: '启用',
+  policy: '1000ms timeout / 3 retry',
+};
 
 const collectionTasks: CollectionTaskResponse[] = [
   {
@@ -289,6 +301,7 @@ describe('App cloud console write actions', () => {
       protocol: 'OPC UA',
       protocolType: 'OpcUa',
     });
+    vi.mocked(createEdgeProtocolConnection).mockResolvedValue(createdProtocolConnection);
     vi.mocked(saveEdgeAlgorithm).mockResolvedValue({
       ...algorithms[0],
       inputIds: ['pressure'],
@@ -305,6 +318,7 @@ describe('App cloud console write actions', () => {
   it('saves point drafts through the API and refreshes point mappings', async () => {
     vi.mocked(fetchEdgePointMappings)
       .mockResolvedValueOnce([basePoint])
+      .mockResolvedValueOnce([basePoint])
       .mockResolvedValueOnce([
         {
           ...basePoint,
@@ -315,6 +329,7 @@ describe('App cloud console write actions', () => {
 
     render(<App />);
 
+    await openEdgeConfiguration();
     fireEvent.click(screen.getByRole('button', { name: /点位配置/ }));
     expect(await screen.findByText('holding_register:40001')).toBeInTheDocument();
 
@@ -345,6 +360,7 @@ describe('App cloud console write actions', () => {
   it('saves collection task drafts through the selected edge API', async () => {
     vi.mocked(fetchEdgeCollectionTasks)
       .mockResolvedValueOnce(collectionTasks)
+      .mockResolvedValueOnce(collectionTasks)
       .mockResolvedValueOnce([
         {
           ...collectionTasks[0],
@@ -359,6 +375,7 @@ describe('App cloud console write actions', () => {
 
     render(<App />);
 
+    await openEdgeConfiguration();
     fireEvent.click(screen.getByRole('button', { name: /采集任务/ }));
     expect((await screen.findAllByText('pressure, running')).length).toBeGreaterThan(0);
 
@@ -391,6 +408,7 @@ describe('App cloud console write actions', () => {
   it('saves protocol connection drafts through the selected edge API', async () => {
     vi.mocked(fetchEdgeProtocolConnections)
       .mockResolvedValueOnce(protocolConnections)
+      .mockResolvedValueOnce(protocolConnections)
       .mockResolvedValueOnce([
         {
           ...protocolConnections[0],
@@ -402,7 +420,7 @@ describe('App cloud console write actions', () => {
 
     render(<App />);
 
-    fireEvent.click(screen.getByRole('button', { name: /协议连接/ }));
+    await openEdgeConfiguration();
     expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('协议类型'), {
@@ -428,8 +446,80 @@ describe('App cloud console write actions', () => {
     expect(screen.getByText('草稿已保存')).toBeInTheDocument();
   });
 
+  it('creates protocol connection drafts through the selected edge API', async () => {
+    vi.mocked(fetchEdgeProtocolConnections)
+      .mockResolvedValueOnce(protocolConnections)
+      .mockResolvedValueOnce(protocolConnections)
+      .mockResolvedValueOnce([...protocolConnections, createdProtocolConnection]);
+
+    render(<App />);
+
+    await openEdgeConfiguration();
+    expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '新建连接' }));
+
+    await waitFor(() => {
+      expect(createEdgeProtocolConnection).toHaveBeenCalledWith('edge-dev', {
+        endpoint: null,
+        protocolType: 'ModbusTcp',
+      });
+    });
+    expect(
+      await screen.findByRole('button', { name: '选择连接 connection-draft-2' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('已创建连接草稿 connection-draft-2')).toBeInTheDocument();
+  });
+
+  it('keeps configuration sections as lists from the sidebar', async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /协议连接/ }));
+    expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '新建连接' })).not.toBeInTheDocument();
+    expect(screen.queryByText('编辑连接 modbus-line-a')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /点位配置/ }));
+    expect(await screen.findByText('holding_register:40001')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '新建点位' })).not.toBeInTheDocument();
+    expect(screen.queryByText('编辑点位 pressure')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /采集任务/ }));
+    expect(await screen.findByText('pump-main')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '新建任务' })).not.toBeInTheDocument();
+    expect(screen.queryByText('编辑任务 pump-main')).not.toBeInTheDocument();
+  });
+
+  it('opens selected edge configuration from the edge management row', async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
+    expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '配置边端 edge-dev' }));
+
+    expect(await screen.findByText('编辑连接 modbus-line-a')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '新建连接' })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchEdgeProtocolConnections).toHaveBeenCalledWith('edge-dev');
+    });
+  });
+
+  it('opens selected edge runtime monitoring from the edge management row', async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
+    expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '运行监控 edge-dev' }));
+
+    expect(await screen.findByText('正在监控 edge-dev')).toBeInTheDocument();
+    expect(screen.getByText('18.5%')).toBeInTheDocument();
+  });
+
   it('saves algorithm drafts through the selected edge API', async () => {
     vi.mocked(fetchEdgeAlgorithms)
+      .mockResolvedValueOnce(algorithms)
       .mockResolvedValueOnce(algorithms)
       .mockResolvedValueOnce([
         {
@@ -446,6 +536,7 @@ describe('App cloud console write actions', () => {
 
     render(<App />);
 
+    await openEdgeConfiguration();
     fireEvent.click(screen.getByRole('button', { name: /算法配置/ }));
     expect(await screen.findByText('pressure, running')).toBeInTheDocument();
 
@@ -525,14 +616,10 @@ describe('App cloud console write actions', () => {
     expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /采集任务/ }));
-    expect(
-      await screen.findByRole('button', { name: '选择任务 pump-main' }),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('pump-main')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /算法配置/ }));
-    expect(
-      await screen.findByRole('button', { name: '选择算法 pump-anomaly-v1' }),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('pump-anomaly-v1')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /审计日志/ }));
     expect(await screen.findByText('create_release')).toBeInTheDocument();
@@ -555,9 +642,14 @@ describe('App cloud console write actions', () => {
     await waitFor(() => {
       expect(fetchEdgeProtocolConnections).toHaveBeenCalledWith('edge-dev');
     });
-    expect(
-      await screen.findAllByRole('button', { name: '选择连接 modbus-line-a' }),
-    ).toHaveLength(1);
+    expect(await screen.findAllByText('modbus-line-a')).toHaveLength(1);
     expect(screen.queryByText('opc.tcp://historical-draft:4840')).not.toBeInTheDocument();
   });
 });
+
+async function openEdgeConfiguration() {
+  fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
+  expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '配置边端 edge-dev' }));
+  expect(await screen.findByText('编辑连接 modbus-line-a')).toBeInTheDocument();
+}

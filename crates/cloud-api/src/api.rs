@@ -31,7 +31,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/protocol-connections", get(protocol_connections))
         .route(
             "/api/edges/{edge_id}/protocol-connections",
-            get(edge_protocol_connections),
+            get(edge_protocol_connections).post(create_edge_protocol_connection),
         )
         .route(
             "/api/edges/{edge_id}/protocol-connections/{connection_id}",
@@ -281,6 +281,48 @@ async fn edge_protocol_connections(
     connections.sort_by(|left, right| left.connection_id.cmp(&right.connection_id));
 
     Ok(Json(connections))
+}
+
+async fn create_edge_protocol_connection(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+    Json(request): Json<CreateProtocolConnectionRequest>,
+) -> Result<(StatusCode, Json<ProtocolConnectionResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let (package, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut package = store
+            .latest_config_package_for_edge(&edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+        let connection_id = next_connection_id(&package);
+        let connection = ProtocolConnection {
+            connection_id,
+            protocol: request.protocol_type.unwrap_or(ProtocolType::ModbusTcp),
+            endpoint: request
+                .endpoint
+                .filter(|endpoint| !endpoint.trim().is_empty()),
+        };
+
+        package.version = next_version(&package.version);
+        package.protocol_connections.push(connection);
+        let response = protocol_connection_response(
+            &package,
+            package
+                .protocol_connections
+                .last()
+                .expect("new protocol connection exists"),
+            None,
+        );
+        store.upsert_config_package(package.clone());
+        (package, response)
+    };
+
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 async fn collection_tasks(State(state): State<AppState>) -> Json<Vec<CollectionTaskResponse>> {
@@ -1028,6 +1070,13 @@ pub struct SaveProtocolConnectionRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CreateProtocolConnectionRequest {
+    pub protocol_type: Option<ProtocolType>,
+    pub endpoint: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SaveAlgorithmRequest {
     pub version: String,
     pub runtime: AlgorithmRuntime,
@@ -1191,6 +1240,21 @@ fn next_version(version: &str) -> String {
     };
     let next = suffix.parse::<u64>().unwrap_or(0) + 1;
     format!("{prefix}-{next:03}")
+}
+
+fn next_connection_id(package: &EdgeConfigPackage) -> String {
+    let mut next = package.protocol_connections.len() + 1;
+    loop {
+        let candidate = format!("connection-draft-{next}");
+        if package
+            .protocol_connections
+            .iter()
+            .all(|connection| connection.connection_id != candidate)
+        {
+            return candidate;
+        }
+        next += 1;
+    }
 }
 
 fn error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {

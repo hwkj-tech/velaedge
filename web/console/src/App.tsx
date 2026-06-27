@@ -12,6 +12,7 @@ import {
   fetchRuntimeStatus,
   fetchSummary,
   publishLatestRelease,
+  createEdgeProtocolConnection,
   saveEdgeAlgorithm,
   saveEdgeCollectionTask,
   saveEdgePointMapping,
@@ -29,6 +30,7 @@ import type {
   RuntimeStatusResponse,
   SaveAlgorithmRequest,
   SaveCollectionTaskRequest,
+  CreateProtocolConnectionRequest,
   SavePointMappingRequest,
   SaveProtocolConnectionRequest,
   SummaryResponse,
@@ -52,6 +54,14 @@ const initialSummary: SummaryResponse = {
 };
 
 const defaultConfigEdgeId = 'edge-dev';
+type EdgeConfigurationMode = 'configure' | 'list';
+
+const configurationPages = new Set<PageKey>([
+  'protocolConnections',
+  'pointMappings',
+  'collectionTasks',
+  'algorithms',
+]);
 
 interface ConsoleSnapshot {
   algorithms: AlgorithmResponse[];
@@ -83,6 +93,9 @@ export default function App() {
   const [releaseList, setReleaseList] = useState<ReleaseListResponse>();
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatusResponse>();
   const [auditRecords, setAuditRecords] = useState<AuditRecordResponse[]>();
+  const [edgeConfigurationMode, setEdgeConfigurationMode] =
+    useState<EdgeConfigurationMode>('list');
+  const [focusedRuntimeEdgeId, setFocusedRuntimeEdgeId] = useState<string>();
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>(
     'loading',
   );
@@ -160,6 +173,21 @@ export default function App() {
     setSelectedProtocolEdgeId(edgeId);
   };
 
+  const handleCreateProtocolConnection = async (
+    edgeId: string,
+    request: CreateProtocolConnectionRequest,
+  ) => {
+    const created = await createEdgeProtocolConnection(edgeId, request);
+    const [nextProtocolConnections, nextReleaseList] = await Promise.all([
+      fetchEdgeProtocolConnections(edgeId),
+      fetchReleaseList(),
+    ]);
+    setProtocolConnections(nextProtocolConnections);
+    setReleaseList(nextReleaseList);
+    setSelectedProtocolEdgeId(edgeId);
+    return created;
+  };
+
   const handleSelectProtocolEdge = async (edgeId: string) => {
     setSelectedProtocolEdgeId(edgeId);
     setProtocolConnections(await fetchEdgeProtocolConnections(edgeId));
@@ -188,6 +216,47 @@ export default function App() {
   const handlePublishLatestRelease = async (edgeId: string) => {
     await publishLatestRelease(edgeId);
     await refreshConsoleData();
+  };
+
+  const handleNavigate = (page: PageKey) => {
+    setActivePage(page);
+    if (!configurationPages.has(page)) {
+      setEdgeConfigurationMode('list');
+    }
+    if (page !== 'runtimeStatus') {
+      setFocusedRuntimeEdgeId(undefined);
+    }
+  };
+
+  const handleConfigureEdge = async (edgeId: string) => {
+    setEdgeConfigurationMode('configure');
+    setFocusedRuntimeEdgeId(undefined);
+    setSelectedProtocolEdgeId(edgeId);
+    setSelectedPointEdgeId(edgeId);
+    setSelectedCollectionEdgeId(edgeId);
+    setSelectedAlgorithmEdgeId(edgeId);
+    setActivePage('protocolConnections');
+
+    const [
+      nextProtocolConnections,
+      nextPointMappings,
+      nextCollectionTasks,
+      nextAlgorithms,
+    ] = await Promise.all([
+      fetchEdgeProtocolConnections(edgeId),
+      fetchEdgePointMappings(edgeId),
+      fetchEdgeCollectionTasks(edgeId),
+      fetchEdgeAlgorithms(edgeId),
+    ]);
+    setProtocolConnections(nextProtocolConnections);
+    setPointMappings(nextPointMappings);
+    setCollectionTasks(nextCollectionTasks);
+    setAlgorithms(nextAlgorithms);
+  };
+
+  const handleMonitorEdge = (edgeId: string) => {
+    setFocusedRuntimeEdgeId(edgeId);
+    setActivePage('runtimeStatus');
   };
 
   useEffect(() => {
@@ -231,11 +300,15 @@ export default function App() {
   }, []);
 
   return (
-    <AppShell activePage={activePage} onNavigate={setActivePage}>
+    <AppShell activePage={activePage} onNavigate={handleNavigate}>
       {renderPage(
         activePage,
         summary,
         loadState,
+        edgeConfigurationMode,
+        focusedRuntimeEdgeId,
+        handleConfigureEdge,
+        handleMonitorEdge,
         handleSavePoint,
         handleSelectPointEdge,
         selectedPointEdgeId,
@@ -243,6 +316,7 @@ export default function App() {
         handleSelectCollectionEdge,
         selectedCollectionEdgeId,
         handleSaveProtocolConnection,
+        handleCreateProtocolConnection,
         handleSelectProtocolEdge,
         selectedProtocolEdgeId,
         handleSaveAlgorithm,
@@ -306,6 +380,10 @@ function renderPage(
   activePage: PageKey,
   summary: SummaryResponse,
   loadState: 'loading' | 'ready' | 'error',
+  edgeConfigurationMode: EdgeConfigurationMode,
+  focusedRuntimeEdgeId: string | undefined,
+  onConfigureEdge: (edgeId: string) => Promise<void>,
+  onMonitorEdge: (edgeId: string) => void,
   onSavePoint: (
     edgeId: string,
     pointId: string,
@@ -325,6 +403,10 @@ function renderPage(
     connectionId: string,
     request: SaveProtocolConnectionRequest,
   ) => Promise<void>,
+  onCreateProtocolConnection: (
+    edgeId: string,
+    request: CreateProtocolConnectionRequest,
+  ) => Promise<ProtocolConnectionResponse>,
   onSelectProtocolEdge: (edgeId: string) => Promise<void>,
   selectedProtocolEdgeId: string,
   onSaveAlgorithm: (
@@ -349,7 +431,15 @@ function renderPage(
     case 'dashboard':
       return <DashboardPage loadState={loadState} summary={summary} />;
     case 'edges':
-      return <EdgeNodesPage edges={edgeNodes} />;
+      return (
+        <EdgeNodesPage
+          edges={edgeNodes}
+          onConfigureEdge={(edgeId) => {
+            void onConfigureEdge(edgeId);
+          }}
+          onMonitorEdge={onMonitorEdge}
+        />
+      );
     case 'deviceModels':
       return <DeviceModelsPage deviceModels={deviceModels} />;
     case 'protocolConnections':
@@ -357,6 +447,8 @@ function renderPage(
         <ProtocolConnectionsPage
           connections={protocolConnections}
           edges={edgeNodes}
+          mode={edgeConfigurationMode}
+          onCreateConnection={onCreateProtocolConnection}
           onSaveConnection={onSaveProtocolConnection}
           onSelectEdge={onSelectProtocolEdge}
           selectedEdgeId={selectedProtocolEdgeId}
@@ -366,6 +458,7 @@ function renderPage(
       return (
         <PointMappingsPage
           edges={edgeNodes}
+          mode={edgeConfigurationMode}
           onSavePoint={onSavePoint}
           onSelectEdge={onSelectPointEdge}
           points={pointMappings}
@@ -376,6 +469,7 @@ function renderPage(
       return (
         <CollectionTasksPage
           edges={edgeNodes}
+          mode={edgeConfigurationMode}
           onSaveTask={onSaveCollectionTask}
           onSelectEdge={onSelectCollectionEdge}
           selectedEdgeId={selectedCollectionEdgeId}
@@ -387,6 +481,7 @@ function renderPage(
         <AlgorithmsPage
           algorithms={algorithms}
           edges={edgeNodes}
+          mode={edgeConfigurationMode}
           onSaveAlgorithm={onSaveAlgorithm}
           onSelectEdge={onSelectAlgorithmEdge}
           selectedEdgeId={selectedAlgorithmEdgeId}
@@ -401,7 +496,12 @@ function renderPage(
         />
       );
     case 'runtimeStatus':
-      return <RuntimeStatusPage runtimeStatus={runtimeStatus} />;
+      return (
+        <RuntimeStatusPage
+          focusedEdgeId={focusedRuntimeEdgeId}
+          runtimeStatus={runtimeStatus}
+        />
+      );
     case 'auditLog':
       return <AuditLogPage auditRecords={auditRecords} />;
     case 'agentAssistant':

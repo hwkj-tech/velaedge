@@ -61,21 +61,45 @@ const fallbackRuntimeStatus: RuntimeStatusResponse = {
 };
 
 export function RuntimeStatusPage({
+  focusedEdgeId,
   runtimeStatus = fallbackRuntimeStatus,
 }: {
+  focusedEdgeId?: string;
   runtimeStatus?: RuntimeStatusResponse;
 }) {
-  const bufferedRecords = runtimeStatus.edges.reduce(
+  const visibleEdges =
+    focusedEdgeId === undefined
+      ? runtimeStatus.edges
+      : runtimeStatus.edges.filter((edge) => edge.edge_id === focusedEdgeId);
+  const metricEdges = visibleEdges.length > 0 ? visibleEdges : runtimeStatus.edges;
+  const bufferedRecords = metricEdges.reduce(
     (total, edge) => total + edge.local_store.buffered_records,
     0,
   );
-  const pendingUploads = runtimeStatus.edges.reduce(
+  const pendingUploads = metricEdges.reduce(
     (total, edge) => total + edge.cloud_sync.pending_uploads,
     0,
   );
-  const protocolRows = runtimeStatus.edges.flatMap((edge) =>
+  const protocolRows = metricEdges.flatMap((edge) =>
     edge.protocols.map((protocol) => ({ edgeId: edge.edge_id, protocol })),
   );
+  const visibleEvents = focusedEdgeId
+    ? runtimeStatus.events.filter((event) => event.edge_id === focusedEdgeId)
+    : runtimeStatus.events;
+  const healthyEdgeCount = metricEdges.filter((edge) => edge.health === 'Healthy').length;
+  const degradedEdgeCount = metricEdges.filter((edge) => edge.health === 'Degraded').length;
+  const criticalEdgeCount = metricEdges.filter(
+    (edge) => edge.health === 'Critical' || edge.health === 'Offline',
+  ).length;
+  const averageCollectionLatencyMs =
+    metricEdges.length > 0
+      ? Math.round(
+          metricEdges.reduce(
+            (total, edge) => total + edge.collection.average_latency_ms,
+            0,
+          ) / metricEdges.length,
+        )
+      : runtimeStatus.averageCollectionLatencyMs;
 
   return (
     <div className="page-stack">
@@ -86,26 +110,33 @@ export function RuntimeStatusPage({
             观察 runtime 系统资源、采集质量、协议连接、本地存储和云端同步状态，用于发布后的闭环确认。
           </p>
         </div>
+        {focusedEdgeId ? (
+          <div className="toolbar">
+            <span className="toolbar-status" role="status">
+              正在监控 {focusedEdgeId}
+            </span>
+          </div>
+        ) : null}
       </section>
 
       <section className="metric-grid" aria-label="边端运行指标">
-        <Metric label="健康边端" value={String(runtimeStatus.healthyEdgeCount)} hint="实时上报" />
+        <Metric label="健康边端" value={String(healthyEdgeCount)} hint="实时上报" />
         <Metric
           label="降级边端"
-          value={String(runtimeStatus.degradedEdgeCount)}
+          value={String(degradedEdgeCount)}
           hint="需关注"
-          tone={runtimeStatus.degradedEdgeCount > 0 ? 'alert' : undefined}
+          tone={degradedEdgeCount > 0 ? 'alert' : undefined}
         />
         <Metric
           label="严重边端"
-          value={String(runtimeStatus.criticalEdgeCount)}
+          value={String(criticalEdgeCount)}
           hint="需处理"
-          tone={runtimeStatus.criticalEdgeCount > 0 ? 'alert' : undefined}
+          tone={criticalEdgeCount > 0 ? 'alert' : undefined}
         />
         <Metric
           label="平均采集延迟"
-          value={`${runtimeStatus.averageCollectionLatencyMs}ms`}
-          hint="所有在线边端"
+          value={`${averageCollectionLatencyMs}ms`}
+          hint={focusedEdgeId ? '当前边端' : '所有在线边端'}
         />
         <Metric label="本地缓冲" value={String(bufferedRecords)} hint="待回传记录" />
         <Metric label="待上传" value={String(pendingUploads)} hint="云端同步队列" />
@@ -132,7 +163,7 @@ export function RuntimeStatusPage({
               </tr>
             </thead>
             <tbody>
-              {runtimeStatus.edges.map((edge) => (
+              {metricEdges.map((edge) => (
                 <tr key={edge.edge_id}>
                   <td>{edge.edge_id}</td>
                   <td>
@@ -191,9 +222,9 @@ export function RuntimeStatusPage({
             <h3 id="runtime-events-title">运行事件</h3>
             <span>协议、采集、存储、算法和同步</span>
           </div>
-          {runtimeStatus.events.length > 0 ? (
+          {visibleEvents.length > 0 ? (
             <ul className="timeline-list">
-              {runtimeStatus.events.map((event) => (
+              {visibleEvents.map((event) => (
                 <li key={`${event.edge_id}:${event.code}:${event.timestamp}`}>
                   <strong>
                     <span className={severityTagClass(event.severity)}>

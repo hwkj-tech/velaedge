@@ -87,13 +87,63 @@ describe('ProtocolConnectionsPage', () => {
     });
   });
 
-  it('shows visible feedback for toolbar actions', () => {
+  it('shows visible feedback for toolbar actions', async () => {
     render(<ProtocolConnectionsPage selectedEdgeId="edge-dev" />);
 
     fireEvent.click(screen.getByRole('button', { name: '校验连接' }));
     expect(screen.getByText('连接校验已完成')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '新建连接' }));
-    expect(screen.getByText('已创建连接草稿')).toBeInTheDocument();
+    expect(await screen.findByText('已创建连接草稿')).toBeInTheDocument();
+  });
+
+  it('creates and selects a new protocol connection draft', async () => {
+    const onCreateConnection = vi.fn().mockResolvedValue({
+      edgeId: 'edge-dev',
+      connectionId: 'connection-draft-2',
+      protocol: 'Modbus TCP',
+      protocolType: 'ModbusTcp',
+      endpoint: 'runtime://pending',
+      status: '启用',
+      policy: '1000ms timeout / 3 retry',
+    });
+
+    render(
+      <ProtocolConnectionsPage
+        selectedEdgeId="edge-dev"
+        connections={[
+          {
+            edgeId: 'edge-dev',
+            connectionId: 'modbus-line-a',
+            protocol: 'Modbus TCP',
+            protocolType: 'ModbusTcp',
+            endpoint: '10.12.0.20:502',
+            status: '启用',
+            policy: '1000ms timeout / 3 retry',
+          },
+          {
+            edgeId: 'edge-dev',
+            connectionId: 'connection-draft-2',
+            protocol: 'Modbus TCP',
+            protocolType: 'ModbusTcp',
+            endpoint: 'runtime://pending',
+            status: '启用',
+            policy: '1000ms timeout / 3 retry',
+          },
+        ]}
+        onCreateConnection={onCreateConnection}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '新建连接' }));
+
+    await waitFor(() => {
+      expect(onCreateConnection).toHaveBeenCalledWith('edge-dev', {
+        endpoint: null,
+        protocolType: 'ModbusTcp',
+      });
+    });
+    expect(screen.getByText('已创建连接草稿 connection-draft-2')).toBeInTheDocument();
+    expect(screen.getByText('编辑连接 connection-draft-2')).toBeInTheDocument();
   });
 });

@@ -210,6 +210,19 @@
   color: #42526b;
 }
 
+.secondary-button.compact {
+  min-height: 30px;
+  border-radius: 6px;
+  gap: 5px;
+  padding: 0 9px;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(130px, 1fr));

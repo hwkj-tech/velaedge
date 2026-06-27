@@ -38,12 +38,14 @@ const fallbackEdges: EdgeNodeResponse[] = [
 
 export function CollectionTasksPage({
   edges = fallbackEdges,
+  mode = 'configure',
   onSaveTask,
   onSelectEdge,
   selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
   tasks = fallbackTasks,
 }: {
   edges?: EdgeNodeResponse[];
+  mode?: 'configure' | 'list';
   onSaveTask?: (
     edgeId: string,
     taskId: string,
@@ -63,6 +65,7 @@ export function CollectionTasksPage({
     'idle',
   );
   const [toolbarMessage, setToolbarMessage] = useState('');
+  const isConfigureMode = mode === 'configure';
   const activeEdge =
     edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
 
@@ -108,9 +111,9 @@ export function CollectionTasksPage({
         </div>
         <div className="toolbar">
           <label className="release-edge-select">
-            <span>配置边端</span>
+            <span>{isConfigureMode ? '配置边端' : '查看边端'}</span>
             <select
-              aria-label="配置边端"
+              aria-label={isConfigureMode ? '配置边端' : '查看边端'}
               value={selectedEdgeId}
               onChange={(event) => {
                 void handleSelectEdge(event.target.value);
@@ -128,22 +131,26 @@ export function CollectionTasksPage({
               {toolbarMessage}
             </span>
           ) : null}
-          <button
-            className="secondary-button"
-            onClick={() => setToolbarMessage('调度策略已生成')}
-            type="button"
-          >
-            <TimerReset size={15} aria-hidden="true" />
-            统一调度策略
-          </button>
-          <button
-            className="primary-button"
-            onClick={() => setToolbarMessage('已创建任务草稿')}
-            type="button"
-          >
-            <Plus size={15} aria-hidden="true" />
-            新建任务
-          </button>
+          {isConfigureMode ? (
+            <>
+              <button
+                className="secondary-button"
+                onClick={() => setToolbarMessage('调度策略已生成')}
+                type="button"
+              >
+                <TimerReset size={15} aria-hidden="true" />
+                统一调度策略
+              </button>
+              <button
+                className="primary-button"
+                onClick={() => setToolbarMessage('已创建任务草稿')}
+                type="button"
+              >
+                <Plus size={15} aria-hidden="true" />
+                新建任务
+              </button>
+            </>
+          ) : null}
         </div>
       </section>
 
@@ -170,15 +177,19 @@ export function CollectionTasksPage({
                 {tasks.map((task) => (
                   <tr key={`${task.edgeId}:${task.taskId}`}>
                     <td>
-                      <button
-                        aria-label={`选择任务 ${task.taskId}`}
-                        aria-pressed={task.taskId === selectedTask.taskId}
-                        className="point-id-button"
-                        onClick={() => setSelectedTaskId(task.taskId)}
-                        type="button"
-                      >
-                        {task.taskId}
-                      </button>
+                      {isConfigureMode ? (
+                        <button
+                          aria-label={`选择任务 ${task.taskId}`}
+                          aria-pressed={task.taskId === selectedTask.taskId}
+                          className="point-id-button"
+                          onClick={() => setSelectedTaskId(task.taskId)}
+                          type="button"
+                        >
+                          {task.taskId}
+                        </button>
+                      ) : (
+                        task.taskId
+                      )}
                     </td>
                     <td>{task.deviceId}</td>
                     <td>{task.pointList}</td>
@@ -195,7 +206,8 @@ export function CollectionTasksPage({
           </div>
         </section>
 
-        <Drawer
+        {isConfigureMode ? (
+          <Drawer
           subtitle="云端草稿，发布后边端 runtime 调度执行"
           title={`编辑任务 ${selectedTask.taskId}`}
           footer={
@@ -297,7 +309,8 @@ export function CollectionTasksPage({
             ]}
             title="当前版本"
           />
-        </Drawer>
+          </Drawer>
+        ) : null}
       </div>
     </div>
   );

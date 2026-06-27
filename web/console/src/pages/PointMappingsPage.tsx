@@ -66,12 +66,14 @@ const fallbackEdges: EdgeNodeResponse[] = [
 
 export function PointMappingsPage({
   edges = fallbackEdges,
+  mode = 'configure',
   onSavePoint,
   onSelectEdge,
   points = fallbackPoints,
   selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
 }: {
   edges?: EdgeNodeResponse[];
+  mode?: 'configure' | 'list';
   onSavePoint?: (
     edgeId: string,
     pointId: string,
@@ -93,7 +95,12 @@ export function PointMappingsPage({
     'idle',
   );
   const [toolbarMessage, setToolbarMessage] = useState('');
-  const columns = pointColumns(selectedPoint.pointId, setSelectedPointId);
+  const isConfigureMode = mode === 'configure';
+  const columns = pointColumns(
+    selectedPoint.pointId,
+    setSelectedPointId,
+    isConfigureMode,
+  );
   const activeEdge =
     edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
 
@@ -139,9 +146,9 @@ export function PointMappingsPage({
         </div>
         <div className="toolbar">
           <label className="release-edge-select">
-            <span>配置边端</span>
+            <span>{isConfigureMode ? '配置边端' : '查看边端'}</span>
             <select
-              aria-label="配置边端"
+              aria-label={isConfigureMode ? '配置边端' : '查看边端'}
               value={selectedEdgeId}
               onChange={(event) => {
                 void handleSelectEdge(event.target.value);
@@ -159,30 +166,34 @@ export function PointMappingsPage({
               {toolbarMessage}
             </span>
           ) : null}
-          <button
-            className="secondary-button"
-            onClick={() => setToolbarMessage('批量导入任务已准备')}
-            type="button"
-          >
-            <FileInput size={15} aria-hidden="true" />
-            批量导入
-          </button>
-          <button
-            className="secondary-button"
-            onClick={() => setToolbarMessage('点位草稿校验已完成')}
-            type="button"
-          >
-            <ShieldCheck size={15} aria-hidden="true" />
-            校验草稿
-          </button>
-          <button
-            className="primary-button"
-            onClick={() => setToolbarMessage('已创建点位草稿')}
-            type="button"
-          >
-            <Plus size={15} aria-hidden="true" />
-            新建点位
-          </button>
+          {isConfigureMode ? (
+            <>
+              <button
+                className="secondary-button"
+                onClick={() => setToolbarMessage('批量导入任务已准备')}
+                type="button"
+              >
+                <FileInput size={15} aria-hidden="true" />
+                批量导入
+              </button>
+              <button
+                className="secondary-button"
+                onClick={() => setToolbarMessage('点位草稿校验已完成')}
+                type="button"
+              >
+                <ShieldCheck size={15} aria-hidden="true" />
+                校验草稿
+              </button>
+              <button
+                className="primary-button"
+                onClick={() => setToolbarMessage('已创建点位草稿')}
+                type="button"
+              >
+                <Plus size={15} aria-hidden="true" />
+                新建点位
+              </button>
+            </>
+          ) : null}
         </div>
       </section>
 
@@ -197,7 +208,8 @@ export function PointMappingsPage({
           <DataTable columns={columns} getRowKey={(row) => row.pointId} rows={points} />
         </section>
 
-        <Drawer
+        {isConfigureMode ? (
+          <Drawer
           subtitle="云端草稿，发布后边端 runtime 执行"
           title={`编辑点位 ${selectedPoint.pointId}`}
           footer={
@@ -335,7 +347,8 @@ export function PointMappingsPage({
             ]}
             title="数据治理"
           />
-        </Drawer>
+          </Drawer>
+        ) : null}
       </div>
     </div>
   );
@@ -344,23 +357,27 @@ export function PointMappingsPage({
 function pointColumns(
   selectedPointId: string,
   onSelectPoint: (pointId: string) => void,
+  isConfigureMode: boolean,
 ): Array<DataTableColumn<PointMappingResponse>> {
   return [
     {
       key: 'pointId',
       header: 'Point ID',
       width: '110px',
-      render: (row) => (
-        <button
-          aria-label={`选择点位 ${row.pointId}`}
-          aria-pressed={row.pointId === selectedPointId}
-          className="point-id-button"
-          onClick={() => onSelectPoint(row.pointId)}
-          type="button"
-        >
-          {row.pointId}
-        </button>
-      ),
+      render: (row) =>
+        isConfigureMode ? (
+          <button
+            aria-label={`选择点位 ${row.pointId}`}
+            aria-pressed={row.pointId === selectedPointId}
+            className="point-id-button"
+            onClick={() => onSelectPoint(row.pointId)}
+            type="button"
+          >
+            {row.pointId}
+          </button>
+        ) : (
+          row.pointId
+        ),
     },
     {
       key: 'address',

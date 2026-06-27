@@ -89,6 +89,11 @@ export interface SaveProtocolConnectionRequest {
   endpoint: string | null;
 }
 
+export interface CreateProtocolConnectionRequest {
+  protocolType: string;
+  endpoint: string | null;
+}
+
 export interface CollectionTaskResponse {
   edgeId: string;
   taskId: string;

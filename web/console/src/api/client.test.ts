@@ -16,6 +16,7 @@ import {
   fetchRuntimeStatus,
   fetchSummary,
   publishLatestRelease,
+  createEdgeProtocolConnection,
   saveEdgeCollectionTask,
   saveEdgeAlgorithm,
   saveEdgePointMapping,
@@ -503,6 +504,45 @@ describe('saveEdgeProtocolConnection', () => {
       },
     );
     expect(result.protocol).toBe('OPC UA');
+  });
+});
+
+describe('createEdgeProtocolConnection', () => {
+  it('creates a protocol connection draft for the selected edge API', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        edgeId: 'edge-dev',
+        connectionId: 'connection-draft-2',
+        protocolType: 'ModbusTcp',
+        protocol: 'Modbus TCP',
+        endpoint: '10.12.0.30:502',
+        status: '启用',
+        policy: '1000ms timeout / 3 retry',
+      }),
+    });
+
+    const result = await createEdgeProtocolConnection(
+      'edge-dev',
+      {
+        endpoint: '10.12.0.30:502',
+        protocolType: 'ModbusTcp',
+      },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/edges/edge-dev/protocol-connections',
+      {
+        body: JSON.stringify({
+          endpoint: '10.12.0.30:502',
+          protocolType: 'ModbusTcp',
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      },
+    );
+    expect(result.connectionId).toBe('connection-draft-2');
   });
 });
 

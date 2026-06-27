@@ -433,6 +433,60 @@ async fn edge_protocol_connection_save_updates_selected_edge_draft() {
 }
 
 #[tokio::test]
+async fn edge_protocol_connection_create_adds_selected_edge_draft() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/protocol-connections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "protocolType": "Mqtt",
+                        "endpoint": "mqtt://broker.local:1883"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(created["edgeId"], "edge-dev");
+    assert_eq!(created["connectionId"], "connection-draft-2");
+    assert_eq!(created["protocolType"], "Mqtt");
+    assert_eq!(created["protocol"], "MQTT");
+    assert_eq!(created["endpoint"], "mqtt://broker.local:1883");
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/desired-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(config["desiredVersion"], "2026.06.26-002");
+    assert_eq!(
+        config["package"]["protocol_connections"][1]["connection_id"],
+        "connection-draft-2"
+    );
+    assert_eq!(
+        config["package"]["protocol_connections"][1]["protocol"],
+        "Mqtt"
+    );
+}
+
+#[tokio::test]
 async fn edge_collection_tasks_endpoint_returns_selected_edge_tasks() {
     let response = app(AppState::default())
         .oneshot(

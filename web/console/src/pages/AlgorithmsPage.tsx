@@ -48,12 +48,14 @@ const runtimeOptions = [
 export function AlgorithmsPage({
   algorithms = fallbackAlgorithms,
   edges = fallbackEdges,
+  mode = 'configure',
   onSaveAlgorithm,
   onSelectEdge,
   selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
 }: {
   algorithms?: AlgorithmResponse[];
   edges?: EdgeNodeResponse[];
+  mode?: 'configure' | 'list';
   onSaveAlgorithm?: (
     edgeId: string,
     algorithmId: string,
@@ -74,6 +76,7 @@ export function AlgorithmsPage({
     'idle',
   );
   const [toolbarMessage, setToolbarMessage] = useState('');
+  const isConfigureMode = mode === 'configure';
   const activeEdge =
     edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
 
@@ -125,9 +128,9 @@ export function AlgorithmsPage({
         </div>
         <div className="toolbar">
           <label className="release-edge-select">
-            <span>配置边端</span>
+            <span>{isConfigureMode ? '配置边端' : '查看边端'}</span>
             <select
-              aria-label="配置边端"
+              aria-label={isConfigureMode ? '配置边端' : '查看边端'}
               value={selectedEdgeId}
               onChange={(event) => {
                 void handleSelectEdge(event.target.value);
@@ -145,22 +148,26 @@ export function AlgorithmsPage({
               {toolbarMessage}
             </span>
           ) : null}
-          <button
-            className="secondary-button"
-            onClick={() => setToolbarMessage('算法风险评估已完成')}
-            type="button"
-          >
-            <ShieldCheck size={15} aria-hidden="true" />
-            风险评估
-          </button>
-          <button
-            className="primary-button"
-            onClick={() => setToolbarMessage('已创建算法草稿')}
-            type="button"
-          >
-            <Plus size={15} aria-hidden="true" />
-            新建算法
-          </button>
+          {isConfigureMode ? (
+            <>
+              <button
+                className="secondary-button"
+                onClick={() => setToolbarMessage('算法风险评估已完成')}
+                type="button"
+              >
+                <ShieldCheck size={15} aria-hidden="true" />
+                风险评估
+              </button>
+              <button
+                className="primary-button"
+                onClick={() => setToolbarMessage('已创建算法草稿')}
+                type="button"
+              >
+                <Plus size={15} aria-hidden="true" />
+                新建算法
+              </button>
+            </>
+          ) : null}
         </div>
       </section>
 
@@ -187,17 +194,21 @@ export function AlgorithmsPage({
                 {algorithms.map((algorithm) => (
                   <tr key={`${algorithm.edgeId}:${algorithm.algorithmId}`}>
                     <td>
-                      <button
-                        aria-label={`选择算法 ${algorithm.algorithmId}`}
-                        aria-pressed={
-                          algorithm.algorithmId === selectedAlgorithm.algorithmId
-                        }
-                        className="point-id-button"
-                        onClick={() => setSelectedAlgorithmId(algorithm.algorithmId)}
-                        type="button"
-                      >
-                        {algorithm.algorithmId}
-                      </button>
+                      {isConfigureMode ? (
+                        <button
+                          aria-label={`选择算法 ${algorithm.algorithmId}`}
+                          aria-pressed={
+                            algorithm.algorithmId === selectedAlgorithm.algorithmId
+                          }
+                          className="point-id-button"
+                          onClick={() => setSelectedAlgorithmId(algorithm.algorithmId)}
+                          type="button"
+                        >
+                          {algorithm.algorithmId}
+                        </button>
+                      ) : (
+                        algorithm.algorithmId
+                      )}
                     </td>
                     <td>{algorithm.kind}</td>
                     <td>{algorithm.inputs}</td>
@@ -216,7 +227,8 @@ export function AlgorithmsPage({
           </div>
         </section>
 
-        <Drawer
+        {isConfigureMode ? (
+          <Drawer
           subtitle="云端草稿，发布后边端 runtime 加载或更新本地算法"
           title={`编辑算法 ${selectedAlgorithm.algorithmId}`}
           footer={
@@ -322,7 +334,8 @@ export function AlgorithmsPage({
             ]}
             title="当前版本"
           />
-        </Drawer>
+          </Drawer>
+        ) : null}
       </div>
     </div>
   );

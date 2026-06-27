@@ -4,6 +4,7 @@ import { Plus, ShieldCheck } from 'lucide-react';
 import type {
   EdgeNodeResponse,
   ProtocolConnectionResponse,
+  CreateProtocolConnectionRequest,
   SaveProtocolConnectionRequest,
 } from '../api/types';
 import { Drawer } from '../components/Drawer';
@@ -45,12 +46,19 @@ const protocolOptions = [
 export function ProtocolConnectionsPage({
   connections = fallbackConnections,
   edges = fallbackEdges,
+  mode = 'configure',
+  onCreateConnection,
   onSaveConnection,
   onSelectEdge,
   selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
 }: {
   connections?: ProtocolConnectionResponse[];
   edges?: EdgeNodeResponse[];
+  mode?: 'configure' | 'list';
+  onCreateConnection?: (
+    edgeId: string,
+    request: CreateProtocolConnectionRequest,
+  ) => Promise<ProtocolConnectionResponse> | ProtocolConnectionResponse;
   onSaveConnection?: (
     edgeId: string,
     connectionId: string,
@@ -70,7 +78,9 @@ export function ProtocolConnectionsPage({
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>(
     'idle',
   );
+  const [createState, setCreateState] = useState<'idle' | 'creating'>('idle');
   const [toolbarMessage, setToolbarMessage] = useState('');
+  const isConfigureMode = mode === 'configure';
   const activeEdge =
     edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
 
@@ -92,6 +102,7 @@ export function ProtocolConnectionsPage({
 
   const handleSelectEdge = async (edgeId: string) => {
     setSaveState('idle');
+    setCreateState('idle');
     setToolbarMessage('');
     await onSelectEdge?.(edgeId);
   };
@@ -110,6 +121,29 @@ export function ProtocolConnectionsPage({
     }
   };
 
+  const handleCreate = async () => {
+    setCreateState('creating');
+    setSaveState('idle');
+    setToolbarMessage('');
+
+    try {
+      const created = await onCreateConnection?.(selectedEdgeId, {
+        endpoint: null,
+        protocolType: 'ModbusTcp',
+      });
+      if (created) {
+        setSelectedConnectionId(created.connectionId);
+        setToolbarMessage(`已创建连接草稿 ${created.connectionId}`);
+      } else {
+        setToolbarMessage('已创建连接草稿');
+      }
+    } catch {
+      setToolbarMessage('创建连接草稿失败');
+    } finally {
+      setCreateState('idle');
+    }
+  };
+
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -121,9 +155,9 @@ export function ProtocolConnectionsPage({
         </div>
         <div className="toolbar">
           <label className="release-edge-select">
-            <span>配置边端</span>
+            <span>{isConfigureMode ? '配置边端' : '查看边端'}</span>
             <select
-              aria-label="配置边端"
+              aria-label={isConfigureMode ? '配置边端' : '查看边端'}
               value={selectedEdgeId}
               onChange={(event) => {
                 void handleSelectEdge(event.target.value);
@@ -141,22 +175,29 @@ export function ProtocolConnectionsPage({
               {toolbarMessage}
             </span>
           ) : null}
-          <button
-            className="secondary-button"
-            onClick={() => setToolbarMessage('连接校验已完成')}
-            type="button"
-          >
-            <ShieldCheck size={15} aria-hidden="true" />
-            校验连接
-          </button>
-          <button
-            className="primary-button"
-            onClick={() => setToolbarMessage('已创建连接草稿')}
-            type="button"
-          >
-            <Plus size={15} aria-hidden="true" />
-            新建连接
-          </button>
+          {isConfigureMode ? (
+            <>
+              <button
+                className="secondary-button"
+                onClick={() => setToolbarMessage('连接校验已完成')}
+                type="button"
+              >
+                <ShieldCheck size={15} aria-hidden="true" />
+                校验连接
+              </button>
+              <button
+                className="primary-button"
+                disabled={createState === 'creating'}
+                onClick={() => {
+                  void handleCreate();
+                }}
+                type="button"
+              >
+                <Plus size={15} aria-hidden="true" />
+                {createState === 'creating' ? '创建中' : '新建连接'}
+              </button>
+            </>
+          ) : null}
         </div>
       </section>
 
@@ -183,17 +224,21 @@ export function ProtocolConnectionsPage({
                 {connections.map((connection) => (
                   <tr key={`${connection.edgeId}:${connection.connectionId}`}>
                     <td>
-                      <button
-                        aria-label={`选择连接 ${connection.connectionId}`}
-                        aria-pressed={
-                          connection.connectionId === selectedConnection.connectionId
-                        }
-                        className="point-id-button"
-                        onClick={() => setSelectedConnectionId(connection.connectionId)}
-                        type="button"
-                      >
-                        {connection.connectionId}
-                      </button>
+                      {isConfigureMode ? (
+                        <button
+                          aria-label={`选择连接 ${connection.connectionId}`}
+                          aria-pressed={
+                            connection.connectionId === selectedConnection.connectionId
+                          }
+                          className="point-id-button"
+                          onClick={() => setSelectedConnectionId(connection.connectionId)}
+                          type="button"
+                        >
+                          {connection.connectionId}
+                        </button>
+                      ) : (
+                        connection.connectionId
+                      )}
                     </td>
                     <td>{connection.protocol}</td>
                     <td>{connection.endpoint}</td>
@@ -210,7 +255,8 @@ export function ProtocolConnectionsPage({
           </div>
         </section>
 
-        <Drawer
+        {isConfigureMode ? (
+          <Drawer
           subtitle="云端草稿，发布后边端 runtime 重新建立协议会话"
           title={`编辑连接 ${selectedConnection.connectionId}`}
           footer={
@@ -285,7 +331,8 @@ export function ProtocolConnectionsPage({
             ]}
             title="当前版本"
           />
-        </Drawer>
+          </Drawer>
+        ) : null}
       </div>
     </div>
   );
