@@ -253,6 +253,8 @@ async fn management_endpoints_return_seeded_control_plane_data() {
     let algorithms: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(algorithms[0]["algorithmId"], "pump-anomaly-v1");
     assert_eq!(algorithms[0]["execution"], "边端本地执行");
+    assert_eq!(algorithms[0]["runtime"], "Onnx");
+    assert_eq!(algorithms[0]["inputIds"], json!(["pressure", "running"]));
 
     let audit_response = router
         .oneshot(
@@ -269,6 +271,89 @@ async fn management_endpoints_return_seeded_control_plane_data() {
     let audit_records: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(audit_records[0]["actor"], "system");
     assert!(audit_records[0]["action"].is_string());
+}
+
+#[tokio::test]
+async fn edge_algorithms_endpoint_returns_selected_edge_algorithms() {
+    let response = app(AppState::default())
+        .oneshot(
+            Request::get("/api/edges/edge-dev/algorithms")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload[0]["edgeId"], "edge-dev");
+    assert_eq!(payload[0]["algorithmId"], "pump-anomaly-v1");
+    assert_eq!(payload[0]["runtime"], "Onnx");
+    assert_eq!(payload[0]["inputIds"], json!(["pressure", "running"]));
+    assert_eq!(payload[0]["outputIds"], json!(["pump.anomaly_score"]));
+}
+
+#[tokio::test]
+async fn edge_algorithm_save_updates_selected_edge_draft() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/edges/edge-dev/algorithms/pump-anomaly-v1")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "version": "1.1.0",
+                        "runtime": "Wasm",
+                        "inputIds": ["pressure"],
+                        "outputIds": ["pump.pressure_score"]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(saved["edgeId"], "edge-dev");
+    assert_eq!(saved["algorithmId"], "pump-anomaly-v1");
+    assert_eq!(saved["version"], "1.1.0");
+    assert_eq!(saved["runtime"], "Wasm");
+    assert_eq!(saved["kind"], "WASM 算法");
+    assert_eq!(saved["inputIds"], json!(["pressure"]));
+    assert_eq!(saved["outputIds"], json!(["pump.pressure_score"]));
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/desired-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(config["desiredVersion"], "2026.06.26-002");
+    assert_eq!(config["package"]["algorithms"][0]["version"], "1.1.0");
+    assert_eq!(config["package"]["algorithms"][0]["runtime"], "Wasm");
+    assert_eq!(
+        config["package"]["algorithms"][0]["inputs"],
+        json!(["pressure"])
+    );
+    assert_eq!(
+        config["package"]["algorithms"][0]["outputs"],
+        json!(["pump.pressure_score"])
+    );
 }
 
 #[tokio::test]

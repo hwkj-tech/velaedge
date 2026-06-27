@@ -6,6 +6,7 @@ import {
   fetchCollectionTasks,
   fetchDeviceModels,
   fetchEdgeCollectionTasks,
+  fetchEdgeAlgorithms,
   fetchEdgeNodes,
   fetchEdgePointMappings,
   fetchEdgeProtocolConnections,
@@ -16,6 +17,7 @@ import {
   fetchSummary,
   publishLatestRelease,
   saveEdgeCollectionTask,
+  saveEdgeAlgorithm,
   saveEdgePointMapping,
   saveEdgeProtocolConnection,
   savePointMapping,
@@ -203,7 +205,9 @@ describe('management data clients', () => {
         { connectionId: 'modbus-line-a', protocolType: 'ModbusTcp' },
       ],
       '/api/collection-tasks': [{ taskId: 'pump-main' }],
-      '/api/algorithms': [{ algorithmId: 'pump-anomaly-v1' }],
+      '/api/algorithms': [
+        { algorithmId: 'pump-anomaly-v1', runtime: 'Onnx', inputIds: ['pressure'] },
+      ],
       '/api/audit-records': [{ action: 'create_release' }],
     };
     const fetchMock = vi.fn().mockImplementation((path: string) =>
@@ -300,6 +304,38 @@ describe('fetchEdgeCollectionTasks', () => {
   });
 });
 
+describe('fetchEdgeAlgorithms', () => {
+  it('loads algorithms for the selected edge from the API', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          edgeId: 'edge-dev',
+          algorithmId: 'pump-anomaly-v1',
+          version: '1.0.0',
+          runtime: 'Onnx',
+          kind: '异常检测',
+          inputIds: ['pressure', 'running'],
+          outputIds: ['pump.anomaly_score'],
+          inputs: 'pressure, running',
+          outputs: 'pump.anomaly_score',
+          execution: '边端本地执行',
+          validation: '已通过',
+        },
+      ],
+    });
+
+    const result = await fetchEdgeAlgorithms(
+      'edge-dev',
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/algorithms');
+    expect(result[0].runtime).toBe('Onnx');
+    expect(result[0].inputIds).toEqual(['pressure', 'running']);
+  });
+});
+
 describe('savePointMapping', () => {
   it('sends an editable point mapping draft to the API', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
@@ -333,6 +369,54 @@ describe('savePointMapping', () => {
       method: 'PUT',
     });
     expect(result.address).toBe('holding_register:40002');
+  });
+});
+
+describe('saveEdgeAlgorithm', () => {
+  it('sends an editable algorithm draft to the selected edge API', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        edgeId: 'edge-dev',
+        algorithmId: 'pump-anomaly-v1',
+        version: '1.1.0',
+        runtime: 'Wasm',
+        kind: 'WASM 算法',
+        inputIds: ['pressure'],
+        outputIds: ['pump.pressure_score'],
+        inputs: 'pressure',
+        outputs: 'pump.pressure_score',
+        execution: '边端本地执行',
+        validation: '已通过',
+      }),
+    });
+
+    const result = await saveEdgeAlgorithm(
+      'edge-dev',
+      'pump-anomaly-v1',
+      {
+        version: '1.1.0',
+        runtime: 'Wasm',
+        inputIds: ['pressure'],
+        outputIds: ['pump.pressure_score'],
+      },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/edges/edge-dev/algorithms/pump-anomaly-v1',
+      {
+        body: JSON.stringify({
+          version: '1.1.0',
+          runtime: 'Wasm',
+          inputIds: ['pressure'],
+          outputIds: ['pump.pressure_score'],
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'PUT',
+      },
+    );
+    expect(result.kind).toBe('WASM 算法');
   });
 });
 

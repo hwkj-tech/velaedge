@@ -112,11 +112,21 @@ export interface AlgorithmResponse {
   edgeId: string;
   algorithmId: string;
   version: string;
+  runtime: string;
   kind: string;
+  inputIds: string[];
+  outputIds: string[];
   inputs: string;
   outputs: string;
   execution: string;
   validation: string;
+}
+
+export interface SaveAlgorithmRequest {
+  version: string;
+  runtime: string;
+  inputIds: string[];
+  outputIds: string[];
 }
 
 export interface AuditRecordResponse {

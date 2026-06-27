@@ -6,6 +6,7 @@ import {
   fetchAuditRecords,
   fetchCollectionTasks,
   fetchDeviceModels,
+  fetchEdgeAlgorithms,
   fetchEdgeCollectionTasks,
   fetchEdgePointMappings,
   fetchEdgeProtocolConnections,
@@ -16,6 +17,7 @@ import {
   fetchRuntimeStatus,
   fetchSummary,
   publishLatestRelease,
+  saveEdgeAlgorithm,
   saveEdgeCollectionTask,
   saveEdgePointMapping,
   saveEdgeProtocolConnection,
@@ -30,6 +32,7 @@ import type {
   ProtocolConnectionResponse,
   ReleaseListResponse,
   RuntimeStatusResponse,
+  SaveAlgorithmRequest,
   SaveCollectionTaskRequest,
   SaveProtocolConnectionRequest,
 } from './api/types';
@@ -40,6 +43,7 @@ vi.mock('./api/client', () => ({
   fetchAuditRecords: vi.fn(),
   fetchCollectionTasks: vi.fn(),
   fetchDeviceModels: vi.fn(),
+  fetchEdgeAlgorithms: vi.fn(),
   fetchEdgeCollectionTasks: vi.fn(),
   fetchEdgePointMappings: vi.fn(),
   fetchEdgeProtocolConnections: vi.fn(),
@@ -50,6 +54,7 @@ vi.mock('./api/client', () => ({
   fetchRuntimeStatus: vi.fn(),
   fetchSummary: vi.fn(),
   publishLatestRelease: vi.fn(),
+  saveEdgeAlgorithm: vi.fn(),
   saveEdgeCollectionTask: vi.fn(),
   saveEdgePointMapping: vi.fn(),
   saveEdgeProtocolConnection: vi.fn(),
@@ -168,7 +173,10 @@ const algorithms: AlgorithmResponse[] = [
     edgeId: 'edge-dev',
     algorithmId: 'pump-anomaly-v1',
     version: '1.0.0',
+    runtime: 'Onnx',
     kind: '异常检测',
+    inputIds: ['pressure', 'running'],
+    outputIds: ['pump.anomaly_score'],
     inputs: 'pressure, running',
     outputs: 'pump.anomaly_score',
     execution: '边端本地执行',
@@ -257,6 +265,7 @@ describe('App cloud console write actions', () => {
     vi.mocked(fetchCollectionTasks).mockResolvedValue(collectionTasks);
     vi.mocked(fetchEdgeCollectionTasks).mockResolvedValue(collectionTasks);
     vi.mocked(fetchAlgorithms).mockResolvedValue(algorithms);
+    vi.mocked(fetchEdgeAlgorithms).mockResolvedValue(algorithms);
     vi.mocked(fetchReleaseList).mockResolvedValue(initialReleaseList);
     vi.mocked(fetchRuntimeStatus).mockResolvedValue(runtimeStatus);
     vi.mocked(fetchAuditRecords).mockResolvedValue(auditRecords);
@@ -279,6 +288,16 @@ describe('App cloud console write actions', () => {
       endpoint: 'opc.tcp://10.12.0.80:4840',
       protocol: 'OPC UA',
       protocolType: 'OpcUa',
+    });
+    vi.mocked(saveEdgeAlgorithm).mockResolvedValue({
+      ...algorithms[0],
+      inputIds: ['pressure'],
+      inputs: 'pressure',
+      kind: 'WASM 算法',
+      outputIds: ['pump.pressure_score'],
+      outputs: 'pump.pressure_score',
+      runtime: 'Wasm',
+      version: '1.1.0',
     });
     vi.mocked(publishLatestRelease).mockResolvedValue(updatedReleaseList);
   });
@@ -406,6 +425,57 @@ describe('App cloud console write actions', () => {
     expect(screen.getByText('草稿已保存')).toBeInTheDocument();
   });
 
+  it('saves algorithm drafts through the selected edge API', async () => {
+    vi.mocked(fetchAlgorithms).mockResolvedValueOnce(algorithms);
+    vi.mocked(fetchEdgeAlgorithms).mockResolvedValueOnce([
+      {
+        ...algorithms[0],
+        inputIds: ['pressure'],
+        inputs: 'pressure',
+        kind: 'WASM 算法',
+        outputIds: ['pump.pressure_score'],
+        outputs: 'pump.pressure_score',
+        runtime: 'Wasm',
+        version: '1.1.0',
+      },
+    ]);
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /算法配置/ }));
+    expect(await screen.findByText('pressure, running')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('算法版本'), {
+      target: { value: '1.1.0' },
+    });
+    fireEvent.change(screen.getByLabelText('算法运行时'), {
+      target: { value: 'Wasm' },
+    });
+    fireEvent.change(screen.getByLabelText('输入点位'), {
+      target: { value: 'pressure' },
+    });
+    fireEvent.change(screen.getByLabelText('输出变量'), {
+      target: { value: 'pump.pressure_score' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+
+    const expectedRequest: SaveAlgorithmRequest = {
+      version: '1.1.0',
+      runtime: 'Wasm',
+      inputIds: ['pressure'],
+      outputIds: ['pump.pressure_score'],
+    };
+    await waitFor(() => {
+      expect(saveEdgeAlgorithm).toHaveBeenCalledWith(
+        'edge-dev',
+        'pump-anomaly-v1',
+        expectedRequest,
+      );
+    });
+    expect(await screen.findByText('pump.pressure_score')).toBeInTheDocument();
+    expect(screen.getByText('草稿已保存')).toBeInTheDocument();
+  });
+
   it('publishes the latest draft and refreshes release apply results', async () => {
     vi.mocked(fetchReleaseList)
       .mockResolvedValueOnce(initialReleaseList)
@@ -456,7 +526,9 @@ describe('App cloud console write actions', () => {
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /算法配置/ }));
-    expect(await screen.findByText('pump-anomaly-v1')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: '选择算法 pump-anomaly-v1' }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /审计日志/ }));
     expect(await screen.findByText('create_release')).toBeInTheDocument();

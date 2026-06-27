@@ -5,6 +5,7 @@ import {
   fetchAuditRecords,
   fetchCollectionTasks,
   fetchDeviceModels,
+  fetchEdgeAlgorithms,
   fetchEdgeCollectionTasks,
   fetchEdgePointMappings,
   fetchEdgeProtocolConnections,
@@ -15,6 +16,7 @@ import {
   fetchRuntimeStatus,
   fetchSummary,
   publishLatestRelease,
+  saveEdgeAlgorithm,
   saveEdgeCollectionTask,
   saveEdgePointMapping,
   saveEdgeProtocolConnection,
@@ -29,6 +31,7 @@ import type {
   ProtocolConnectionResponse,
   ReleaseListResponse,
   RuntimeStatusResponse,
+  SaveAlgorithmRequest,
   SaveCollectionTaskRequest,
   SavePointMappingRequest,
   SaveProtocolConnectionRequest,
@@ -78,6 +81,7 @@ export default function App() {
   const [collectionTasks, setCollectionTasks] = useState<CollectionTaskResponse[]>();
   const [selectedCollectionEdgeId, setSelectedCollectionEdgeId] = useState('edge-dev');
   const [algorithms, setAlgorithms] = useState<AlgorithmResponse[]>();
+  const [selectedAlgorithmEdgeId, setSelectedAlgorithmEdgeId] = useState('edge-dev');
   const [releaseList, setReleaseList] = useState<ReleaseListResponse>();
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatusResponse>();
   const [auditRecords, setAuditRecords] = useState<AuditRecordResponse[]>();
@@ -163,6 +167,26 @@ export default function App() {
     setProtocolConnections(await fetchEdgeProtocolConnections(edgeId));
   };
 
+  const handleSaveAlgorithm = async (
+    edgeId: string,
+    algorithmId: string,
+    request: SaveAlgorithmRequest,
+  ) => {
+    await saveEdgeAlgorithm(edgeId, algorithmId, request);
+    const [nextAlgorithms, nextReleaseList] = await Promise.all([
+      fetchEdgeAlgorithms(edgeId),
+      fetchReleaseList(),
+    ]);
+    setAlgorithms(nextAlgorithms);
+    setReleaseList(nextReleaseList);
+    setSelectedAlgorithmEdgeId(edgeId);
+  };
+
+  const handleSelectAlgorithmEdge = async (edgeId: string) => {
+    setSelectedAlgorithmEdgeId(edgeId);
+    setAlgorithms(await fetchEdgeAlgorithms(edgeId));
+  };
+
   const handlePublishLatestRelease = async (edgeId: string) => {
     await publishLatestRelease(edgeId);
     await refreshConsoleData();
@@ -223,6 +247,9 @@ export default function App() {
         handleSaveProtocolConnection,
         handleSelectProtocolEdge,
         selectedProtocolEdgeId,
+        handleSaveAlgorithm,
+        handleSelectAlgorithmEdge,
+        selectedAlgorithmEdgeId,
         handlePublishLatestRelease,
         edgeNodes,
         deviceModels,
@@ -302,6 +329,13 @@ function renderPage(
   ) => Promise<void>,
   onSelectProtocolEdge: (edgeId: string) => Promise<void>,
   selectedProtocolEdgeId: string,
+  onSaveAlgorithm: (
+    edgeId: string,
+    algorithmId: string,
+    request: SaveAlgorithmRequest,
+  ) => Promise<void>,
+  onSelectAlgorithmEdge: (edgeId: string) => Promise<void>,
+  selectedAlgorithmEdgeId: string,
   onPublish: (edgeId: string) => Promise<void>,
   edgeNodes?: EdgeNodeResponse[],
   deviceModels?: DeviceModelResponse[],
@@ -351,7 +385,15 @@ function renderPage(
         />
       );
     case 'algorithms':
-      return <AlgorithmsPage algorithms={algorithms} />;
+      return (
+        <AlgorithmsPage
+          algorithms={algorithms}
+          edges={edgeNodes}
+          onSaveAlgorithm={onSaveAlgorithm}
+          onSelectEdge={onSelectAlgorithmEdge}
+          selectedEdgeId={selectedAlgorithmEdgeId}
+        />
+      );
     case 'releases':
       return (
         <ReleasesPage

@@ -6,8 +6,8 @@ use axum::{
 };
 use cloud_control::{AuditAction, ReleaseService, ReleaseStatus};
 use edge_core::{
-    AlgorithmRuntime, CollectionTask, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent,
-    EdgeRuntimeMetricsSnapshot, PointAddress, ProtocolConnection, ProtocolType,
+    AlgorithmRuntime, AlgorithmSpec, CollectionTask, EdgeConfigPackage, EdgeHealth,
+    EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, PointAddress, ProtocolConnection, ProtocolType,
     TelemetryPointMapping, TelemetryType,
 };
 use serde::{Deserialize, Serialize};
@@ -47,6 +47,11 @@ pub fn app(state: AppState) -> Router {
             put(save_edge_collection_task),
         )
         .route("/api/algorithms", get(algorithms))
+        .route("/api/edges/{edge_id}/algorithms", get(edge_algorithms))
+        .route(
+            "/api/edges/{edge_id}/algorithms/{algorithm_id}",
+            put(save_edge_algorithm),
+        )
         .route("/api/audit-records", get(audit_records))
         .route("/api/runtime-status", get(runtime_status))
         .route(
@@ -316,21 +321,30 @@ async fn algorithms(State(state): State<AppState>) -> Json<Vec<AlgorithmResponse
 
     for package in store.config_packages() {
         for algorithm in &package.algorithms {
-            rows.push(AlgorithmResponse {
-                edge_id: package.edge_id.clone(),
-                algorithm_id: algorithm.id.clone(),
-                version: algorithm.version.clone(),
-                kind: format_algorithm_runtime(algorithm.runtime),
-                inputs: algorithm.inputs.join(", "),
-                outputs: algorithm.outputs.join(", "),
-                execution: "边端本地执行".to_string(),
-                validation: "已通过".to_string(),
-            });
+            rows.push(algorithm_response(package, algorithm));
         }
     }
     rows.sort_by(|left, right| left.algorithm_id.cmp(&right.algorithm_id));
 
     Json(rows)
+}
+
+async fn edge_algorithms(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<Json<Vec<AlgorithmResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let package = store
+        .latest_config_package_for_edge(&edge_id)
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+    let mut algorithms = package
+        .algorithms
+        .iter()
+        .map(|algorithm| algorithm_response(package, algorithm))
+        .collect::<Vec<_>>();
+    algorithms.sort_by(|left, right| left.algorithm_id.cmp(&right.algorithm_id));
+
+    Ok(Json(algorithms))
 }
 
 async fn audit_records(State(state): State<AppState>) -> Json<Vec<AuditRecordResponse>> {
@@ -630,6 +644,64 @@ async fn save_edge_protocol_connection(
     Ok(Json(response))
 }
 
+async fn save_edge_algorithm(
+    State(state): State<AppState>,
+    Path((edge_id, algorithm_id)): Path<(String, String)>,
+    Json(request): Json<SaveAlgorithmRequest>,
+) -> Result<Json<AlgorithmResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let (package, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut package = store
+            .latest_config_package_for_edge(&edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+
+        if request.input_ids.is_empty() {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "algorithm must include at least one input",
+            ));
+        }
+        if let Some(missing_point_id) = request.input_ids.iter().find(|point_id| {
+            !package
+                .point_mappings
+                .iter()
+                .any(|mapping| mapping.point_id == **point_id)
+        }) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!("algorithm input point `{missing_point_id}` missing"),
+            ));
+        }
+
+        let algorithm_index = package
+            .algorithms
+            .iter()
+            .position(|algorithm| algorithm.id == algorithm_id)
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing algorithm"))?;
+
+        package.version = next_version(&package.version);
+        {
+            let algorithm = &mut package.algorithms[algorithm_index];
+            algorithm.version = request.version;
+            algorithm.runtime = request.runtime;
+            algorithm.inputs = request.input_ids;
+            algorithm.outputs = request.output_ids;
+        }
+
+        let response = algorithm_response(&package, &package.algorithms[algorithm_index]);
+        store.upsert_config_package(package.clone());
+        (package, response)
+    };
+
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(Json(response))
+}
+
 async fn publish_latest_release(
     State(state): State<AppState>,
 ) -> Result<Json<ReleaseListResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -878,7 +950,10 @@ pub struct AlgorithmResponse {
     pub edge_id: String,
     pub algorithm_id: String,
     pub version: String,
+    pub runtime: AlgorithmRuntime,
     pub kind: String,
+    pub input_ids: Vec<String>,
+    pub output_ids: Vec<String>,
     pub inputs: String,
     pub outputs: String,
     pub execution: String,
@@ -949,6 +1024,15 @@ pub struct SaveCollectionTaskRequest {
 pub struct SaveProtocolConnectionRequest {
     pub protocol_type: ProtocolType,
     pub endpoint: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveAlgorithmRequest {
+    pub version: String,
+    pub runtime: AlgorithmRuntime,
+    pub input_ids: Vec<String>,
+    pub output_ids: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -1082,6 +1166,22 @@ fn protocol_connection_response(
             })
             .unwrap_or_else(|| "启用".to_string()),
         policy: "1000ms timeout / 3 retry".to_string(),
+    }
+}
+
+fn algorithm_response(package: &EdgeConfigPackage, algorithm: &AlgorithmSpec) -> AlgorithmResponse {
+    AlgorithmResponse {
+        edge_id: package.edge_id.clone(),
+        algorithm_id: algorithm.id.clone(),
+        version: algorithm.version.clone(),
+        runtime: algorithm.runtime,
+        kind: format_algorithm_runtime(algorithm.runtime),
+        input_ids: algorithm.inputs.clone(),
+        output_ids: algorithm.outputs.clone(),
+        inputs: algorithm.inputs.join(", "),
+        outputs: algorithm.outputs.join(", "),
+        execution: "边端本地执行".to_string(),
+        validation: "已通过".to_string(),
     }
 }
 

@@ -8,6 +8,7 @@ import type {
   ProtocolConnectionResponse,
   ReleaseListResponse,
   RuntimeStatusResponse,
+  SaveAlgorithmRequest,
   SaveCollectionTaskRequest,
   SavePointMappingRequest,
   SaveProtocolConnectionRequest,
@@ -95,6 +96,16 @@ export async function fetchAlgorithms(
   return requestJson<AlgorithmResponse[]>('/api/algorithms', fetcher);
 }
 
+export async function fetchEdgeAlgorithms(
+  edgeId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<AlgorithmResponse[]> {
+  return requestJson<AlgorithmResponse[]>(
+    `/api/edges/${encodeURIComponent(edgeId)}/algorithms`,
+    fetcher,
+  );
+}
+
 export async function fetchAuditRecords(
   fetcher: typeof fetch = fetch,
 ): Promise<AuditRecordResponse[]> {
@@ -165,6 +176,23 @@ export async function saveEdgeProtocolConnection(
 ): Promise<ProtocolConnectionResponse> {
   return requestJson<ProtocolConnectionResponse>(
     `/api/edges/${encodeURIComponent(edgeId)}/protocol-connections/${encodeURIComponent(connectionId)}`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    },
+  );
+}
+
+export async function saveEdgeAlgorithm(
+  edgeId: string,
+  algorithmId: string,
+  request: SaveAlgorithmRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<AlgorithmResponse> {
+  return requestJson<AlgorithmResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/algorithms/${encodeURIComponent(algorithmId)}`,
     fetcher,
     {
       body: JSON.stringify(request),
