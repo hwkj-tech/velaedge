@@ -27,4 +27,5 @@ impl AuditRecord {
 pub enum AuditAction {
     CreateRelease,
     ApplyRelease,
+    UpdateConfig,
 }

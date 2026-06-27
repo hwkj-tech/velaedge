@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import { Activity, KeyRound, Plus, Settings2, Wrench } from 'lucide-react';
 
-import type { EdgeNodeResponse } from '../api/types';
+import type {
+  CreateEdgeNodeRequest,
+  EdgeNodeActionResponse,
+  EdgeNodeResponse,
+} from '../api/types';
 
 const fallbackEdges: EdgeNodeResponse[] = [
   {
@@ -19,13 +23,82 @@ const fallbackEdges: EdgeNodeResponse[] = [
 export function EdgeNodesPage({
   edges = fallbackEdges,
   onConfigureEdge,
+  onEnableMaintenance,
   onMonitorEdge,
+  onRegisterEdge,
+  onRotateCredentials,
 }: {
   edges?: EdgeNodeResponse[];
   onConfigureEdge?: (edgeId: string) => void;
+  onEnableMaintenance?: (
+    edgeId: string,
+  ) => Promise<EdgeNodeActionResponse> | EdgeNodeActionResponse;
   onMonitorEdge?: (edgeId: string) => void;
+  onRegisterEdge?: (
+    request: CreateEdgeNodeRequest,
+  ) => Promise<EdgeNodeResponse> | EdgeNodeResponse;
+  onRotateCredentials?: (
+    edgeId: string,
+  ) => Promise<EdgeNodeActionResponse> | EdgeNodeActionResponse;
 }) {
   const [toolbarMessage, setToolbarMessage] = useState('');
+  const [actionState, setActionState] = useState<
+    'idle' | 'registering' | 'rotating' | 'maintenance'
+  >('idle');
+  const primaryEdgeId = edges[0]?.edgeId ?? fallbackEdges[0].edgeId;
+
+  const handleRegisterEdge = async () => {
+    setActionState('registering');
+    setToolbarMessage('');
+
+    try {
+      const created = await onRegisterEdge?.({
+        displayName: '新边端注册草稿',
+        site: '待分配',
+      });
+      setToolbarMessage(
+        created ? `已注册边端草稿 ${created.edgeId}` : '已注册边端草稿',
+      );
+    } catch {
+      setToolbarMessage('注册边端失败');
+    } finally {
+      setActionState('idle');
+    }
+  };
+
+  const handleRotateCredentials = async () => {
+    setActionState('rotating');
+    setToolbarMessage('');
+
+    try {
+      const result = await onRotateCredentials?.(primaryEdgeId);
+      setToolbarMessage(
+        result?.credentialVersion
+          ? `凭证已轮换 ${result.credentialVersion}`
+          : '凭证已轮换',
+      );
+    } catch {
+      setToolbarMessage('凭证轮换失败');
+    } finally {
+      setActionState('idle');
+    }
+  };
+
+  const handleEnableMaintenance = async () => {
+    setActionState('maintenance');
+    setToolbarMessage('');
+
+    try {
+      const result = await onEnableMaintenance?.(primaryEdgeId);
+      setToolbarMessage(
+        result?.status ? `维护模式已启用 ${result.status}` : '维护模式已启用',
+      );
+    } catch {
+      setToolbarMessage('维护模式启用失败');
+    } finally {
+      setActionState('idle');
+    }
+  };
 
   return (
     <div className="page-stack">
@@ -44,27 +117,36 @@ export function EdgeNodesPage({
           ) : null}
           <button
             className="secondary-button"
-            onClick={() => setToolbarMessage('凭证轮换任务已创建')}
+            disabled={actionState === 'rotating'}
+            onClick={() => {
+              void handleRotateCredentials();
+            }}
             type="button"
           >
             <KeyRound size={15} aria-hidden="true" />
-            轮换凭证
+            {actionState === 'rotating' ? '轮换中' : '轮换凭证'}
           </button>
           <button
             className="secondary-button"
-            onClick={() => setToolbarMessage('维护模式策略已生成')}
+            disabled={actionState === 'maintenance'}
+            onClick={() => {
+              void handleEnableMaintenance();
+            }}
             type="button"
           >
             <Wrench size={15} aria-hidden="true" />
-            维护模式
+            {actionState === 'maintenance' ? '启用中' : '维护模式'}
           </button>
           <button
             className="primary-button"
-            onClick={() => setToolbarMessage('已创建边端注册草稿')}
+            disabled={actionState === 'registering'}
+            onClick={() => {
+              void handleRegisterEdge();
+            }}
             type="button"
           >
             <Plus size={15} aria-hidden="true" />
-            注册边端
+            {actionState === 'registering' ? '注册中' : '注册边端'}
           </button>
         </div>
       </section>

@@ -57,6 +57,19 @@ export interface EdgeNodeResponse {
   capabilities: string[];
 }
 
+export interface CreateEdgeNodeRequest {
+  displayName: string;
+  site: string;
+}
+
+export interface EdgeNodeActionResponse {
+  action: string;
+  credentialVersion?: string;
+  edgeId: string;
+  message: string;
+  status?: string;
+}
+
 export interface TelemetryModelResponse {
   telemetryId: string;
   name: string;

@@ -4,7 +4,7 @@ use axum::{
     routing::{get, post, put},
     Json, Router,
 };
-use cloud_control::{AuditAction, ReleaseService, ReleaseStatus};
+use cloud_control::{AuditAction, EdgeNode, ReleaseService, ReleaseStatus};
 use edge_core::{
     AlgorithmRuntime, AlgorithmSpec, CollectionTask, EdgeConfigPackage, EdgeHealth,
     EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, PointAddress, ProtocolConnection, ProtocolType,
@@ -26,7 +26,7 @@ pub struct SummaryResponse {
 pub fn app(state: AppState) -> Router {
     let api = Router::new()
         .route("/api/summary", get(summary))
-        .route("/api/edge-nodes", get(edge_nodes))
+        .route("/api/edge-nodes", get(edge_nodes).post(create_edge_node))
         .route("/api/device-models", get(device_models))
         .route("/api/protocol-connections", get(protocol_connections))
         .route(
@@ -69,6 +69,14 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/api/edges/{edge_id}/reported-config",
             get(releases).post(edge_reported_config),
+        )
+        .route(
+            "/api/edges/{edge_id}/credentials/rotate",
+            post(rotate_edge_credentials),
+        )
+        .route(
+            "/api/edges/{edge_id}/maintenance-mode",
+            post(enable_edge_maintenance_mode),
         )
         .route("/api/point-mappings", get(point_mappings))
         .route("/api/point-mappings/{point_id}", put(save_point_mapping))
@@ -158,36 +166,133 @@ async fn edge_nodes(State(state): State<AppState>) -> Json<Vec<EdgeNodeResponse>
         .edge_nodes()
         .map(|edge| {
             let runtime = store.runtime_metrics(&edge.edge_id);
-            EdgeNodeResponse {
-                edge_id: edge.edge_id.clone(),
-                display_name: edge.display_name.clone(),
-                site: edge.site.clone().unwrap_or_else(|| "-".to_string()),
-                runtime_id: runtime
-                    .map(|snapshot| snapshot.runtime_id.clone())
-                    .unwrap_or_else(|| "-".to_string()),
-                status: runtime
-                    .map(|snapshot| format_health(snapshot.health))
-                    .unwrap_or_else(|| "未上报".to_string()),
-                resources: runtime
-                    .map(|snapshot| {
-                        format!(
-                            "{} / {} / {}",
-                            format_percent(snapshot.system.cpu_percent),
-                            format_percent(snapshot.system.memory_percent),
-                            format_percent(snapshot.system.disk_percent)
-                        )
-                    })
-                    .unwrap_or_else(|| "-".to_string()),
-                heartbeat: runtime
-                    .map(|snapshot| format!("{} 秒前", snapshot.cloud_sync.last_sync_seconds_ago))
-                    .unwrap_or_else(|| "-".to_string()),
-                capabilities: edge.capabilities.clone(),
-            }
+            edge_node_response(edge, runtime)
         })
         .collect::<Vec<_>>();
     rows.sort_by(|left, right| left.edge_id.cmp(&right.edge_id));
 
     Json(rows)
+}
+
+async fn create_edge_node(
+    State(state): State<AppState>,
+    Json(request): Json<CreateEdgeNodeRequest>,
+) -> Result<(StatusCode, Json<EdgeNodeResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let (node, package, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let edge_id = next_edge_id(&store.edge_nodes().cloned().collect::<Vec<_>>());
+        let node = EdgeNode::new(
+            edge_id.clone(),
+            request
+                .display_name
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "新边端注册草稿".to_string()),
+        )
+        .at_site(
+            request
+                .site
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "待分配".to_string()),
+        )
+        .with_capability("registration:draft");
+        let package = EdgeConfigPackage::new(edge_id, "registration-draft-001");
+
+        store.register_edge(node.clone());
+        store.upsert_config_package(package.clone());
+        store.push_audit(AuditAction::UpdateConfig, node.edge_id.clone());
+
+        let response = edge_node_response(&node, None);
+        (node, package, response)
+    };
+
+    state
+        .persist_edge_node(node)
+        .await
+        .map_err(persistence_error)?;
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+async fn rotate_edge_credentials(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<Json<EdgeNodeActionResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let (node, credential_version) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let Some(existing) = store
+            .edge_nodes()
+            .find(|edge| edge.edge_id == edge_id)
+            .cloned()
+        else {
+            return Err(error(StatusCode::NOT_FOUND, "missing edge node"));
+        };
+        let mut node = existing;
+        let credential_version = next_credential_version(&node);
+        node.capabilities
+            .retain(|capability| !capability.starts_with("credential:"));
+        node.capabilities
+            .push(format!("credential:{credential_version}"));
+        store.register_edge(node.clone());
+        store.push_audit(AuditAction::UpdateConfig, edge_id.clone());
+        (node, credential_version)
+    };
+
+    state
+        .persist_edge_node(node)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(Json(EdgeNodeActionResponse {
+        action: "rotate_credentials".to_string(),
+        credential_version: Some(credential_version),
+        edge_id,
+        message: "凭证已轮换".to_string(),
+        status: None,
+    }))
+}
+
+async fn enable_edge_maintenance_mode(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<Json<EdgeNodeActionResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let node = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let Some(existing) = store
+            .edge_nodes()
+            .find(|edge| edge.edge_id == edge_id)
+            .cloned()
+        else {
+            return Err(error(StatusCode::NOT_FOUND, "missing edge node"));
+        };
+        let mut node = existing;
+        if !node
+            .capabilities
+            .iter()
+            .any(|capability| capability == "mode:maintenance")
+        {
+            node.capabilities.push("mode:maintenance".to_string());
+        }
+        store.register_edge(node.clone());
+        store.push_audit(AuditAction::UpdateConfig, edge_id.clone());
+        node
+    };
+
+    state
+        .persist_edge_node(node)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(Json(EdgeNodeActionResponse {
+        action: "enable_maintenance".to_string(),
+        credential_version: None,
+        edge_id,
+        message: "维护模式已启用".to_string(),
+        status: Some("维护中".to_string()),
+    }))
 }
 
 async fn device_models(State(state): State<AppState>) -> Json<Vec<DeviceModelResponse>> {
@@ -939,6 +1044,23 @@ pub struct EdgeNodeResponse {
     pub capabilities: Vec<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateEdgeNodeRequest {
+    pub display_name: Option<String>,
+    pub site: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeNodeActionResponse {
+    pub action: String,
+    pub credential_version: Option<String>,
+    pub edge_id: String,
+    pub message: String,
+    pub status: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceModelResponse {
@@ -1124,6 +1246,72 @@ pub struct ApplyResultResponse {
     pub reported_version: String,
     pub result: String,
     pub heartbeat: String,
+}
+
+fn edge_node_response(
+    edge: &EdgeNode,
+    runtime: Option<&EdgeRuntimeMetricsSnapshot>,
+) -> EdgeNodeResponse {
+    EdgeNodeResponse {
+        edge_id: edge.edge_id.clone(),
+        display_name: edge.display_name.clone(),
+        site: edge.site.clone().unwrap_or_else(|| "-".to_string()),
+        runtime_id: runtime
+            .map(|snapshot| snapshot.runtime_id.clone())
+            .unwrap_or_else(|| "-".to_string()),
+        status: edge_status(edge, runtime),
+        resources: runtime
+            .map(|snapshot| {
+                format!(
+                    "{} / {} / {}",
+                    format_percent(snapshot.system.cpu_percent),
+                    format_percent(snapshot.system.memory_percent),
+                    format_percent(snapshot.system.disk_percent)
+                )
+            })
+            .unwrap_or_else(|| "-".to_string()),
+        heartbeat: runtime
+            .map(|snapshot| format!("{} 秒前", snapshot.cloud_sync.last_sync_seconds_ago))
+            .unwrap_or_else(|| "-".to_string()),
+        capabilities: edge.capabilities.clone(),
+    }
+}
+
+fn edge_status(edge: &EdgeNode, runtime: Option<&EdgeRuntimeMetricsSnapshot>) -> String {
+    if edge
+        .capabilities
+        .iter()
+        .any(|capability| capability == "mode:maintenance")
+    {
+        return "维护中".to_string();
+    }
+
+    runtime
+        .map(|snapshot| format_health(snapshot.health))
+        .unwrap_or_else(|| "未上报".to_string())
+}
+
+fn next_edge_id(edges: &[EdgeNode]) -> String {
+    let mut next = edges.len() + 1;
+    loop {
+        let candidate = format!("edge-draft-{next}");
+        if edges.iter().all(|edge| edge.edge_id != candidate) {
+            return candidate;
+        }
+        next += 1;
+    }
+}
+
+fn next_credential_version(edge: &EdgeNode) -> String {
+    let next = edge
+        .capabilities
+        .iter()
+        .filter_map(|capability| capability.strip_prefix("credential:credential-v"))
+        .filter_map(|version| version.parse::<u32>().ok())
+        .max()
+        .unwrap_or(1)
+        + 1;
+    format!("credential-v{next}")
 }
 
 fn point_mapping_response(
@@ -1330,6 +1518,7 @@ fn format_audit_action(action: AuditAction) -> String {
     match action {
         AuditAction::CreateRelease => "create_release",
         AuditAction::ApplyRelease => "apply_release",
+        AuditAction::UpdateConfig => "update_config",
     }
     .to_string()
 }

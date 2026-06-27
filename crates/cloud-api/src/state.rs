@@ -42,6 +42,13 @@ impl AppState {
         Ok(())
     }
 
+    pub async fn persist_edge_node(&self, node: EdgeNode) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.upsert_edge_node(node).await?;
+        }
+        Ok(())
+    }
+
     pub async fn persist_release(&self, release: ReleaseRecord) -> Result<()> {
         if let Some(store) = &self.sqlite_store {
             store.insert_release(release).await?;

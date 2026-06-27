@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  createEdgeNode,
   fetchAlgorithms,
   fetchAuditRecords,
   fetchCollectionTasks,
@@ -18,6 +19,8 @@ import {
   fetchSummary,
   publishLatestRelease,
   createEdgeProtocolConnection,
+  rotateEdgeCredentials,
+  enableEdgeMaintenanceMode,
   saveEdgeAlgorithm,
   saveEdgeCollectionTask,
   saveEdgePointMapping,
@@ -40,6 +43,7 @@ import type {
 import App from './App';
 
 vi.mock('./api/client', () => ({
+  createEdgeNode: vi.fn(),
   fetchAlgorithms: vi.fn(),
   fetchAuditRecords: vi.fn(),
   fetchCollectionTasks: vi.fn(),
@@ -56,6 +60,8 @@ vi.mock('./api/client', () => ({
   fetchSummary: vi.fn(),
   publishLatestRelease: vi.fn(),
   createEdgeProtocolConnection: vi.fn(),
+  rotateEdgeCredentials: vi.fn(),
+  enableEdgeMaintenanceMode: vi.fn(),
   saveEdgeAlgorithm: vi.fn(),
   saveEdgeCollectionTask: vi.fn(),
   saveEdgePointMapping: vi.fn(),
@@ -122,6 +128,25 @@ const edgeNodes: EdgeNodeResponse[] = [
     resources: '18.5% / 42% / 61%',
     heartbeat: '8 秒前',
     capabilities: ['protocol:modbus-tcp'],
+  },
+];
+
+const registeredEdgeNode: EdgeNodeResponse = {
+  edgeId: 'edge-draft-2',
+  displayName: '新边端注册草稿',
+  site: '待分配',
+  runtimeId: '-',
+  status: '未上报',
+  resources: '-',
+  heartbeat: '-',
+  capabilities: ['registration:draft'],
+};
+
+const maintenanceEdgeNodes: EdgeNodeResponse[] = [
+  {
+    ...edgeNodes[0],
+    status: '维护中',
+    capabilities: [...edgeNodes[0].capabilities, 'mode:maintenance'],
   },
 ];
 
@@ -302,6 +327,19 @@ describe('App cloud console write actions', () => {
       protocolType: 'OpcUa',
     });
     vi.mocked(createEdgeProtocolConnection).mockResolvedValue(createdProtocolConnection);
+    vi.mocked(createEdgeNode).mockResolvedValue(registeredEdgeNode);
+    vi.mocked(rotateEdgeCredentials).mockResolvedValue({
+      action: 'rotate_credentials',
+      credentialVersion: 'credential-v2',
+      edgeId: 'edge-dev',
+      message: '凭证已轮换',
+    });
+    vi.mocked(enableEdgeMaintenanceMode).mockResolvedValue({
+      action: 'enable_maintenance',
+      edgeId: 'edge-dev',
+      message: '维护模式已启用',
+      status: '维护中',
+    });
     vi.mocked(saveEdgeAlgorithm).mockResolvedValue({
       ...algorithms[0],
       inputIds: ['pressure'],
@@ -515,6 +553,62 @@ describe('App cloud console write actions', () => {
 
     expect(await screen.findByText('正在监控 edge-dev')).toBeInTheDocument();
     expect(screen.getByText('18.5%')).toBeInTheDocument();
+  });
+
+  it('registers edge drafts through the edge management API', async () => {
+    vi.mocked(fetchEdgeNodes)
+      .mockResolvedValueOnce(edgeNodes)
+      .mockResolvedValueOnce([...edgeNodes, registeredEdgeNode]);
+    vi.mocked(fetchSummary)
+      .mockResolvedValueOnce({
+        edge_count: 1,
+        pending_release_count: 0,
+      })
+      .mockResolvedValueOnce({
+        edge_count: 2,
+        pending_release_count: 0,
+      });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
+    expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '注册边端' }));
+
+    await waitFor(() => {
+      expect(createEdgeNode).toHaveBeenCalledWith({
+        displayName: '新边端注册草稿',
+        site: '待分配',
+      });
+    });
+    expect(await screen.findByText('edge-draft-2')).toBeInTheDocument();
+    expect(screen.getByText('已注册边端草稿 edge-draft-2')).toBeInTheDocument();
+  });
+
+  it('runs credential rotation and maintenance mode through edge APIs', async () => {
+    vi.mocked(fetchEdgeNodes)
+      .mockResolvedValueOnce(edgeNodes)
+      .mockResolvedValueOnce(edgeNodes)
+      .mockResolvedValueOnce(maintenanceEdgeNodes);
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
+    expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '轮换凭证' }));
+    await waitFor(() => {
+      expect(rotateEdgeCredentials).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('凭证已轮换 credential-v2')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '维护模式' }));
+    await waitFor(() => {
+      expect(enableEdgeMaintenanceMode).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('维护模式已启用 维护中')).toBeInTheDocument();
+    expect(screen.getByText('维护中')).toBeInTheDocument();
   });
 
   it('saves algorithm drafts through the selected edge API', async () => {

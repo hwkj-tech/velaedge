@@ -274,6 +274,105 @@ async fn management_endpoints_return_seeded_control_plane_data() {
 }
 
 #[tokio::test]
+async fn edge_node_create_registers_draft_edge_and_empty_config() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edge-nodes")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "displayName": "一号产线边端",
+                        "site": "制造/一号线"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(created["edgeId"], "edge-draft-2");
+    assert_eq!(created["displayName"], "一号产线边端");
+    assert_eq!(created["site"], "制造/一号线");
+
+    let response = router
+        .clone()
+        .oneshot(Request::get("/api/edge-nodes").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let edges: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(edges
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|edge| edge["edgeId"] == "edge-draft-2"));
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-draft-2/protocol-connections")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn edge_node_actions_rotate_credentials_and_enable_maintenance() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/credentials/rotate")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let rotated: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(rotated["edgeId"], "edge-dev");
+    assert_eq!(rotated["action"], "rotate_credentials");
+    assert_eq!(rotated["credentialVersion"], "credential-v2");
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/maintenance-mode")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let maintenance: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(maintenance["edgeId"], "edge-dev");
+    assert_eq!(maintenance["action"], "enable_maintenance");
+    assert_eq!(maintenance["status"], "维护中");
+
+    let response = router
+        .oneshot(Request::get("/api/edge-nodes").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let edges: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(edges[0]["status"], "维护中");
+}
+
+#[tokio::test]
 async fn edge_algorithms_endpoint_returns_selected_edge_algorithms() {
     let response = app(AppState::default())
         .oneshot(

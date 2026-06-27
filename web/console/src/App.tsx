@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import {
+  createEdgeNode,
   fetchAuditRecords,
   fetchDeviceModels,
   fetchEdgeAlgorithms,
@@ -13,6 +14,8 @@ import {
   fetchSummary,
   publishLatestRelease,
   createEdgeProtocolConnection,
+  rotateEdgeCredentials,
+  enableEdgeMaintenanceMode,
   saveEdgeAlgorithm,
   saveEdgeCollectionTask,
   saveEdgePointMapping,
@@ -22,7 +25,9 @@ import type {
   AlgorithmResponse,
   AuditRecordResponse,
   CollectionTaskResponse,
+  CreateEdgeNodeRequest,
   DeviceModelResponse,
+  EdgeNodeActionResponse,
   EdgeNodeResponse,
   PointMappingResponse,
   ProtocolConnectionResponse,
@@ -218,6 +223,33 @@ export default function App() {
     await refreshConsoleData();
   };
 
+  const handleRegisterEdge = async (request: CreateEdgeNodeRequest) => {
+    const created = await createEdgeNode(request);
+    const [nextEdgeNodes, nextSummary] = await Promise.all([
+      fetchEdgeNodes(),
+      fetchSummary(),
+    ]);
+    setEdgeNodes(nextEdgeNodes);
+    setSummary(nextSummary);
+    return created;
+  };
+
+  const handleRotateCredentials = async (
+    edgeId: string,
+  ): Promise<EdgeNodeActionResponse> => {
+    const result = await rotateEdgeCredentials(edgeId);
+    setEdgeNodes(await fetchEdgeNodes());
+    return result;
+  };
+
+  const handleEnableMaintenance = async (
+    edgeId: string,
+  ): Promise<EdgeNodeActionResponse> => {
+    const result = await enableEdgeMaintenanceMode(edgeId);
+    setEdgeNodes(await fetchEdgeNodes());
+    return result;
+  };
+
   const handleNavigate = (page: PageKey) => {
     setActivePage(page);
     if (!configurationPages.has(page)) {
@@ -308,7 +340,10 @@ export default function App() {
         edgeConfigurationMode,
         focusedRuntimeEdgeId,
         handleConfigureEdge,
+        handleEnableMaintenance,
         handleMonitorEdge,
+        handleRegisterEdge,
+        handleRotateCredentials,
         handleSavePoint,
         handleSelectPointEdge,
         selectedPointEdgeId,
@@ -383,7 +418,10 @@ function renderPage(
   edgeConfigurationMode: EdgeConfigurationMode,
   focusedRuntimeEdgeId: string | undefined,
   onConfigureEdge: (edgeId: string) => Promise<void>,
+  onEnableMaintenance: (edgeId: string) => Promise<EdgeNodeActionResponse>,
   onMonitorEdge: (edgeId: string) => void,
+  onRegisterEdge: (request: CreateEdgeNodeRequest) => Promise<EdgeNodeResponse>,
+  onRotateCredentials: (edgeId: string) => Promise<EdgeNodeActionResponse>,
   onSavePoint: (
     edgeId: string,
     pointId: string,
@@ -437,7 +475,10 @@ function renderPage(
           onConfigureEdge={(edgeId) => {
             void onConfigureEdge(edgeId);
           }}
+          onEnableMaintenance={onEnableMaintenance}
           onMonitorEdge={onMonitorEdge}
+          onRegisterEdge={onRegisterEdge}
+          onRotateCredentials={onRotateCredentials}
         />
       );
     case 'deviceModels':

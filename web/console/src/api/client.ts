@@ -2,6 +2,8 @@ import type {
   AlgorithmResponse,
   AuditRecordResponse,
   CollectionTaskResponse,
+  CreateEdgeNodeRequest,
+  EdgeNodeActionResponse,
   DeviceModelResponse,
   EdgeNodeResponse,
   PointMappingResponse,
@@ -48,6 +50,43 @@ export async function fetchEdgeNodes(
   fetcher: typeof fetch = fetch,
 ): Promise<EdgeNodeResponse[]> {
   return requestJson<EdgeNodeResponse[]>('/api/edge-nodes', fetcher);
+}
+
+export async function createEdgeNode(
+  request: CreateEdgeNodeRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<EdgeNodeResponse> {
+  return requestJson<EdgeNodeResponse>('/api/edge-nodes', fetcher, {
+    body: JSON.stringify(request),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  });
+}
+
+export async function rotateEdgeCredentials(
+  edgeId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<EdgeNodeActionResponse> {
+  return requestJson<EdgeNodeActionResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/credentials/rotate`,
+    fetcher,
+    {
+      method: 'POST',
+    },
+  );
+}
+
+export async function enableEdgeMaintenanceMode(
+  edgeId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<EdgeNodeActionResponse> {
+  return requestJson<EdgeNodeActionResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/maintenance-mode`,
+    fetcher,
+    {
+      method: 'POST',
+    },
+  );
 }
 
 export async function fetchDeviceModels(
