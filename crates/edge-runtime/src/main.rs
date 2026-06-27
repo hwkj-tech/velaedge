@@ -9,8 +9,9 @@ use edge_core::{
     TelemetrySample, TelemetryValue,
 };
 use edge_runtime::{
-    publish_edgelink_runtime_status_once, sync_and_report_once, EdgeRuntime,
-    HttpEdgeConfigSyncClient, HttpRuntimeStatusReporter, JsonlLocalStore, SimulatedProtocolAdapter,
+    publish_edgelink_runtime_status_with_store_once, sync_and_report_once, EdgeRuntime,
+    HttpEdgeConfigSyncClient, HttpRuntimeStatusReporter, JsonlLocalStore, RocksEdgeRuntimeStore,
+    SimulatedProtocolAdapter,
 };
 use tracing::info;
 
@@ -26,6 +27,8 @@ struct Args {
     runtime_id: String,
     #[arg(long, default_value = "data/telemetry.jsonl")]
     storage: PathBuf,
+    #[arg(long, default_value = "data/edge-runtime.rocksdb")]
+    runtime_db: PathBuf,
     #[arg(long)]
     cloud_api_url: Option<String>,
     #[arg(long)]
@@ -44,13 +47,15 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     if let Some(cloud_gateway_addr) = args.cloud_gateway_addr {
         let snapshot = runtime_metrics_snapshot(&args.edge_id, &args.runtime_id, &args.storage);
-        let report = publish_edgelink_runtime_status_once(
+        let runtime_store = RocksEdgeRuntimeStore::open(&args.runtime_db)?;
+        let report = publish_edgelink_runtime_status_with_store_once(
             &cloud_gateway_addr,
             &args.edge_id,
             &args.runtime_id,
             env!("CARGO_PKG_VERSION"),
             snapshot,
             Vec::new(),
+            &runtime_store,
         )
         .await?;
 
@@ -59,6 +64,7 @@ async fn main() -> Result<()> {
             runtime_id = %report.runtime_id,
             gateway_addr = %report.gateway_addr,
             acked_message_count = report.acked_message_count,
+            runtime_db = %args.runtime_db.display(),
             "edgelink runtime status report completed"
         );
 

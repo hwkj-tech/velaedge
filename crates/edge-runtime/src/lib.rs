@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod edgelink_client;
+pub mod local_db;
 pub mod metrics;
 pub mod protocol;
 pub mod reporting;
@@ -12,8 +13,10 @@ pub mod sync;
 pub use config::{AppliedEdgeConfig, ConfiguredSimulatedRuntime};
 pub use edgelink_client::{
     connect_edgelink_once, connect_edgelink_tls_once, publish_edgelink_runtime_status_once,
-    EdgeLinkClientTlsConfig, EdgeLinkConnectReport, EdgeLinkPublishReport,
+    publish_edgelink_runtime_status_with_store_once, EdgeLinkClientTlsConfig,
+    EdgeLinkConnectReport, EdgeLinkPublishReport,
 };
+pub use local_db::RocksEdgeRuntimeStore;
 pub use metrics::SimulatedRuntimeMetricsCollector;
 pub use protocol::{ProtocolAdapter, SimulatedProtocolAdapter};
 pub use reporting::{report_runtime_status_once, HttpRuntimeStatusReporter, RuntimeStatusReporter};

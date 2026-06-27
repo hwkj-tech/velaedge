@@ -12,6 +12,7 @@ chrono.workspace = true
 clap.workspace = true
 edge-core = { path = "../edge-core" }
 reqwest.workspace = true
+rocksdb.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

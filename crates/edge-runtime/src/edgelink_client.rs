@@ -17,7 +17,7 @@ use tokio_rustls::{
     TlsConnector,
 };
 
-use crate::{AppliedEdgeConfig, ConfiguredSimulatedRuntime};
+use crate::{AppliedEdgeConfig, ConfiguredSimulatedRuntime, RocksEdgeRuntimeStore};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EdgeLinkConnectReport {
@@ -134,6 +134,48 @@ pub async fn publish_edgelink_runtime_status_once(
     snapshot: EdgeRuntimeMetricsSnapshot,
     events: Vec<EdgeRuntimeEvent>,
 ) -> Result<EdgeLinkPublishReport> {
+    publish_edgelink_runtime_status_inner(
+        gateway_addr,
+        edge_id,
+        runtime_id,
+        runtime_version,
+        snapshot,
+        events,
+        None,
+    )
+    .await
+}
+
+pub async fn publish_edgelink_runtime_status_with_store_once(
+    gateway_addr: &str,
+    edge_id: &str,
+    runtime_id: &str,
+    runtime_version: &str,
+    snapshot: EdgeRuntimeMetricsSnapshot,
+    events: Vec<EdgeRuntimeEvent>,
+    store: &RocksEdgeRuntimeStore,
+) -> Result<EdgeLinkPublishReport> {
+    publish_edgelink_runtime_status_inner(
+        gateway_addr,
+        edge_id,
+        runtime_id,
+        runtime_version,
+        snapshot,
+        events,
+        Some(store),
+    )
+    .await
+}
+
+async fn publish_edgelink_runtime_status_inner(
+    gateway_addr: &str,
+    edge_id: &str,
+    runtime_id: &str,
+    runtime_version: &str,
+    snapshot: EdgeRuntimeMetricsSnapshot,
+    events: Vec<EdgeRuntimeEvent>,
+    store: Option<&RocksEdgeRuntimeStore>,
+) -> Result<EdgeLinkPublishReport> {
     if snapshot.edge_id != edge_id {
         bail!("runtime metrics edge_id does not match EdgeLink edge_id");
     }
@@ -159,7 +201,8 @@ pub async fn publish_edgelink_runtime_status_once(
     )
     .await?;
 
-    let config_apply = apply_optional_config_deploy(&mut stream, edge_id, runtime_id).await?;
+    let config_apply =
+        apply_optional_config_deploy(&mut stream, edge_id, runtime_id, store).await?;
     let mut acked_message_count = 0;
     let metrics =
         EdgeLinkMessage::runtime_metrics(edge_id, runtime_id, config_apply.next_sequence, snapshot);
@@ -236,6 +279,7 @@ async fn apply_optional_config_deploy<S>(
     stream: &mut S,
     edge_id: &str,
     runtime_id: &str,
+    store: Option<&RocksEdgeRuntimeStore>,
 ) -> Result<EdgeLinkOptionalConfigApply>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -270,6 +314,12 @@ where
         bail!("config package targets a different edge");
     }
 
+    if let Some(store) = store {
+        store
+            .put_desired_config(&package)
+            .context("failed to persist EdgeLink desired config")?;
+    }
+
     let applied = match AppliedEdgeConfig::apply(package) {
         Ok(applied) => applied,
         Err(error) => {
@@ -292,6 +342,11 @@ where
         .await
         .context("failed to run collection after EdgeLink config deploy")?;
     let applied_version = runtime.reported_version().to_string();
+    if let Some(store) = store {
+        store
+            .promote_active_config(edge_id, &applied_version)
+            .context("failed to promote EdgeLink active config")?;
+    }
 
     let report = EdgeLinkMessage::config_report(
         edge_id,

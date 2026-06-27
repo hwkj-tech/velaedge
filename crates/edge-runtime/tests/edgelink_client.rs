@@ -5,7 +5,11 @@ use edge_core::{
     EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, LocalStoreMetrics, ProtocolRuntimeMetrics,
     RuntimeEventCategory, RuntimeEventSeverity, SystemRuntimeMetrics,
 };
-use edge_runtime::{connect_edgelink_once, publish_edgelink_runtime_status_once};
+use edge_runtime::{
+    connect_edgelink_once, publish_edgelink_runtime_status_once,
+    publish_edgelink_runtime_status_with_store_once, RocksEdgeRuntimeStore,
+};
+use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -187,6 +191,71 @@ async fn runtime_client_applies_config_deploy_before_publishing_metrics() {
     );
     assert!(config_report.accepted);
     assert_eq!(observed[2].kind, EdgeLinkMessageKind::RuntimeMetrics);
+}
+
+#[tokio::test]
+async fn runtime_client_persists_config_deploy_to_rocksdb_before_reporting() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let gateway_addr = listener.local_addr().expect("listener should expose addr");
+    let dir = tempdir().unwrap();
+    let store = RocksEdgeRuntimeStore::open(dir.path().join("runtime.rocksdb")).unwrap();
+
+    let gateway = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("runtime should connect");
+
+        let hello = read_one_message(&mut stream).await;
+        write_ack_for(&mut stream, &hello).await;
+
+        let deploy = EdgeLinkMessage::config_deploy(
+            "edge-dev",
+            "runtime-dev",
+            2,
+            EdgeConfigPackage::new("edge-dev", "2026.06.27-030"),
+        );
+        let deploy_frame = encode_edgelink_frame(&deploy).expect("deploy should encode");
+        stream
+            .write_all(&deploy_frame)
+            .await
+            .expect("deploy should be written");
+
+        let report = read_one_message(&mut stream).await;
+        write_ack_for(&mut stream, &report).await;
+
+        let metrics = read_one_message(&mut stream).await;
+        write_ack_for(&mut stream, &metrics).await;
+    });
+
+    let report = publish_edgelink_runtime_status_with_store_once(
+        &gateway_addr.to_string(),
+        "edge-dev",
+        "runtime-dev",
+        "0.1.0",
+        runtime_metrics("edge-dev", "runtime-dev"),
+        Vec::new(),
+        &store,
+    )
+    .await
+    .expect("runtime status should publish");
+
+    assert_eq!(
+        report.applied_config_version.as_deref(),
+        Some("2026.06.27-030")
+    );
+    gateway.await.expect("gateway task should finish");
+
+    let desired = store
+        .desired_config("edge-dev", "2026.06.27-030")
+        .unwrap()
+        .expect("desired config should be persisted");
+    assert_eq!(desired.version, "2026.06.27-030");
+
+    let active = store
+        .active_config("edge-dev")
+        .unwrap()
+        .expect("active config should be promoted");
+    assert_eq!(active.version, "2026.06.27-030");
 }
 
 async fn read_one_message(stream: &mut TcpStream) -> EdgeLinkMessage {
