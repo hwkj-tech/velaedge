@@ -24,6 +24,16 @@ export async function fetchPointMappings(
   return requestJson<PointMappingResponse[]>('/api/point-mappings', fetcher);
 }
 
+export async function fetchEdgePointMappings(
+  edgeId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<PointMappingResponse[]> {
+  return requestJson<PointMappingResponse[]>(
+    `/api/edges/${encodeURIComponent(edgeId)}/point-mappings`,
+    fetcher,
+  );
+}
+
 export async function fetchReleaseList(
   fetcher: typeof fetch = fetch,
 ): Promise<ReleaseListResponse> {
@@ -82,6 +92,23 @@ export async function savePointMapping(
 ): Promise<PointMappingResponse> {
   return requestJson<PointMappingResponse>(
     `/api/point-mappings/${encodeURIComponent(pointId)}`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    },
+  );
+}
+
+export async function saveEdgePointMapping(
+  edgeId: string,
+  pointId: string,
+  request: SavePointMappingRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<PointMappingResponse> {
+  return requestJson<PointMappingResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/point-mappings/${encodeURIComponent(pointId)}`,
     fetcher,
     {
       body: JSON.stringify(request),

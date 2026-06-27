@@ -5,6 +5,7 @@ import {
   fetchAuditRecords,
   fetchCollectionTasks,
   fetchDeviceModels,
+  fetchEdgePointMappings,
   fetchEdgeNodes,
   fetchPointMappings,
   fetchProtocolConnections,
@@ -12,7 +13,7 @@ import {
   fetchRuntimeStatus,
   fetchSummary,
   publishLatestRelease,
-  savePointMapping,
+  saveEdgePointMapping,
 } from './api/client';
 import type {
   AlgorithmResponse,
@@ -66,6 +67,7 @@ export default function App() {
   const [protocolConnections, setProtocolConnections] =
     useState<ProtocolConnectionResponse[]>();
   const [pointMappings, setPointMappings] = useState<PointMappingResponse[]>();
+  const [selectedPointEdgeId, setSelectedPointEdgeId] = useState('edge-dev');
   const [collectionTasks, setCollectionTasks] = useState<CollectionTaskResponse[]>();
   const [algorithms, setAlgorithms] = useState<AlgorithmResponse[]>();
   const [releaseList, setReleaseList] = useState<ReleaseListResponse>();
@@ -94,11 +96,23 @@ export default function App() {
   };
 
   const handleSavePoint = async (
+    edgeId: string,
     pointId: string,
     request: SavePointMappingRequest,
   ) => {
-    await savePointMapping(pointId, request);
-    await refreshConsoleData();
+    await saveEdgePointMapping(edgeId, pointId, request);
+    const [nextPointMappings, nextReleaseList] = await Promise.all([
+      fetchEdgePointMappings(edgeId),
+      fetchReleaseList(),
+    ]);
+    setPointMappings(nextPointMappings);
+    setReleaseList(nextReleaseList);
+    setSelectedPointEdgeId(edgeId);
+  };
+
+  const handleSelectPointEdge = async (edgeId: string) => {
+    setSelectedPointEdgeId(edgeId);
+    setPointMappings(await fetchEdgePointMappings(edgeId));
   };
 
   const handlePublishLatestRelease = async (edgeId: string) => {
@@ -153,6 +167,8 @@ export default function App() {
         summary,
         loadState,
         handleSavePoint,
+        handleSelectPointEdge,
+        selectedPointEdgeId,
         handlePublishLatestRelease,
         edgeNodes,
         deviceModels,
@@ -212,9 +228,12 @@ function renderPage(
   summary: SummaryResponse,
   loadState: 'loading' | 'ready' | 'error',
   onSavePoint: (
+    edgeId: string,
     pointId: string,
     request: SavePointMappingRequest,
   ) => Promise<void>,
+  onSelectPointEdge: (edgeId: string) => Promise<void>,
+  selectedPointEdgeId: string,
   onPublish: (edgeId: string) => Promise<void>,
   edgeNodes?: EdgeNodeResponse[],
   deviceModels?: DeviceModelResponse[],
@@ -236,7 +255,15 @@ function renderPage(
     case 'protocolConnections':
       return <ProtocolConnectionsPage connections={protocolConnections} />;
     case 'pointMappings':
-      return <PointMappingsPage onSavePoint={onSavePoint} points={pointMappings} />;
+      return (
+        <PointMappingsPage
+          edges={edgeNodes}
+          onSavePoint={onSavePoint}
+          onSelectEdge={onSelectPointEdge}
+          points={pointMappings}
+          selectedEdgeId={selectedPointEdgeId}
+        />
+      );
     case 'collectionTasks':
       return <CollectionTasksPage tasks={collectionTasks} />;
     case 'algorithms':

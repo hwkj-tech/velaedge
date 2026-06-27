@@ -17,7 +17,7 @@ describe('PointMappingsPage', () => {
   it('saves edited point mapping drafts from the editor drawer', async () => {
     const onSavePoint = vi.fn().mockResolvedValue(undefined);
 
-    render(<PointMappingsPage onSavePoint={onSavePoint} />);
+    render(<PointMappingsPage selectedEdgeId="edge-dev" onSavePoint={onSavePoint} />);
 
     fireEvent.change(screen.getByLabelText('地址值'), {
       target: { value: '40002' },
@@ -28,12 +28,16 @@ describe('PointMappingsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
 
     await waitFor(() => {
-      expect(onSavePoint).toHaveBeenCalledWith('pressure', {
-        addressKind: 'holding_register',
-        addressValue: '40002',
-        intervalMs: 2000,
-        unit: 'MPa',
-      });
+      expect(onSavePoint).toHaveBeenCalledWith(
+        'edge-dev',
+        'pressure',
+        {
+          addressKind: 'holding_register',
+          addressValue: '40002',
+          intervalMs: 2000,
+          unit: 'MPa',
+        },
+      );
     });
     expect(screen.getByText('草稿已保存')).toBeInTheDocument();
   });
@@ -41,7 +45,7 @@ describe('PointMappingsPage', () => {
   it('switches the editor to the selected point row before saving', async () => {
     const onSavePoint = vi.fn().mockResolvedValue(undefined);
 
-    render(<PointMappingsPage onSavePoint={onSavePoint} />);
+    render(<PointMappingsPage selectedEdgeId="edge-dev" onSavePoint={onSavePoint} />);
 
     fireEvent.click(screen.getByRole('button', { name: '选择点位 running' }));
     expect(screen.getByText('编辑点位 running')).toBeInTheDocument();
@@ -52,12 +56,57 @@ describe('PointMappingsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
 
     await waitFor(() => {
-      expect(onSavePoint).toHaveBeenCalledWith('running', {
-        addressKind: 'coil',
-        addressValue: '00002',
-        intervalMs: 1000,
-        unit: '-',
-      });
+      expect(onSavePoint).toHaveBeenCalledWith(
+        'edge-dev',
+        'running',
+        {
+          addressKind: 'coil',
+          addressValue: '00002',
+          intervalMs: 1000,
+          unit: '-',
+        },
+      );
+    });
+  });
+
+  it('switches the active edge before editing point mappings', async () => {
+    const onSelectEdge = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <PointMappingsPage
+        edges={[
+          {
+            edgeId: 'edge-dev',
+            displayName: '研发实验室边端',
+            site: '研发/实验室',
+            runtimeId: 'runtime-dev',
+            status: '健康',
+            resources: '18% / 42% / 61%',
+            heartbeat: '8 秒前',
+            capabilities: ['protocol:modbus-tcp'],
+          },
+          {
+            edgeId: 'edge-prod',
+            displayName: '产线边端',
+            site: '制造/一线',
+            runtimeId: 'runtime-prod',
+            status: '健康',
+            resources: '22% / 48% / 66%',
+            heartbeat: '6 秒前',
+            capabilities: ['protocol:opcua'],
+          },
+        ]}
+        selectedEdgeId="edge-dev"
+        onSelectEdge={onSelectEdge}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('配置边端'), {
+      target: { value: 'edge-prod' },
+    });
+
+    await waitFor(() => {
+      expect(onSelectEdge).toHaveBeenCalledWith('edge-prod');
     });
   });
 });

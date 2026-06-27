@@ -6,6 +6,7 @@ import {
   fetchAuditRecords,
   fetchCollectionTasks,
   fetchDeviceModels,
+  fetchEdgePointMappings,
   fetchEdgeNodes,
   fetchPointMappings,
   fetchProtocolConnections,
@@ -13,7 +14,7 @@ import {
   fetchRuntimeStatus,
   fetchSummary,
   publishLatestRelease,
-  savePointMapping,
+  saveEdgePointMapping,
 } from './api/client';
 import type {
   AlgorithmResponse,
@@ -33,6 +34,7 @@ vi.mock('./api/client', () => ({
   fetchAuditRecords: vi.fn(),
   fetchCollectionTasks: vi.fn(),
   fetchDeviceModels: vi.fn(),
+  fetchEdgePointMappings: vi.fn(),
   fetchEdgeNodes: vi.fn(),
   fetchPointMappings: vi.fn(),
   fetchProtocolConnections: vi.fn(),
@@ -40,10 +42,11 @@ vi.mock('./api/client', () => ({
   fetchRuntimeStatus: vi.fn(),
   fetchSummary: vi.fn(),
   publishLatestRelease: vi.fn(),
-  savePointMapping: vi.fn(),
+  saveEdgePointMapping: vi.fn(),
 }));
 
 const basePoint: PointMappingResponse = {
+  edgeId: 'edge-dev',
   pointId: 'pressure',
   pointName: '泵出口压力',
   deviceId: 'pump-1',
@@ -235,12 +238,13 @@ describe('App cloud console write actions', () => {
     vi.mocked(fetchDeviceModels).mockResolvedValue(deviceModels);
     vi.mocked(fetchProtocolConnections).mockResolvedValue(protocolConnections);
     vi.mocked(fetchPointMappings).mockResolvedValue([basePoint]);
+    vi.mocked(fetchEdgePointMappings).mockResolvedValue([basePoint]);
     vi.mocked(fetchCollectionTasks).mockResolvedValue(collectionTasks);
     vi.mocked(fetchAlgorithms).mockResolvedValue(algorithms);
     vi.mocked(fetchReleaseList).mockResolvedValue(initialReleaseList);
     vi.mocked(fetchRuntimeStatus).mockResolvedValue(runtimeStatus);
     vi.mocked(fetchAuditRecords).mockResolvedValue(auditRecords);
-    vi.mocked(savePointMapping).mockResolvedValue({
+    vi.mocked(saveEdgePointMapping).mockResolvedValue({
       ...basePoint,
       address: 'holding_register:40002',
       interval: '2000ms',
@@ -249,15 +253,14 @@ describe('App cloud console write actions', () => {
   });
 
   it('saves point drafts through the API and refreshes point mappings', async () => {
-    vi.mocked(fetchPointMappings)
-      .mockResolvedValueOnce([basePoint])
-      .mockResolvedValueOnce([
-        {
-          ...basePoint,
-          address: 'holding_register:40002',
-          interval: '2000ms',
-        },
-      ]);
+    vi.mocked(fetchPointMappings).mockResolvedValueOnce([basePoint]);
+    vi.mocked(fetchEdgePointMappings).mockResolvedValueOnce([
+      {
+        ...basePoint,
+        address: 'holding_register:40002',
+        interval: '2000ms',
+      },
+    ]);
 
     render(<App />);
 
@@ -273,12 +276,16 @@ describe('App cloud console write actions', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
 
     await waitFor(() => {
-      expect(savePointMapping).toHaveBeenCalledWith('pressure', {
-        addressKind: 'holding_register',
-        addressValue: '40002',
-        intervalMs: 2000,
-        unit: 'MPa',
-      });
+      expect(saveEdgePointMapping).toHaveBeenCalledWith(
+        'edge-dev',
+        'pressure',
+        {
+          addressKind: 'holding_register',
+          addressValue: '40002',
+          intervalMs: 2000,
+          unit: 'MPa',
+        },
+      );
     });
     expect(await screen.findByText('holding_register:40002')).toBeInTheDocument();
     expect(screen.getByText('草稿已保存')).toBeInTheDocument();

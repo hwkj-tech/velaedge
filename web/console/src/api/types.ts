@@ -4,6 +4,7 @@ export interface SummaryResponse {
 }
 
 export interface PointMappingResponse {
+  edgeId: string;
   pointId: string;
   pointName: string;
   deviceId: string;

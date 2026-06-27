@@ -50,6 +50,14 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/api/point-mappings", get(point_mappings))
         .route("/api/point-mappings/{point_id}", put(save_point_mapping))
+        .route(
+            "/api/edges/{edge_id}/point-mappings",
+            get(edge_point_mappings),
+        )
+        .route(
+            "/api/edges/{edge_id}/point-mappings/{point_id}",
+            put(save_edge_point_mapping),
+        )
         .route("/api/releases", get(releases).post(create_release))
         .route(
             "/api/releases/publish",
@@ -102,6 +110,24 @@ async fn point_mappings(State(state): State<AppState>) -> Json<Vec<PointMappingR
     }
 
     Json(points)
+}
+
+async fn edge_point_mappings(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<Json<Vec<PointMappingResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let package = store
+        .latest_config_package_for_edge(&edge_id)
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+    let mut points = package
+        .point_mappings
+        .iter()
+        .map(|mapping| point_mapping_response(package, mapping))
+        .collect::<Vec<_>>();
+    points.sort_by(|left, right| left.point_id.cmp(&right.point_id));
+
+    Ok(Json(points))
 }
 
 async fn edge_nodes(State(state): State<AppState>) -> Json<Vec<EdgeNodeResponse>> {
@@ -397,10 +423,27 @@ async fn save_point_mapping(
     Path(point_id): Path<String>,
     Json(request): Json<SavePointMappingRequest>,
 ) -> Result<Json<PointMappingResponse>, (StatusCode, Json<ErrorResponse>)> {
+    save_point_mapping_for_edge_id(state, "edge-dev", point_id, request).await
+}
+
+async fn save_edge_point_mapping(
+    State(state): State<AppState>,
+    Path((edge_id, point_id)): Path<(String, String)>,
+    Json(request): Json<SavePointMappingRequest>,
+) -> Result<Json<PointMappingResponse>, (StatusCode, Json<ErrorResponse>)> {
+    save_point_mapping_for_edge_id(state, &edge_id, point_id, request).await
+}
+
+async fn save_point_mapping_for_edge_id(
+    state: AppState,
+    edge_id: &str,
+    point_id: String,
+    request: SavePointMappingRequest,
+) -> Result<Json<PointMappingResponse>, (StatusCode, Json<ErrorResponse>)> {
     let (package, response) = {
         let mut store = state.store.lock().expect("store mutex poisoned");
         let mut package = store
-            .latest_config_package_for_edge("edge-dev")
+            .latest_config_package_for_edge(edge_id)
             .cloned()
             .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
         package.version = next_version(&package.version);
@@ -738,6 +781,7 @@ pub struct SavePointMappingRequest {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PointMappingResponse {
+    pub edge_id: String,
     pub point_id: String,
     pub point_name: String,
     pub device_id: String,
@@ -792,6 +836,7 @@ fn point_mapping_response(
         .collect::<BTreeMap<_, _>>();
 
     PointMappingResponse {
+        edge_id: package.edge_id.clone(),
         point_id: mapping.point_id.clone(),
         point_name: mapping.point_id.clone(),
         device_id: mapping.device_id.clone(),

@@ -6,12 +6,14 @@ import {
   fetchCollectionTasks,
   fetchDeviceModels,
   fetchEdgeNodes,
+  fetchEdgePointMappings,
   fetchPointMappings,
   fetchProtocolConnections,
   fetchReleaseList,
   fetchRuntimeStatus,
   fetchSummary,
   publishLatestRelease,
+  saveEdgePointMapping,
   savePointMapping,
 } from './client';
 
@@ -35,6 +37,7 @@ describe('fetchPointMappings', () => {
       ok: true,
       json: async () => [
         {
+          edgeId: 'edge-dev',
           pointId: 'pressure',
           pointName: 'pressure',
           deviceId: 'pump-1',
@@ -60,6 +63,44 @@ describe('fetchPointMappings', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/point-mappings');
     expect(result[0].pointId).toBe('pressure');
     expect(result[0].address).toBe('holding_register:40001');
+  });
+});
+
+describe('fetchEdgePointMappings', () => {
+  it('loads point mappings for the selected edge from the API', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          edgeId: 'edge-dev',
+          pointId: 'running',
+          pointName: 'running',
+          deviceId: 'pump-1',
+          deviceModel: 'pump',
+          semanticTelemetry: 'pump.running',
+          protocol: 'Modbus TCP',
+          connection: 'modbus-line-a',
+          address: 'coil:00001',
+          valueType: 'bool',
+          readWrite: 'read',
+          unit: '-',
+          scale: '1',
+          interval: '1000ms',
+          range: '-',
+          qualityRule: 'timeout->bad',
+          status: '启用',
+        },
+      ],
+    });
+
+    const result = await fetchEdgePointMappings(
+      'edge-dev',
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/point-mappings');
+    expect(result[0].edgeId).toBe('edge-dev');
+    expect(result[0].pointId).toBe('running');
   });
 });
 
@@ -226,6 +267,48 @@ describe('savePointMapping', () => {
       headers: { 'content-type': 'application/json' },
       method: 'PUT',
     });
+    expect(result.address).toBe('holding_register:40002');
+  });
+});
+
+describe('saveEdgePointMapping', () => {
+  it('sends an editable point mapping draft to the selected edge API', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        edgeId: 'edge-dev',
+        pointId: 'pressure/main',
+        address: 'holding_register:40002',
+        interval: '2000ms',
+      }),
+    });
+
+    const result = await saveEdgePointMapping(
+      'edge-dev',
+      'pressure/main',
+      {
+        addressKind: 'holding_register',
+        addressValue: '40002',
+        intervalMs: 2000,
+        unit: 'MPa',
+      },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/edges/edge-dev/point-mappings/pressure%2Fmain',
+      {
+        body: JSON.stringify({
+          addressKind: 'holding_register',
+          addressValue: '40002',
+          intervalMs: 2000,
+          unit: 'MPa',
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'PUT',
+      },
+    );
+    expect(result.edgeId).toBe('edge-dev');
     expect(result.address).toBe('holding_register:40002');
   });
 });

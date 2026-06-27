@@ -75,7 +75,83 @@ async fn point_mappings_endpoint_returns_seeded_config_points() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(payload[0]["pointId"], "pressure");
+    assert_eq!(payload[0]["edgeId"], "edge-dev");
     assert_eq!(payload[0]["address"], "holding_register:40001");
+}
+
+#[tokio::test]
+async fn edge_point_mappings_endpoint_returns_selected_edge_points() {
+    let response = app(AppState::default())
+        .oneshot(
+            Request::get("/api/edges/edge-dev/point-mappings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload[0]["edgeId"], "edge-dev");
+    assert_eq!(payload[0]["pointId"], "pressure");
+    assert_eq!(payload[0]["address"], "holding_register:40001");
+}
+
+#[tokio::test]
+async fn edge_point_mapping_save_updates_selected_edge_draft() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/edges/edge-dev/point-mappings/running")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "addressKind": "coil",
+                        "addressValue": "00009",
+                        "intervalMs": 1500,
+                        "unit": "-"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(saved["edgeId"], "edge-dev");
+    assert_eq!(saved["pointId"], "running");
+    assert_eq!(saved["address"], "coil:00009");
+    assert_eq!(saved["interval"], "1500ms");
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/point-mappings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let points: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let running = points
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|point| point["pointId"] == "running")
+        .unwrap();
+    assert_eq!(running["address"], "coil:00009");
+    assert_eq!(running["interval"], "1500ms");
 }
 
 #[tokio::test]

@@ -1,13 +1,18 @@
 import { useEffect, useState } from 'react';
 import { FileInput, Plus, ShieldCheck } from 'lucide-react';
 
-import type { PointMappingResponse, SavePointMappingRequest } from '../api/types';
+import type {
+  EdgeNodeResponse,
+  PointMappingResponse,
+  SavePointMappingRequest,
+} from '../api/types';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { Drawer } from '../components/Drawer';
 import './PointMappingsPage.css';
 
 const fallbackPoints: PointMappingResponse[] = [
   {
+    edgeId: 'edge-dev',
     pointId: 'pressure',
     pointName: '泵出口压力',
     deviceId: 'pump-1',
@@ -26,6 +31,7 @@ const fallbackPoints: PointMappingResponse[] = [
     status: '启用',
   },
   {
+    edgeId: 'edge-dev',
     pointId: 'running',
     pointName: '运行状态',
     deviceId: 'pump-1',
@@ -45,15 +51,35 @@ const fallbackPoints: PointMappingResponse[] = [
   },
 ];
 
+const fallbackEdges: EdgeNodeResponse[] = [
+  {
+    edgeId: 'edge-dev',
+    displayName: '研发实验室边端',
+    site: '研发/实验室',
+    runtimeId: 'runtime-dev',
+    status: '健康',
+    resources: '18.5% / 42% / 61%',
+    heartbeat: '8 秒前',
+    capabilities: ['protocol:modbus-tcp'],
+  },
+];
+
 export function PointMappingsPage({
+  edges = fallbackEdges,
   onSavePoint,
+  onSelectEdge,
   points = fallbackPoints,
+  selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
 }: {
+  edges?: EdgeNodeResponse[];
   onSavePoint?: (
+    edgeId: string,
     pointId: string,
     request: SavePointMappingRequest,
   ) => Promise<void> | void;
+  onSelectEdge?: (edgeId: string) => Promise<void> | void;
   points?: PointMappingResponse[];
+  selectedEdgeId?: string;
 }) {
   const [selectedPointId, setSelectedPointId] = useState(
     () => points[0]?.pointId ?? fallbackPoints[0].pointId,
@@ -67,6 +93,8 @@ export function PointMappingsPage({
     'idle',
   );
   const columns = pointColumns(selectedPoint.pointId, setSelectedPointId);
+  const activeEdge =
+    edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
 
   useEffect(() => {
     setForm(pointToEditorForm(selectedPoint));
@@ -81,12 +109,17 @@ export function PointMappingsPage({
     }
   }, [points, selectedPointId]);
 
+  const handleSelectEdge = async (edgeId: string) => {
+    setSaveState('idle');
+    await onSelectEdge?.(edgeId);
+  };
+
   const handleSave = async () => {
     const request = formToSaveRequest(form);
     setSaveState('saving');
 
     try {
-      await onSavePoint?.(selectedPoint.pointId, request);
+      await onSavePoint?.(selectedEdgeId, selectedPoint.pointId, request);
       setSaveState('saved');
     } catch {
       setSaveState('error');
@@ -103,6 +136,22 @@ export function PointMappingsPage({
           </p>
         </div>
         <div className="toolbar">
+          <label className="release-edge-select">
+            <span>配置边端</span>
+            <select
+              aria-label="配置边端"
+              value={selectedEdgeId}
+              onChange={(event) => {
+                void handleSelectEdge(event.target.value);
+              }}
+            >
+              {edges.map((edge) => (
+                <option key={edge.edgeId} value={edge.edgeId}>
+                  {edge.displayName} / {edge.edgeId}
+                </option>
+              ))}
+            </select>
+          </label>
           <button className="secondary-button" type="button">
             <FileInput size={15} aria-hidden="true" />
             批量导入
@@ -122,7 +171,9 @@ export function PointMappingsPage({
         <section className="panel point-table-panel">
           <div className="panel-header">
             <h3>点位配置表</h3>
-            <span>{points.length} 个启用点位</span>
+            <span>
+              {activeEdge.displayName} · {points.length} 个启用点位
+            </span>
           </div>
           <DataTable columns={columns} getRowKey={(row) => row.pointId} rows={points} />
         </section>
