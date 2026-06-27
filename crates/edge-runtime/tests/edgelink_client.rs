@@ -57,7 +57,10 @@ async fn runtime_client_sends_hello_and_accepts_cloud_ack() {
         panic!("expected hello payload");
     };
     assert_eq!(payload.runtime_version, "0.1.0");
-    assert_eq!(payload.applied_config_version.as_deref(), Some("2026.06.26-001"));
+    assert_eq!(
+        payload.applied_config_version.as_deref(),
+        Some("2026.06.26-001")
+    );
 }
 
 async fn read_one_message(stream: &mut TcpStream) -> EdgeLinkMessage {

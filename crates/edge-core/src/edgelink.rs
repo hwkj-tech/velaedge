@@ -289,6 +289,8 @@ pub fn decode_edgelink_frame(frame: &[u8]) -> Result<EdgeLinkMessage, EdgeLinkFr
         });
     }
 
-    serde_json::from_slice(&frame[EDGELINK_FRAME_HEADER_BYTES..EDGELINK_FRAME_HEADER_BYTES + payload_len])
-        .map_err(EdgeLinkFrameError::InvalidJson)
+    serde_json::from_slice(
+        &frame[EDGELINK_FRAME_HEADER_BYTES..EDGELINK_FRAME_HEADER_BYTES + payload_len],
+    )
+    .map_err(EdgeLinkFrameError::InvalidJson)
 }

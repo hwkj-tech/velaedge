@@ -10,7 +10,10 @@ fn edgelink_frame_round_trips_hello_message() {
         "runtime-dev",
         "0.1.0",
         Some("2026.06.26-001".to_string()),
-        vec!["protocol:modbus-tcp".to_string(), "local-store:rocksdb".to_string()],
+        vec![
+            "protocol:modbus-tcp".to_string(),
+            "local-store:rocksdb".to_string(),
+        ],
     );
 
     let encoded = encode_edgelink_frame(&message).expect("frame should encode");
@@ -26,7 +29,10 @@ fn edgelink_frame_round_trips_hello_message() {
         panic!("expected hello payload");
     };
     assert_eq!(hello.runtime_version, "0.1.0");
-    assert_eq!(hello.applied_config_version.as_deref(), Some("2026.06.26-001"));
+    assert_eq!(
+        hello.applied_config_version.as_deref(),
+        Some("2026.06.26-001")
+    );
     assert_eq!(hello.capabilities.len(), 2);
 }
 
