@@ -57,4 +57,32 @@ describe('ReleasesPage', () => {
       expect(onPublish).toHaveBeenCalledWith('edge-lab');
     });
   });
+
+  it('runs release toolbar actions through handlers', async () => {
+    const onShowDiff = vi.fn().mockResolvedValue({
+      message: '配置差异摘要已生成',
+    });
+    const onValidateRelease = vi.fn().mockResolvedValue({
+      status: '已通过',
+    });
+
+    render(
+      <ReleasesPage
+        onShowDiff={onShowDiff}
+        onValidateRelease={onValidateRelease}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '查看差异' }));
+    await waitFor(() => {
+      expect(onShowDiff).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('配置差异摘要已生成')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '校验草稿' }));
+    await waitFor(() => {
+      expect(onValidateRelease).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('发布草稿校验 已通过')).toBeInTheDocument();
+  });
 });

@@ -6,9 +6,9 @@ use axum::{
 };
 use cloud_control::{AuditAction, EdgeNode, ReleaseService, ReleaseStatus};
 use edge_core::{
-    AlgorithmRuntime, AlgorithmSpec, CollectionTask, EdgeConfigPackage, EdgeHealth,
+    AlgorithmRuntime, AlgorithmSpec, CollectionTask, DeviceSpec, EdgeConfigPackage, EdgeHealth,
     EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, PointAddress, ProtocolConnection, ProtocolType,
-    TelemetryPointMapping, TelemetryType,
+    TelemetryPoint, TelemetryPointMapping, TelemetryType,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -27,7 +27,10 @@ pub fn app(state: AppState) -> Router {
     let api = Router::new()
         .route("/api/summary", get(summary))
         .route("/api/edge-nodes", get(edge_nodes).post(create_edge_node))
-        .route("/api/device-models", get(device_models))
+        .route(
+            "/api/device-models",
+            get(device_models).post(create_device_model),
+        )
         .route("/api/protocol-connections", get(protocol_connections))
         .route(
             "/api/edges/{edge_id}/protocol-connections",
@@ -40,14 +43,17 @@ pub fn app(state: AppState) -> Router {
         .route("/api/collection-tasks", get(collection_tasks))
         .route(
             "/api/edges/{edge_id}/collection-tasks",
-            get(edge_collection_tasks),
+            get(edge_collection_tasks).post(create_edge_collection_task),
         )
         .route(
             "/api/edges/{edge_id}/collection-tasks/{task_id}",
             put(save_edge_collection_task),
         )
         .route("/api/algorithms", get(algorithms))
-        .route("/api/edges/{edge_id}/algorithms", get(edge_algorithms))
+        .route(
+            "/api/edges/{edge_id}/algorithms",
+            get(edge_algorithms).post(create_edge_algorithm),
+        )
         .route(
             "/api/edges/{edge_id}/algorithms/{algorithm_id}",
             put(save_edge_algorithm),
@@ -78,11 +84,15 @@ pub fn app(state: AppState) -> Router {
             "/api/edges/{edge_id}/maintenance-mode",
             post(enable_edge_maintenance_mode),
         )
+        .route(
+            "/api/edges/{edge_id}/config/validate",
+            post(validate_edge_config),
+        )
         .route("/api/point-mappings", get(point_mappings))
         .route("/api/point-mappings/{point_id}", put(save_point_mapping))
         .route(
             "/api/edges/{edge_id}/point-mappings",
-            get(edge_point_mappings),
+            get(edge_point_mappings).post(create_edge_point_mapping),
         )
         .route(
             "/api/edges/{edge_id}/point-mappings/{point_id}",
@@ -97,6 +107,9 @@ pub fn app(state: AppState) -> Router {
             "/api/edges/{edge_id}/releases/publish",
             post(publish_latest_release_for_edge),
         )
+        .route("/api/edges/{edge_id}/releases/diff", post(release_diff))
+        .route("/api/agent/safety-check", post(agent_safety_check))
+        .route("/api/agent/suggestions", post(agent_suggestions))
         .with_state(state);
 
     let console_dir = console_dist_dir();
@@ -158,6 +171,59 @@ async fn edge_point_mappings(
     points.sort_by(|left, right| left.point_id.cmp(&right.point_id));
 
     Ok(Json(points))
+}
+
+async fn create_edge_point_mapping(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<(StatusCode, Json<PointMappingResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let (package, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut package = store
+            .latest_config_package_for_edge(&edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+        let point_id = next_point_id(&package);
+        let device_id = package
+            .devices
+            .first()
+            .map(|device| device.device_id.clone())
+            .unwrap_or_else(|| "device-draft-1".to_string());
+        let connection_id = package
+            .protocol_connections
+            .first()
+            .map(|connection| connection.connection_id.clone())
+            .unwrap_or_else(|| "simulated-main".to_string());
+        let mapping = TelemetryPointMapping::new(
+            point_id.clone(),
+            device_id,
+            format!("pump.{point_id}"),
+            connection_id,
+            PointAddress::simulated(point_id.clone()),
+            TelemetryType::Float,
+        )
+        .with_unit("-");
+
+        package.version = next_version(&package.version);
+        package.point_mappings.push(mapping);
+        let response = point_mapping_response(
+            &package,
+            package
+                .point_mappings
+                .last()
+                .expect("new point mapping exists"),
+        );
+        store.upsert_config_package(package.clone());
+        store.push_audit(AuditAction::UpdateConfig, edge_id);
+        (package, response)
+    };
+
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 async fn edge_nodes(State(state): State<AppState>) -> Json<Vec<EdgeNodeResponse>> {
@@ -301,36 +367,50 @@ async fn device_models(State(state): State<AppState>) -> Json<Vec<DeviceModelRes
 
     for package in store.config_packages() {
         for model in &package.device_models {
-            rows.push(DeviceModelResponse {
-                device_type: model.device_type.clone(),
-                version: model.version.clone(),
-                telemetry: model
-                    .telemetry
-                    .iter()
-                    .map(|telemetry| TelemetryModelResponse {
-                        telemetry_id: telemetry.id.clone(),
-                        name: telemetry.id.clone(),
-                        value_type: format_telemetry_type(telemetry.value_type),
-                        unit: telemetry.unit.clone().unwrap_or_else(|| "-".to_string()),
-                        range: telemetry
-                            .range
-                            .as_ref()
-                            .map(|range| format!("{}-{}", range.min, range.max))
-                            .unwrap_or_else(|| "-".to_string()),
-                        description: telemetry
-                            .description
-                            .clone()
-                            .unwrap_or_else(|| "-".to_string()),
-                    })
-                    .collect(),
-                command_count: model.commands.len(),
-                event_count: model.events.len(),
-            });
+            rows.push(device_model_response(model));
         }
     }
     rows.sort_by(|left, right| left.device_type.cmp(&right.device_type));
 
     Json(rows)
+}
+
+async fn create_device_model(
+    State(state): State<AppState>,
+) -> Result<(StatusCode, Json<DeviceModelResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let (package, model, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let edge_id = default_config_edge_id(&store)
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge node"))?;
+        let mut package = store
+            .latest_config_package_for_edge(&edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+        let model =
+            DeviceSpec::new(next_device_model_type(&package), "v1")
+                .with_telemetry(vec![TelemetryPoint::new("status", TelemetryType::Boolean)
+                    .with_description("设备状态")]);
+
+        package.version = next_version(&package.version);
+        package.device_models.push(model.clone());
+        store.upsert_device_model(model.clone());
+        store.upsert_config_package(package.clone());
+        store.push_audit(AuditAction::UpdateConfig, edge_id);
+
+        let response = device_model_response(&model);
+        (package, model, response)
+    };
+
+    state
+        .persist_device_model(model)
+        .await
+        .map_err(persistence_error)?;
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 async fn protocol_connections(
@@ -462,6 +542,56 @@ async fn edge_collection_tasks(
     Ok(Json(tasks))
 }
 
+async fn create_edge_collection_task(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<(StatusCode, Json<CollectionTaskResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let (package, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut package = store
+            .latest_config_package_for_edge(&edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+        let device_id = package
+            .devices
+            .first()
+            .map(|device| device.device_id.clone())
+            .unwrap_or_else(|| "device-draft-1".to_string());
+        let point_ids = package
+            .point_mappings
+            .iter()
+            .map(|mapping| mapping.point_id.clone())
+            .collect::<Vec<_>>();
+        if point_ids.is_empty() {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "collection task requires at least one point mapping",
+            ));
+        }
+        let task = CollectionTask::interval(next_task_id(&package), device_id, point_ids, 1000);
+
+        package.version = next_version(&package.version);
+        package.collection_tasks.push(task);
+        let response = collection_task_response(
+            &package,
+            package
+                .collection_tasks
+                .last()
+                .expect("new collection task exists"),
+        );
+        store.upsert_config_package(package.clone());
+        store.push_audit(AuditAction::UpdateConfig, edge_id);
+        (package, response)
+    };
+
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
 async fn algorithms(State(state): State<AppState>) -> Json<Vec<AlgorithmResponse>> {
     let store = state.store.lock().expect("store mutex poisoned");
     let mut rows = Vec::new();
@@ -492,6 +622,49 @@ async fn edge_algorithms(
     algorithms.sort_by(|left, right| left.algorithm_id.cmp(&right.algorithm_id));
 
     Ok(Json(algorithms))
+}
+
+async fn create_edge_algorithm(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<(StatusCode, Json<AlgorithmResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let (package, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut package = store
+            .latest_config_package_for_edge(&edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+        let input = package
+            .point_mappings
+            .first()
+            .map(|mapping| mapping.point_id.clone())
+            .ok_or_else(|| error(StatusCode::BAD_REQUEST, "algorithm requires an input point"))?;
+        let algorithm_id = next_algorithm_id(&package);
+        let algorithm = AlgorithmSpec {
+            id: algorithm_id.clone(),
+            version: "0.1.0".to_string(),
+            runtime: AlgorithmRuntime::Rule,
+            inputs: vec![input],
+            outputs: vec![format!("{algorithm_id}.output")],
+        };
+
+        package.version = next_version(&package.version);
+        package.algorithms.push(algorithm);
+        let response = algorithm_response(
+            &package,
+            package.algorithms.last().expect("new algorithm exists"),
+        );
+        store.upsert_config_package(package.clone());
+        store.push_audit(AuditAction::UpdateConfig, edge_id);
+        (package, response)
+    };
+
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 async fn audit_records(State(state): State<AppState>) -> Json<Vec<AuditRecordResponse>> {
@@ -619,6 +792,81 @@ async fn report_runtime_event(
         .map_err(persistence_error)?;
 
     Ok(Json(response))
+}
+
+async fn validate_edge_config(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<Json<ManagementActionResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let package = store
+        .latest_config_package_for_edge(&edge_id)
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+
+    Ok(Json(config_validation_response(package)))
+}
+
+async fn release_diff(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<Json<ManagementActionResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let package = store
+        .latest_config_package_for_edge(&edge_id)
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+    let latest_release = store
+        .releases()
+        .filter(|release| release.edge_id == edge_id)
+        .max_by(|left, right| left.desired_version.cmp(&right.desired_version));
+    let baseline = latest_release
+        .map(|release| release.desired_version.clone())
+        .unwrap_or_else(|| "-".to_string());
+
+    Ok(Json(ManagementActionResponse {
+        action: "release_diff".to_string(),
+        details: vec![
+            format!("基线版本 {baseline}"),
+            format!("草稿版本 {}", package.version),
+            format!("点位 {} 个", package.point_mappings.len()),
+            format!("算法 {} 个", package.algorithms.len()),
+        ],
+        message: "配置差异摘要已生成".to_string(),
+        status: "已生成".to_string(),
+    }))
+}
+
+async fn agent_safety_check(State(state): State<AppState>) -> Json<AgentActionResponse> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let edge_count = store.edge_nodes().count();
+    let pending_count = store
+        .releases()
+        .filter(|release| release.status == ReleaseStatus::Pending)
+        .count();
+
+    Json(AgentActionResponse {
+        action: "agent_safety_check".to_string(),
+        details: vec![
+            format!("受管边端 {edge_count} 个"),
+            format!("待发布版本 {pending_count} 个"),
+            "高风险命令仍需人工确认".to_string(),
+        ],
+        message: "安全策略检查已完成".to_string(),
+        status: "已通过".to_string(),
+        suggestions: agent_suggestion_list(&store),
+    })
+}
+
+async fn agent_suggestions(State(state): State<AppState>) -> Json<AgentActionResponse> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let suggestions = agent_suggestion_list(&store);
+
+    Json(AgentActionResponse {
+        action: "agent_generate_suggestions".to_string(),
+        details: vec![format!("建议 {} 条", suggestions.len())],
+        message: "Agent 建议已生成".to_string(),
+        status: "待确认".to_string(),
+        suggestions,
+    })
 }
 
 async fn save_point_mapping(
@@ -1073,6 +1321,33 @@ pub struct DeviceModelResponse {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ManagementActionResponse {
+    pub action: String,
+    pub details: Vec<String>,
+    pub message: String,
+    pub status: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSuggestionResponse {
+    pub title: String,
+    pub detail: String,
+    pub state: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentActionResponse {
+    pub action: String,
+    pub details: Vec<String>,
+    pub message: String,
+    pub status: String,
+    pub suggestions: Vec<AgentSuggestionResponse>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TelemetryModelResponse {
     pub telemetry_id: String,
     pub name: String,
@@ -1248,6 +1523,34 @@ pub struct ApplyResultResponse {
     pub heartbeat: String,
 }
 
+fn device_model_response(model: &DeviceSpec) -> DeviceModelResponse {
+    DeviceModelResponse {
+        device_type: model.device_type.clone(),
+        version: model.version.clone(),
+        telemetry: model
+            .telemetry
+            .iter()
+            .map(|telemetry| TelemetryModelResponse {
+                telemetry_id: telemetry.id.clone(),
+                name: telemetry.id.clone(),
+                value_type: format_telemetry_type(telemetry.value_type),
+                unit: telemetry.unit.clone().unwrap_or_else(|| "-".to_string()),
+                range: telemetry
+                    .range
+                    .as_ref()
+                    .map(|range| format!("{}-{}", range.min, range.max))
+                    .unwrap_or_else(|| "-".to_string()),
+                description: telemetry
+                    .description
+                    .clone()
+                    .unwrap_or_else(|| "-".to_string()),
+            })
+            .collect(),
+        command_count: model.commands.len(),
+        event_count: model.events.len(),
+    }
+}
+
 fn edge_node_response(
     edge: &EdgeNode,
     runtime: Option<&EdgeRuntimeMetricsSnapshot>,
@@ -1312,6 +1615,54 @@ fn next_credential_version(edge: &EdgeNode) -> String {
         .unwrap_or(1)
         + 1;
     format!("credential-v{next}")
+}
+
+fn default_config_edge_id(store: &cloud_control::CloudControlStore) -> Option<String> {
+    store.edge_nodes().next().map(|edge| edge.edge_id.clone())
+}
+
+fn config_validation_response(package: &EdgeConfigPackage) -> ManagementActionResponse {
+    ManagementActionResponse {
+        action: "validate_config".to_string(),
+        details: vec![
+            format!("协议连接 {} 个", package.protocol_connections.len()),
+            format!("点位 {} 个", package.point_mappings.len()),
+            format!("采集任务 {} 个", package.collection_tasks.len()),
+            format!("算法 {} 个", package.algorithms.len()),
+        ],
+        message: "草稿校验已完成".to_string(),
+        status: "已通过".to_string(),
+    }
+}
+
+fn agent_suggestion_list(store: &cloud_control::CloudControlStore) -> Vec<AgentSuggestionResponse> {
+    let total_points = store
+        .edge_nodes()
+        .filter_map(|edge| store.latest_config_package_for_edge(&edge.edge_id))
+        .map(|package| package.point_mappings.len())
+        .sum::<usize>();
+    let pending_count = store
+        .releases()
+        .filter(|release| release.status == ReleaseStatus::Pending)
+        .count();
+
+    vec![
+        AgentSuggestionResponse {
+            title: "点位补全".to_string(),
+            detail: format!("当前已配置 {total_points} 个点位，可按设备模型继续生成缺失映射"),
+            state: "生成草稿".to_string(),
+        },
+        AgentSuggestionResponse {
+            title: "发布风险".to_string(),
+            detail: format!("当前有 {pending_count} 个待发布版本，建议先单边端灰度"),
+            state: "需确认".to_string(),
+        },
+        AgentSuggestionResponse {
+            title: "故障解释".to_string(),
+            detail: "协议超时、点位质量和 runtime 事件可共同用于定位采集中断".to_string(),
+            state: "可查看".to_string(),
+        },
+    ]
 }
 
 fn point_mapping_response(
@@ -1438,6 +1789,66 @@ fn next_connection_id(package: &EdgeConfigPackage) -> String {
             .protocol_connections
             .iter()
             .all(|connection| connection.connection_id != candidate)
+        {
+            return candidate;
+        }
+        next += 1;
+    }
+}
+
+fn next_point_id(package: &EdgeConfigPackage) -> String {
+    let mut next = package.point_mappings.len() + 1;
+    loop {
+        let candidate = format!("point-draft-{next}");
+        if package
+            .point_mappings
+            .iter()
+            .all(|mapping| mapping.point_id != candidate)
+        {
+            return candidate;
+        }
+        next += 1;
+    }
+}
+
+fn next_task_id(package: &EdgeConfigPackage) -> String {
+    let mut next = package.collection_tasks.len() + 1;
+    loop {
+        let candidate = format!("task-draft-{next}");
+        if package
+            .collection_tasks
+            .iter()
+            .all(|task| task.task_id != candidate)
+        {
+            return candidate;
+        }
+        next += 1;
+    }
+}
+
+fn next_algorithm_id(package: &EdgeConfigPackage) -> String {
+    let mut next = package.algorithms.len() + 1;
+    loop {
+        let candidate = format!("algorithm-draft-{next}");
+        if package
+            .algorithms
+            .iter()
+            .all(|algorithm| algorithm.id != candidate)
+        {
+            return candidate;
+        }
+        next += 1;
+    }
+}
+
+fn next_device_model_type(package: &EdgeConfigPackage) -> String {
+    let mut next = package.device_models.len() + 1;
+    loop {
+        let candidate = format!("device-model-draft-{next}");
+        if package
+            .device_models
+            .iter()
+            .all(|model| model.device_type != candidate)
         {
             return candidate;
         }

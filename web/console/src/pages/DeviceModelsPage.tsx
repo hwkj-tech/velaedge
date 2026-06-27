@@ -32,11 +32,32 @@ const fallbackDeviceModels: DeviceModelResponse[] = [
 
 export function DeviceModelsPage({
   deviceModels = fallbackDeviceModels,
+  onCreateDeviceModel,
 }: {
   deviceModels?: DeviceModelResponse[];
+  onCreateDeviceModel?: () => Promise<DeviceModelResponse> | DeviceModelResponse;
 }) {
   const activeModel = deviceModels[0] ?? fallbackDeviceModels[0];
   const [toolbarMessage, setToolbarMessage] = useState('');
+  const [actionState, setActionState] = useState<'idle' | 'creating'>('idle');
+
+  const handleCreateDeviceModel = async () => {
+    setActionState('creating');
+    setToolbarMessage('');
+
+    try {
+      const created = await onCreateDeviceModel?.();
+      setToolbarMessage(
+        created
+          ? `已创建设备模型草稿 ${created.deviceType}`
+          : '已创建设备模型草稿',
+      );
+    } catch {
+      setToolbarMessage('创建设备模型失败');
+    } finally {
+      setActionState('idle');
+    }
+  };
 
   return (
     <div className="page-stack">
@@ -55,11 +76,14 @@ export function DeviceModelsPage({
           ) : null}
           <button
             className="primary-button"
-            onClick={() => setToolbarMessage('已创建设备模型草稿')}
+            disabled={actionState === 'creating'}
+            onClick={() => {
+              void handleCreateDeviceModel();
+            }}
             type="button"
           >
             <Plus size={15} aria-hidden="true" />
-            新建设备模型
+            {actionState === 'creating' ? '创建中' : '新建设备模型'}
           </button>
         </div>
       </section>

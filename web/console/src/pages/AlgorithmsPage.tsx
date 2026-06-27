@@ -4,6 +4,7 @@ import { Plus, ShieldCheck } from 'lucide-react';
 import type {
   AlgorithmResponse,
   EdgeNodeResponse,
+  ManagementActionResponse,
   SaveAlgorithmRequest,
 } from '../api/types';
 import { Drawer } from '../components/Drawer';
@@ -49,6 +50,8 @@ export function AlgorithmsPage({
   algorithms = fallbackAlgorithms,
   edges = fallbackEdges,
   mode = 'configure',
+  onAssessRisk,
+  onCreateAlgorithm,
   onSaveAlgorithm,
   onSelectEdge,
   selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
@@ -56,6 +59,12 @@ export function AlgorithmsPage({
   algorithms?: AlgorithmResponse[];
   edges?: EdgeNodeResponse[];
   mode?: 'configure' | 'list';
+  onAssessRisk?: (
+    edgeId: string,
+  ) => Promise<ManagementActionResponse> | ManagementActionResponse;
+  onCreateAlgorithm?: (
+    edgeId: string,
+  ) => Promise<AlgorithmResponse> | AlgorithmResponse;
   onSaveAlgorithm?: (
     edgeId: string,
     algorithmId: string,
@@ -76,6 +85,9 @@ export function AlgorithmsPage({
     'idle',
   );
   const [toolbarMessage, setToolbarMessage] = useState('');
+  const [actionState, setActionState] = useState<
+    'idle' | 'assessing' | 'creating'
+  >('idle');
   const isConfigureMode = mode === 'configure';
   const activeEdge =
     edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
@@ -117,6 +129,38 @@ export function AlgorithmsPage({
     }
   };
 
+  const handleAssessRisk = async () => {
+    setActionState('assessing');
+    setToolbarMessage('');
+
+    try {
+      const result = await onAssessRisk?.(selectedEdgeId);
+      setToolbarMessage(
+        result?.status ? `算法风险评估 ${result.status}` : '算法风险评估已完成',
+      );
+    } catch {
+      setToolbarMessage('算法风险评估失败');
+    } finally {
+      setActionState('idle');
+    }
+  };
+
+  const handleCreateAlgorithm = async () => {
+    setActionState('creating');
+    setToolbarMessage('');
+
+    try {
+      const created = await onCreateAlgorithm?.(selectedEdgeId);
+      setToolbarMessage(
+        created ? `已创建算法草稿 ${created.algorithmId}` : '已创建算法草稿',
+      );
+    } catch {
+      setToolbarMessage('创建算法草稿失败');
+    } finally {
+      setActionState('idle');
+    }
+  };
+
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -152,19 +196,25 @@ export function AlgorithmsPage({
             <>
               <button
                 className="secondary-button"
-                onClick={() => setToolbarMessage('算法风险评估已完成')}
+                disabled={actionState === 'assessing'}
+                onClick={() => {
+                  void handleAssessRisk();
+                }}
                 type="button"
               >
                 <ShieldCheck size={15} aria-hidden="true" />
-                风险评估
+                {actionState === 'assessing' ? '评估中' : '风险评估'}
               </button>
               <button
                 className="primary-button"
-                onClick={() => setToolbarMessage('已创建算法草稿')}
+                disabled={actionState === 'creating'}
+                onClick={() => {
+                  void handleCreateAlgorithm();
+                }}
                 type="button"
               >
                 <Plus size={15} aria-hidden="true" />
-                新建算法
+                {actionState === 'creating' ? '创建中' : '新建算法'}
               </button>
             </>
           ) : null}

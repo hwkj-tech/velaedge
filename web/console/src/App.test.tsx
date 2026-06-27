@@ -2,7 +2,11 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  createAlgorithmDraft,
   createEdgeNode,
+  createCollectionTaskDraft,
+  createDeviceModelDraft,
+  createPointMappingDraft,
   fetchAlgorithms,
   fetchAuditRecords,
   fetchCollectionTasks,
@@ -17,7 +21,11 @@ import {
   fetchReleaseList,
   fetchRuntimeStatus,
   fetchSummary,
+  generateAgentSuggestions,
   publishLatestRelease,
+  runAgentSafetyCheck,
+  runConfigValidation,
+  runReleaseDiff,
   createEdgeProtocolConnection,
   rotateEdgeCredentials,
   enableEdgeMaintenanceMode,
@@ -43,7 +51,11 @@ import type {
 import App from './App';
 
 vi.mock('./api/client', () => ({
+  createAlgorithmDraft: vi.fn(),
   createEdgeNode: vi.fn(),
+  createCollectionTaskDraft: vi.fn(),
+  createDeviceModelDraft: vi.fn(),
+  createPointMappingDraft: vi.fn(),
   fetchAlgorithms: vi.fn(),
   fetchAuditRecords: vi.fn(),
   fetchCollectionTasks: vi.fn(),
@@ -58,7 +70,11 @@ vi.mock('./api/client', () => ({
   fetchReleaseList: vi.fn(),
   fetchRuntimeStatus: vi.fn(),
   fetchSummary: vi.fn(),
+  generateAgentSuggestions: vi.fn(),
   publishLatestRelease: vi.fn(),
+  runAgentSafetyCheck: vi.fn(),
+  runConfigValidation: vi.fn(),
+  runReleaseDiff: vi.fn(),
   createEdgeProtocolConnection: vi.fn(),
   rotateEdgeCredentials: vi.fn(),
   enableEdgeMaintenanceMode: vi.fn(),
@@ -169,6 +185,23 @@ const deviceModels: DeviceModelResponse[] = [
   },
 ];
 
+const createdDeviceModel: DeviceModelResponse = {
+  commandCount: 0,
+  deviceType: 'device-model-draft-2',
+  eventCount: 0,
+  telemetry: [
+    {
+      description: '设备状态',
+      name: 'status',
+      range: '-',
+      telemetryId: 'status',
+      unit: '-',
+      valueType: 'bool',
+    },
+  ],
+  version: 'v1',
+};
+
 const protocolConnections: ProtocolConnectionResponse[] = [
   {
     edgeId: 'edge-dev',
@@ -205,6 +238,19 @@ const collectionTasks: CollectionTaskResponse[] = [
   },
 ];
 
+const createdPoint: PointMappingResponse = {
+  ...basePoint,
+  address: 'simulated:point-draft-2',
+  pointId: 'point-draft-2',
+  pointName: 'point-draft-2',
+  semanticTelemetry: 'pump.point-draft-2',
+};
+
+const createdCollectionTask: CollectionTaskResponse = {
+  ...collectionTasks[0],
+  taskId: 'task-draft-2',
+};
+
 const algorithms: AlgorithmResponse[] = [
   {
     edgeId: 'edge-dev',
@@ -220,6 +266,16 @@ const algorithms: AlgorithmResponse[] = [
     validation: '已通过',
   },
 ];
+
+const createdAlgorithm: AlgorithmResponse = {
+  ...algorithms[0],
+  algorithmId: 'algorithm-draft-2',
+  inputIds: ['pressure'],
+  inputs: 'pressure',
+  outputIds: ['algorithm-draft-2.output'],
+  outputs: 'algorithm-draft-2.output',
+  runtime: 'Rule',
+};
 
 const auditRecords: AuditRecordResponse[] = [
   {
@@ -306,6 +362,42 @@ describe('App cloud console write actions', () => {
     vi.mocked(fetchReleaseList).mockResolvedValue(initialReleaseList);
     vi.mocked(fetchRuntimeStatus).mockResolvedValue(runtimeStatus);
     vi.mocked(fetchAuditRecords).mockResolvedValue(auditRecords);
+    vi.mocked(createAlgorithmDraft).mockResolvedValue(createdAlgorithm);
+    vi.mocked(createCollectionTaskDraft).mockResolvedValue(createdCollectionTask);
+    vi.mocked(createDeviceModelDraft).mockResolvedValue(createdDeviceModel);
+    vi.mocked(createPointMappingDraft).mockResolvedValue(createdPoint);
+    vi.mocked(generateAgentSuggestions).mockResolvedValue({
+      action: 'agent_generate_suggestions',
+      details: ['建议 3 条'],
+      message: 'Agent 建议已生成',
+      status: '待确认',
+      suggestions: [
+        {
+          detail: '根据 pump@v1 模型发现缺少 flow_rate 映射',
+          state: '生成草稿',
+          title: '点位补全',
+        },
+      ],
+    });
+    vi.mocked(runAgentSafetyCheck).mockResolvedValue({
+      action: 'agent_safety_check',
+      details: ['危险命令需要人工确认'],
+      message: '安全策略检查已完成',
+      status: '已通过',
+      suggestions: [],
+    });
+    vi.mocked(runConfigValidation).mockResolvedValue({
+      action: 'validate_config',
+      details: ['协议连接 1 个'],
+      message: '草稿校验已完成',
+      status: '已通过',
+    });
+    vi.mocked(runReleaseDiff).mockResolvedValue({
+      action: 'release_diff',
+      details: ['新增 1 个配置项'],
+      message: '配置差异摘要已生成',
+      status: '已生成',
+    });
     vi.mocked(saveEdgePointMapping).mockResolvedValue({
       ...basePoint,
       address: 'holding_register:40002',
@@ -685,6 +777,152 @@ describe('App cloud console write actions', () => {
     await waitFor(() => {
       expect(screen.getAllByText('2026.06.26-002').length).toBeGreaterThan(0);
     });
+  });
+
+  it('runs dashboard quick actions through real API clients', async () => {
+    vi.mocked(fetchEdgeNodes)
+      .mockResolvedValueOnce(edgeNodes)
+      .mockResolvedValueOnce([...edgeNodes, registeredEdgeNode]);
+    vi.mocked(fetchSummary)
+      .mockResolvedValueOnce({
+        edge_count: 1,
+        pending_release_count: 0,
+      })
+      .mockResolvedValueOnce({
+        edge_count: 2,
+        pending_release_count: 0,
+      });
+
+    render(<App />);
+    expect(await screen.findByText('运行总览')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '注册边端' }));
+    await waitFor(() => {
+      expect(createEdgeNode).toHaveBeenCalledWith({
+        displayName: '新边端注册草稿',
+        site: '待分配',
+      });
+    });
+    expect(await screen.findByText('已注册边端草稿 edge-draft-2')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '创建点位' }));
+    await waitFor(() => {
+      expect(createPointMappingDraft).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('已创建点位草稿 point-draft-2')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '发布配置' }));
+    await waitFor(() => {
+      expect(publishLatestRelease).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('已创建发布，等待 runtime 回报')).toBeInTheDocument();
+  });
+
+  it('creates point, task, and algorithm drafts from edge configuration pages', async () => {
+    vi.mocked(fetchEdgePointMappings)
+      .mockResolvedValueOnce([basePoint])
+      .mockResolvedValueOnce([basePoint])
+      .mockResolvedValueOnce([basePoint, createdPoint]);
+    vi.mocked(fetchEdgeCollectionTasks)
+      .mockResolvedValueOnce(collectionTasks)
+      .mockResolvedValueOnce(collectionTasks)
+      .mockResolvedValueOnce([...collectionTasks, createdCollectionTask]);
+    vi.mocked(fetchEdgeAlgorithms)
+      .mockResolvedValueOnce(algorithms)
+      .mockResolvedValueOnce(algorithms)
+      .mockResolvedValueOnce([...algorithms, createdAlgorithm]);
+
+    render(<App />);
+    await openEdgeConfiguration();
+
+    fireEvent.click(screen.getByRole('button', { name: /点位配置/ }));
+    expect(await screen.findByText('holding_register:40001')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '新建点位' }));
+    await waitFor(() => {
+      expect(createPointMappingDraft).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('point-draft-2')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /采集任务/ }));
+    expect(
+      await screen.findByRole('button', { name: '选择任务 pump-main' }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '新建任务' }));
+    await waitFor(() => {
+      expect(createCollectionTaskDraft).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('task-draft-2')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /算法配置/ }));
+    expect(
+      await screen.findByRole('button', { name: '选择算法 pump-anomaly-v1' }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '新建算法' }));
+    await waitFor(() => {
+      expect(createAlgorithmDraft).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('algorithm-draft-2')).toBeInTheDocument();
+  });
+
+  it('runs validation and release diff actions through API clients', async () => {
+    render(<App />);
+    await openEdgeConfiguration();
+
+    fireEvent.click(screen.getByRole('button', { name: /点位配置/ }));
+    expect(await screen.findByText('holding_register:40001')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '校验草稿' }));
+    await waitFor(() => {
+      expect(runConfigValidation).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('点位草稿校验 已通过')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /配置发布/ }));
+    expect(
+      await screen.findByRole('heading', { name: '配置发布', level: 2 }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '查看差异' }));
+    await waitFor(() => {
+      expect(runReleaseDiff).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('配置差异摘要已生成')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '校验草稿' }));
+    await waitFor(() => {
+      expect(runConfigValidation).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('发布草稿校验 已通过')).toBeInTheDocument();
+  });
+
+  it('creates device model drafts and runs agent actions through API clients', async () => {
+    vi.mocked(fetchDeviceModels)
+      .mockResolvedValueOnce(deviceModels)
+      .mockResolvedValueOnce([...deviceModels, createdDeviceModel]);
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /设备模型/ }));
+    expect(await screen.findByText('pump@v1 遥测定义')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '新建设备模型' }));
+    await waitFor(() => {
+      expect(createDeviceModelDraft).toHaveBeenCalledOnce();
+    });
+    expect(
+      await screen.findByText('已创建设备模型草稿 device-model-draft-2'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Agent 助手/ }));
+    expect(await screen.findByText('Agent 辅助管理')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '安全策略' }));
+    await waitFor(() => {
+      expect(runAgentSafetyCheck).toHaveBeenCalledOnce();
+    });
+    expect(await screen.findByText('安全策略检查 已通过')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '生成建议' }));
+    await waitFor(() => {
+      expect(generateAgentSuggestions).toHaveBeenCalledOnce();
+    });
+    expect(await screen.findByText('Agent 建议已生成 1 条')).toBeInTheDocument();
   });
 
   it('loads runtime status into the runtime monitoring page', async () => {

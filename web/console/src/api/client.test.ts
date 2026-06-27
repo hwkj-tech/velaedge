@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  createAlgorithmDraft,
   createEdgeNode,
+  createDeviceModelDraft,
+  createCollectionTaskDraft,
+  createPointMappingDraft,
   createEdgeProtocolConnection,
   enableEdgeMaintenanceMode,
+  generateAgentSuggestions,
   fetchAlgorithms,
   fetchAuditRecords,
   fetchCollectionTasks,
@@ -18,6 +23,9 @@ import {
   fetchReleaseList,
   fetchRuntimeStatus,
   fetchSummary,
+  runAgentSafetyCheck,
+  runConfigValidation,
+  runReleaseDiff,
   publishLatestRelease,
   rotateEdgeCredentials,
   saveEdgeCollectionTask,
@@ -546,6 +554,115 @@ describe('createEdgeProtocolConnection', () => {
       },
     );
     expect(result.connectionId).toBe('connection-draft-2');
+  });
+});
+
+describe('draft creation clients', () => {
+  it('creates point, collection task, algorithm, and device model drafts through APIs', async () => {
+    const payloads: Record<string, unknown> = {
+      '/api/edges/edge-dev/point-mappings': {
+        edgeId: 'edge-dev',
+        pointId: 'point-draft-3',
+      },
+      '/api/edges/edge-dev/collection-tasks': {
+        edgeId: 'edge-dev',
+        taskId: 'task-draft-2',
+      },
+      '/api/edges/edge-dev/algorithms': {
+        edgeId: 'edge-dev',
+        algorithmId: 'algorithm-draft-2',
+      },
+      '/api/device-models': {
+        deviceType: 'device-model-draft-2',
+      },
+    };
+    const fetchMock = vi.fn().mockImplementation((path: string) =>
+      Promise.resolve({
+        ok: true,
+        json: async () => payloads[path],
+      }),
+    );
+
+    await expect(
+      createPointMappingDraft('edge-dev', fetchMock as unknown as typeof fetch),
+    ).resolves.toMatchObject({ pointId: 'point-draft-3' });
+    await expect(
+      createCollectionTaskDraft('edge-dev', fetchMock as unknown as typeof fetch),
+    ).resolves.toMatchObject({ taskId: 'task-draft-2' });
+    await expect(
+      createAlgorithmDraft('edge-dev', fetchMock as unknown as typeof fetch),
+    ).resolves.toMatchObject({ algorithmId: 'algorithm-draft-2' });
+    await expect(
+      createDeviceModelDraft(fetchMock as unknown as typeof fetch),
+    ).resolves.toMatchObject({ deviceType: 'device-model-draft-2' });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/point-mappings', {
+      method: 'POST',
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/collection-tasks', {
+      method: 'POST',
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/algorithms', {
+      method: 'POST',
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/device-models', {
+      method: 'POST',
+    });
+  });
+});
+
+describe('management action clients', () => {
+  it('runs validation, release diff, and agent actions through APIs', async () => {
+    const payloads: Record<string, unknown> = {
+      '/api/edges/edge-dev/config/validate': {
+        action: 'validate_config',
+        status: '已通过',
+      },
+      '/api/edges/edge-dev/releases/diff': {
+        action: 'release_diff',
+        message: '配置差异摘要已生成',
+      },
+      '/api/agent/safety-check': {
+        action: 'agent_safety_check',
+        status: '已通过',
+      },
+      '/api/agent/suggestions': {
+        action: 'agent_generate_suggestions',
+        suggestions: [{ title: '点位补全' }],
+      },
+    };
+    const fetchMock = vi.fn().mockImplementation((path: string) =>
+      Promise.resolve({
+        ok: true,
+        json: async () => payloads[path],
+      }),
+    );
+
+    await expect(
+      runConfigValidation('edge-dev', fetchMock as unknown as typeof fetch),
+    ).resolves.toMatchObject({ action: 'validate_config' });
+    await expect(
+      runReleaseDiff('edge-dev', fetchMock as unknown as typeof fetch),
+    ).resolves.toMatchObject({ action: 'release_diff' });
+    await expect(
+      runAgentSafetyCheck(fetchMock as unknown as typeof fetch),
+    ).resolves.toMatchObject({ action: 'agent_safety_check' });
+    await expect(
+      generateAgentSuggestions(fetchMock as unknown as typeof fetch),
+    ).resolves.toMatchObject({ action: 'agent_generate_suggestions' });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/config/validate', {
+      method: 'POST',
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/releases/diff', {
+      method: 'POST',
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/agent/safety-check', {
+      method: 'POST',
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/agent/suggestions', {
+      method: 'POST',
+    });
   });
 });
 

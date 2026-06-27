@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import { Plus, Send, Wrench } from 'lucide-react';
 
-import type { SummaryResponse } from '../api/types';
+import type {
+  EdgeNodeResponse,
+  PointMappingResponse,
+  SummaryResponse,
+} from '../api/types';
 
 const edgeHealth = [
   ['edge-shanghai-01', '上海一厂', '在线', 'v2026.06.26-001', 'v2026.06.26-001', '18 秒前'],
@@ -17,13 +21,68 @@ const events = [
 
 export function DashboardPage({
   loadState,
+  onCreatePoint,
+  onPublish,
+  onRegisterEdge,
   summary,
 }: {
   loadState: 'loading' | 'ready' | 'error';
+  onCreatePoint?: () => Promise<PointMappingResponse> | PointMappingResponse;
+  onPublish?: () => Promise<void> | void;
+  onRegisterEdge?: () => Promise<EdgeNodeResponse> | EdgeNodeResponse;
   summary: SummaryResponse;
 }) {
   const onlineRate = summary.edge_count > 0 ? '66.7%' : '--';
   const [toolbarMessage, setToolbarMessage] = useState('');
+  const [actionState, setActionState] = useState<
+    'idle' | 'registering' | 'creating-point' | 'publishing'
+  >('idle');
+
+  const handleRegisterEdge = async () => {
+    setActionState('registering');
+    setToolbarMessage('');
+
+    try {
+      const created = await onRegisterEdge?.();
+      setToolbarMessage(
+        created ? `已注册边端草稿 ${created.edgeId}` : '已注册边端草稿',
+      );
+    } catch {
+      setToolbarMessage('注册边端失败');
+    } finally {
+      setActionState('idle');
+    }
+  };
+
+  const handleCreatePoint = async () => {
+    setActionState('creating-point');
+    setToolbarMessage('');
+
+    try {
+      const created = await onCreatePoint?.();
+      setToolbarMessage(
+        created ? `已创建点位草稿 ${created.pointId}` : '已创建点位配置草稿',
+      );
+    } catch {
+      setToolbarMessage('创建点位失败');
+    } finally {
+      setActionState('idle');
+    }
+  };
+
+  const handlePublish = async () => {
+    setActionState('publishing');
+    setToolbarMessage('');
+
+    try {
+      await onPublish?.();
+      setToolbarMessage('已创建发布，等待 runtime 回报');
+    } catch {
+      setToolbarMessage('发布配置失败');
+    } finally {
+      setActionState('idle');
+    }
+  };
 
   return (
     <div className="page-stack">
@@ -42,27 +101,36 @@ export function DashboardPage({
           ) : null}
           <button
             className="secondary-button"
-            onClick={() => setToolbarMessage('已创建边端注册草稿')}
+            disabled={actionState === 'registering'}
+            onClick={() => {
+              void handleRegisterEdge();
+            }}
             type="button"
           >
             <Plus size={15} aria-hidden="true" />
-            注册边端
+            {actionState === 'registering' ? '注册中' : '注册边端'}
           </button>
           <button
             className="secondary-button"
-            onClick={() => setToolbarMessage('已创建点位配置草稿')}
+            disabled={actionState === 'creating-point'}
+            onClick={() => {
+              void handleCreatePoint();
+            }}
             type="button"
           >
             <Wrench size={15} aria-hidden="true" />
-            创建点位
+            {actionState === 'creating-point' ? '创建中' : '创建点位'}
           </button>
           <button
             className="primary-button"
-            onClick={() => setToolbarMessage('发布配置流程已准备')}
+            disabled={actionState === 'publishing'}
+            onClick={() => {
+              void handlePublish();
+            }}
             type="button"
           >
             <Send size={15} aria-hidden="true" />
-            发布配置
+            {actionState === 'publishing' ? '发布中' : '发布配置'}
           </button>
         </div>
       </section>

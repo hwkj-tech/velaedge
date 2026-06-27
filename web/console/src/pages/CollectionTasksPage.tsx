@@ -4,6 +4,7 @@ import { Plus, TimerReset } from 'lucide-react';
 import type {
   CollectionTaskResponse,
   EdgeNodeResponse,
+  ManagementActionResponse,
   SaveCollectionTaskRequest,
 } from '../api/types';
 import { Drawer } from '../components/Drawer';
@@ -39,6 +40,8 @@ const fallbackEdges: EdgeNodeResponse[] = [
 export function CollectionTasksPage({
   edges = fallbackEdges,
   mode = 'configure',
+  onCreateTask,
+  onGenerateSchedule,
   onSaveTask,
   onSelectEdge,
   selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
@@ -46,6 +49,12 @@ export function CollectionTasksPage({
 }: {
   edges?: EdgeNodeResponse[];
   mode?: 'configure' | 'list';
+  onCreateTask?: (
+    edgeId: string,
+  ) => Promise<CollectionTaskResponse> | CollectionTaskResponse;
+  onGenerateSchedule?: (
+    edgeId: string,
+  ) => Promise<ManagementActionResponse> | ManagementActionResponse;
   onSaveTask?: (
     edgeId: string,
     taskId: string,
@@ -65,6 +74,9 @@ export function CollectionTasksPage({
     'idle',
   );
   const [toolbarMessage, setToolbarMessage] = useState('');
+  const [actionState, setActionState] = useState<
+    'idle' | 'scheduling' | 'creating'
+  >('idle');
   const isConfigureMode = mode === 'configure';
   const activeEdge =
     edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
@@ -97,6 +109,36 @@ export function CollectionTasksPage({
       setSaveState('saved');
     } catch {
       setSaveState('error');
+    }
+  };
+
+  const handleGenerateSchedule = async () => {
+    setActionState('scheduling');
+    setToolbarMessage('');
+
+    try {
+      const result = await onGenerateSchedule?.(selectedEdgeId);
+      setToolbarMessage(result?.message ?? '调度策略已生成');
+    } catch {
+      setToolbarMessage('调度策略生成失败');
+    } finally {
+      setActionState('idle');
+    }
+  };
+
+  const handleCreateTask = async () => {
+    setActionState('creating');
+    setToolbarMessage('');
+
+    try {
+      const created = await onCreateTask?.(selectedEdgeId);
+      setToolbarMessage(
+        created ? `已创建任务草稿 ${created.taskId}` : '已创建任务草稿',
+      );
+    } catch {
+      setToolbarMessage('创建任务草稿失败');
+    } finally {
+      setActionState('idle');
     }
   };
 
@@ -135,19 +177,25 @@ export function CollectionTasksPage({
             <>
               <button
                 className="secondary-button"
-                onClick={() => setToolbarMessage('调度策略已生成')}
+                disabled={actionState === 'scheduling'}
+                onClick={() => {
+                  void handleGenerateSchedule();
+                }}
                 type="button"
               >
                 <TimerReset size={15} aria-hidden="true" />
-                统一调度策略
+                {actionState === 'scheduling' ? '生成中' : '统一调度策略'}
               </button>
               <button
                 className="primary-button"
-                onClick={() => setToolbarMessage('已创建任务草稿')}
+                disabled={actionState === 'creating'}
+                onClick={() => {
+                  void handleCreateTask();
+                }}
                 type="button"
               >
                 <Plus size={15} aria-hidden="true" />
-                新建任务
+                {actionState === 'creating' ? '创建中' : '新建任务'}
               </button>
             </>
           ) : null}

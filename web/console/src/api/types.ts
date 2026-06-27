@@ -87,6 +87,23 @@ export interface DeviceModelResponse {
   eventCount: number;
 }
 
+export interface ManagementActionResponse {
+  action: string;
+  details: string[];
+  message: string;
+  status: string;
+}
+
+export interface AgentSuggestionResponse {
+  title: string;
+  detail: string;
+  state: string;
+}
+
+export interface AgentActionResponse extends ManagementActionResponse {
+  suggestions: AgentSuggestionResponse[];
+}
+
 export interface ProtocolConnectionResponse {
   edgeId: string;
   connectionId: string;

@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import { GitCompare, Send, ShieldCheck } from 'lucide-react';
 
-import type { EdgeNodeResponse, ReleaseListResponse } from '../api/types';
+import type {
+  EdgeNodeResponse,
+  ManagementActionResponse,
+  ReleaseListResponse,
+} from '../api/types';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import './PointMappingsPage.css';
 
@@ -78,10 +82,18 @@ const applyColumns: Array<DataTableColumn<ReleaseListResponse['applyResults'][nu
 export function ReleasesPage({
   edges = fallbackEdges,
   onPublish,
+  onShowDiff,
+  onValidateRelease,
   releaseList = fallbackReleaseList,
 }: {
   edges?: EdgeNodeResponse[];
   onPublish?: (edgeId: string) => Promise<void> | void;
+  onShowDiff?: (
+    edgeId: string,
+  ) => Promise<ManagementActionResponse> | ManagementActionResponse;
+  onValidateRelease?: (
+    edgeId: string,
+  ) => Promise<ManagementActionResponse> | ManagementActionResponse;
   releaseList?: ReleaseListResponse;
 }) {
   const [selectedEdgeId, setSelectedEdgeId] = useState(
@@ -91,6 +103,9 @@ export function ReleasesPage({
     'idle' | 'publishing' | 'published' | 'error'
   >('idle');
   const [toolbarMessage, setToolbarMessage] = useState('');
+  const [actionState, setActionState] = useState<
+    'idle' | 'diffing' | 'validating'
+  >('idle');
 
   const handlePublish = async () => {
     setPublishState('publishing');
@@ -101,6 +116,36 @@ export function ReleasesPage({
       setPublishState('published');
     } catch {
       setPublishState('error');
+    }
+  };
+
+  const handleShowDiff = async () => {
+    setActionState('diffing');
+    setToolbarMessage('');
+
+    try {
+      const result = await onShowDiff?.(selectedEdgeId);
+      setToolbarMessage(result?.message ?? '配置差异摘要已生成');
+    } catch {
+      setToolbarMessage('配置差异摘要生成失败');
+    } finally {
+      setActionState('idle');
+    }
+  };
+
+  const handleValidateRelease = async () => {
+    setActionState('validating');
+    setToolbarMessage('');
+
+    try {
+      const result = await onValidateRelease?.(selectedEdgeId);
+      setToolbarMessage(
+        result?.status ? `发布草稿校验 ${result.status}` : '发布草稿校验已通过',
+      );
+    } catch {
+      setToolbarMessage('发布草稿校验失败');
+    } finally {
+      setActionState('idle');
     }
   };
 
@@ -121,19 +166,25 @@ export function ReleasesPage({
           ) : null}
           <button
             className="secondary-button"
-            onClick={() => setToolbarMessage('配置差异摘要已生成')}
+            disabled={actionState === 'diffing'}
+            onClick={() => {
+              void handleShowDiff();
+            }}
             type="button"
           >
             <GitCompare size={15} aria-hidden="true" />
-            查看差异
+            {actionState === 'diffing' ? '生成中' : '查看差异'}
           </button>
           <button
             className="secondary-button"
-            onClick={() => setToolbarMessage('发布草稿校验已通过')}
+            disabled={actionState === 'validating'}
+            onClick={() => {
+              void handleValidateRelease();
+            }}
             type="button"
           >
             <ShieldCheck size={15} aria-hidden="true" />
-            校验草稿
+            {actionState === 'validating' ? '校验中' : '校验草稿'}
           </button>
           <label className="release-edge-select">
             <span>发布边端</span>

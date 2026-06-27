@@ -1,4 +1,5 @@
 import type {
+  AgentActionResponse,
   AlgorithmResponse,
   AuditRecordResponse,
   CollectionTaskResponse,
@@ -10,6 +11,7 @@ import type {
   ProtocolConnectionResponse,
   ReleaseListResponse,
   RuntimeStatusResponse,
+  ManagementActionResponse,
   SaveAlgorithmRequest,
   SaveCollectionTaskRequest,
   SavePointMappingRequest,
@@ -95,6 +97,14 @@ export async function fetchDeviceModels(
   return requestJson<DeviceModelResponse[]>('/api/device-models', fetcher);
 }
 
+export async function createDeviceModelDraft(
+  fetcher: typeof fetch = fetch,
+): Promise<DeviceModelResponse> {
+  return requestJson<DeviceModelResponse>('/api/device-models', fetcher, {
+    method: 'POST',
+  });
+}
+
 export async function fetchProtocolConnections(
   fetcher: typeof fetch = fetch,
 ): Promise<ProtocolConnectionResponse[]> {
@@ -114,6 +124,19 @@ export async function fetchEdgeProtocolConnections(
   );
 }
 
+export async function createPointMappingDraft(
+  edgeId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<PointMappingResponse> {
+  return requestJson<PointMappingResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/point-mappings`,
+    fetcher,
+    {
+      method: 'POST',
+    },
+  );
+}
+
 export async function fetchCollectionTasks(
   fetcher: typeof fetch = fetch,
 ): Promise<CollectionTaskResponse[]> {
@@ -130,6 +153,19 @@ export async function fetchEdgeCollectionTasks(
   );
 }
 
+export async function createCollectionTaskDraft(
+  edgeId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<CollectionTaskResponse> {
+  return requestJson<CollectionTaskResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/collection-tasks`,
+    fetcher,
+    {
+      method: 'POST',
+    },
+  );
+}
+
 export async function fetchAlgorithms(
   fetcher: typeof fetch = fetch,
 ): Promise<AlgorithmResponse[]> {
@@ -143,6 +179,19 @@ export async function fetchEdgeAlgorithms(
   return requestJson<AlgorithmResponse[]>(
     `/api/edges/${encodeURIComponent(edgeId)}/algorithms`,
     fetcher,
+  );
+}
+
+export async function createAlgorithmDraft(
+  edgeId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<AlgorithmResponse> {
+  return requestJson<AlgorithmResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/algorithms`,
+    fetcher,
+    {
+      method: 'POST',
+    },
   );
 }
 
@@ -269,6 +318,48 @@ export async function publishLatestRelease(
       method: 'POST',
     },
   );
+}
+
+export async function runConfigValidation(
+  edgeId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ManagementActionResponse> {
+  return requestJson<ManagementActionResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/config/validate`,
+    fetcher,
+    {
+      method: 'POST',
+    },
+  );
+}
+
+export async function runReleaseDiff(
+  edgeId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ManagementActionResponse> {
+  return requestJson<ManagementActionResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/releases/diff`,
+    fetcher,
+    {
+      method: 'POST',
+    },
+  );
+}
+
+export async function runAgentSafetyCheck(
+  fetcher: typeof fetch = fetch,
+): Promise<AgentActionResponse> {
+  return requestJson<AgentActionResponse>('/api/agent/safety-check', fetcher, {
+    method: 'POST',
+  });
+}
+
+export async function generateAgentSuggestions(
+  fetcher: typeof fetch = fetch,
+): Promise<AgentActionResponse> {
+  return requestJson<AgentActionResponse>('/api/agent/suggestions', fetcher, {
+    method: 'POST',
+  });
 }
 
 async function requestJson<T>(

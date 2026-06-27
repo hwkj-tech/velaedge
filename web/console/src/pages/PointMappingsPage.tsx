@@ -3,6 +3,7 @@ import { FileInput, Plus, ShieldCheck } from 'lucide-react';
 
 import type {
   EdgeNodeResponse,
+  ManagementActionResponse,
   PointMappingResponse,
   SavePointMappingRequest,
 } from '../api/types';
@@ -67,19 +68,29 @@ const fallbackEdges: EdgeNodeResponse[] = [
 export function PointMappingsPage({
   edges = fallbackEdges,
   mode = 'configure',
+  onCreatePoint,
+  onImportPoints,
   onSavePoint,
   onSelectEdge,
+  onValidateDraft,
   points = fallbackPoints,
   selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
 }: {
   edges?: EdgeNodeResponse[];
   mode?: 'configure' | 'list';
+  onCreatePoint?: (edgeId: string) => Promise<PointMappingResponse> | PointMappingResponse;
+  onImportPoints?: (
+    edgeId: string,
+  ) => Promise<ManagementActionResponse> | ManagementActionResponse;
   onSavePoint?: (
     edgeId: string,
     pointId: string,
     request: SavePointMappingRequest,
   ) => Promise<void> | void;
   onSelectEdge?: (edgeId: string) => Promise<void> | void;
+  onValidateDraft?: (
+    edgeId: string,
+  ) => Promise<ManagementActionResponse> | ManagementActionResponse;
   points?: PointMappingResponse[];
   selectedEdgeId?: string;
 }) {
@@ -95,6 +106,9 @@ export function PointMappingsPage({
     'idle',
   );
   const [toolbarMessage, setToolbarMessage] = useState('');
+  const [actionState, setActionState] = useState<
+    'idle' | 'importing' | 'validating' | 'creating'
+  >('idle');
   const isConfigureMode = mode === 'configure';
   const columns = pointColumns(
     selectedPoint.pointId,
@@ -135,6 +149,52 @@ export function PointMappingsPage({
     }
   };
 
+  const handleImportPoints = async () => {
+    setActionState('importing');
+    setToolbarMessage('');
+
+    try {
+      const result = await onImportPoints?.(selectedEdgeId);
+      setToolbarMessage(result?.message ?? '批量导入任务已准备');
+    } catch {
+      setToolbarMessage('批量导入失败');
+    } finally {
+      setActionState('idle');
+    }
+  };
+
+  const handleValidateDraft = async () => {
+    setActionState('validating');
+    setToolbarMessage('');
+
+    try {
+      const result = await onValidateDraft?.(selectedEdgeId);
+      setToolbarMessage(
+        result?.status ? `点位草稿校验 ${result.status}` : '点位草稿校验已完成',
+      );
+    } catch {
+      setToolbarMessage('点位草稿校验失败');
+    } finally {
+      setActionState('idle');
+    }
+  };
+
+  const handleCreatePoint = async () => {
+    setActionState('creating');
+    setToolbarMessage('');
+
+    try {
+      const created = await onCreatePoint?.(selectedEdgeId);
+      setToolbarMessage(
+        created ? `已创建点位草稿 ${created.pointId}` : '已创建点位草稿',
+      );
+    } catch {
+      setToolbarMessage('创建点位草稿失败');
+    } finally {
+      setActionState('idle');
+    }
+  };
+
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -170,27 +230,36 @@ export function PointMappingsPage({
             <>
               <button
                 className="secondary-button"
-                onClick={() => setToolbarMessage('批量导入任务已准备')}
+                disabled={actionState === 'importing'}
+                onClick={() => {
+                  void handleImportPoints();
+                }}
                 type="button"
               >
                 <FileInput size={15} aria-hidden="true" />
-                批量导入
+                {actionState === 'importing' ? '导入中' : '批量导入'}
               </button>
               <button
                 className="secondary-button"
-                onClick={() => setToolbarMessage('点位草稿校验已完成')}
+                disabled={actionState === 'validating'}
+                onClick={() => {
+                  void handleValidateDraft();
+                }}
                 type="button"
               >
                 <ShieldCheck size={15} aria-hidden="true" />
-                校验草稿
+                {actionState === 'validating' ? '校验中' : '校验草稿'}
               </button>
               <button
                 className="primary-button"
-                onClick={() => setToolbarMessage('已创建点位草稿')}
+                disabled={actionState === 'creating'}
+                onClick={() => {
+                  void handleCreatePoint();
+                }}
                 type="button"
               >
                 <Plus size={15} aria-hidden="true" />
-                新建点位
+                {actionState === 'creating' ? '创建中' : '新建点位'}
               </button>
             </>
           ) : null}

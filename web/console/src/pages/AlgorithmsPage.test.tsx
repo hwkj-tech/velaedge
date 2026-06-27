@@ -92,13 +92,32 @@ describe('AlgorithmsPage', () => {
     });
   });
 
-  it('shows visible feedback for toolbar actions', () => {
-    render(<AlgorithmsPage selectedEdgeId="edge-dev" />);
+  it('runs algorithm toolbar actions through handlers', async () => {
+    const onAssessRisk = vi.fn().mockResolvedValue({
+      status: '已通过',
+    });
+    const onCreateAlgorithm = vi.fn().mockResolvedValue({
+      algorithmId: 'algorithm-draft-2',
+    });
+
+    render(
+      <AlgorithmsPage
+        selectedEdgeId="edge-dev"
+        onAssessRisk={onAssessRisk}
+        onCreateAlgorithm={onCreateAlgorithm}
+      />,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: '风险评估' }));
-    expect(screen.getByText('算法风险评估已完成')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(onAssessRisk).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('算法风险评估 已通过')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '新建算法' }));
-    expect(screen.getByText('已创建算法草稿')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(onCreateAlgorithm).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('已创建算法草稿 algorithm-draft-2')).toBeInTheDocument();
   });
 });

@@ -80,13 +80,32 @@ describe('CollectionTasksPage', () => {
     });
   });
 
-  it('shows visible feedback for toolbar actions', () => {
-    render(<CollectionTasksPage selectedEdgeId="edge-dev" />);
+  it('runs collection task toolbar actions through handlers', async () => {
+    const onGenerateSchedule = vi.fn().mockResolvedValue({
+      message: '调度策略已生成',
+    });
+    const onCreateTask = vi.fn().mockResolvedValue({
+      taskId: 'task-draft-2',
+    });
+
+    render(
+      <CollectionTasksPage
+        selectedEdgeId="edge-dev"
+        onCreateTask={onCreateTask}
+        onGenerateSchedule={onGenerateSchedule}
+      />,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: '统一调度策略' }));
-    expect(screen.getByText('调度策略已生成')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(onGenerateSchedule).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('调度策略已生成')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '新建任务' }));
-    expect(screen.getByText('已创建任务草稿')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(onCreateTask).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('已创建任务草稿 task-draft-2')).toBeInTheDocument();
   });
 });

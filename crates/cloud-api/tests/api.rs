@@ -373,6 +373,42 @@ async fn edge_node_actions_rotate_credentials_and_enable_maintenance() {
 }
 
 #[tokio::test]
+async fn device_model_create_adds_model_draft_to_console_list() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/device-models")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let model: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(model["deviceType"], "device-model-draft-2");
+    assert_eq!(model["telemetry"][0]["telemetryId"], "status");
+
+    let response = router
+        .oneshot(
+            Request::get("/api/device-models")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let models: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(models
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|model| model["deviceType"] == "device-model-draft-2"));
+}
+
+#[tokio::test]
 async fn edge_algorithms_endpoint_returns_selected_edge_algorithms() {
     let response = app(AppState::default())
         .oneshot(
@@ -393,6 +429,156 @@ async fn edge_algorithms_endpoint_returns_selected_edge_algorithms() {
     assert_eq!(payload[0]["runtime"], "Onnx");
     assert_eq!(payload[0]["inputIds"], json!(["pressure", "running"]));
     assert_eq!(payload[0]["outputIds"], json!(["pump.anomaly_score"]));
+}
+
+#[tokio::test]
+async fn draft_create_endpoints_add_config_resources_for_selected_edge() {
+    let router = app(AppState::default());
+
+    let point_response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/point-mappings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(point_response.status(), StatusCode::CREATED);
+    let body = to_bytes(point_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let point: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(point["pointId"], "point-draft-3");
+    assert_eq!(point["address"], "simulated:point-draft-3");
+
+    let task_response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/collection-tasks")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(task_response.status(), StatusCode::CREATED);
+    let body = to_bytes(task_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let task: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(task["taskId"], "task-draft-2");
+    assert_eq!(
+        task["pointIds"],
+        json!(["pressure", "running", "point-draft-3"])
+    );
+
+    let algorithm_response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/algorithms")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(algorithm_response.status(), StatusCode::CREATED);
+    let body = to_bytes(algorithm_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let algorithm: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(algorithm["algorithmId"], "algorithm-draft-2");
+    assert_eq!(algorithm["runtime"], "Rule");
+
+    let points_response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/point-mappings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(points_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let points: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(points
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|point| point["pointId"] == "point-draft-3"));
+}
+
+#[tokio::test]
+async fn management_action_endpoints_return_computed_results() {
+    let router = app(AppState::default());
+
+    let validation_response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/config/validate")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(validation_response.status(), StatusCode::OK);
+    let body = to_bytes(validation_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let validation: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(validation["action"], "validate_config");
+    assert_eq!(validation["status"], "已通过");
+    assert_eq!(validation["details"][0], "协议连接 1 个");
+
+    let diff_response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/releases/diff")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(diff_response.status(), StatusCode::OK);
+    let body = to_bytes(diff_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let diff: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(diff["action"], "release_diff");
+    assert_eq!(diff["message"], "配置差异摘要已生成");
+
+    let safety_response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/agent/safety-check")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(safety_response.status(), StatusCode::OK);
+    let body = to_bytes(safety_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let safety: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(safety["action"], "agent_safety_check");
+    assert_eq!(safety["status"], "已通过");
+
+    let suggestions_response = router
+        .oneshot(
+            Request::post("/api/agent/suggestions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(suggestions_response.status(), StatusCode::OK);
+    let body = to_bytes(suggestions_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let suggestions: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(suggestions["action"], "agent_generate_suggestions");
+    assert_eq!(suggestions["suggestions"][0]["title"], "点位补全");
 }
 
 #[tokio::test]

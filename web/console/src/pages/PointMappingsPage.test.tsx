@@ -109,4 +109,43 @@ describe('PointMappingsPage', () => {
       expect(onSelectEdge).toHaveBeenCalledWith('edge-prod');
     });
   });
+
+  it('runs point toolbar actions through handlers', async () => {
+    const onCreatePoint = vi.fn().mockResolvedValue({
+      pointId: 'point-draft-3',
+    });
+    const onImportPoints = vi.fn().mockResolvedValue({
+      message: '批量导入已完成',
+    });
+    const onValidateDraft = vi.fn().mockResolvedValue({
+      status: '已通过',
+    });
+
+    render(
+      <PointMappingsPage
+        selectedEdgeId="edge-dev"
+        onCreatePoint={onCreatePoint}
+        onImportPoints={onImportPoints}
+        onValidateDraft={onValidateDraft}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '批量导入' }));
+    await waitFor(() => {
+      expect(onImportPoints).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('批量导入已完成')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '校验草稿' }));
+    await waitFor(() => {
+      expect(onValidateDraft).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('点位草稿校验 已通过')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '新建点位' }));
+    await waitFor(() => {
+      expect(onCreatePoint).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('已创建点位草稿 point-draft-3')).toBeInTheDocument();
+  });
 });

@@ -49,6 +49,13 @@ impl AppState {
         Ok(())
     }
 
+    pub async fn persist_device_model(&self, model: DeviceSpec) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.upsert_device_model(model).await?;
+        }
+        Ok(())
+    }
+
     pub async fn persist_release(&self, release: ReleaseRecord) -> Result<()> {
         if let Some(store) = &self.sqlite_store {
             store.insert_release(release).await?;

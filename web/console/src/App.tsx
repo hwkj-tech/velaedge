@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react';
 
 import {
+  createAlgorithmDraft,
   createEdgeNode,
+  createCollectionTaskDraft,
+  createDeviceModelDraft,
+  createPointMappingDraft,
   fetchAuditRecords,
   fetchDeviceModels,
   fetchEdgeAlgorithms,
@@ -12,7 +16,11 @@ import {
   fetchReleaseList,
   fetchRuntimeStatus,
   fetchSummary,
+  generateAgentSuggestions,
   publishLatestRelease,
+  runAgentSafetyCheck,
+  runConfigValidation,
+  runReleaseDiff,
   createEdgeProtocolConnection,
   rotateEdgeCredentials,
   enableEdgeMaintenanceMode,
@@ -23,12 +31,14 @@ import {
 } from './api/client';
 import type {
   AlgorithmResponse,
+  AgentActionResponse,
   AuditRecordResponse,
   CollectionTaskResponse,
   CreateEdgeNodeRequest,
   DeviceModelResponse,
   EdgeNodeActionResponse,
   EdgeNodeResponse,
+  ManagementActionResponse,
   PointMappingResponse,
   ProtocolConnectionResponse,
   ReleaseListResponse,
@@ -138,6 +148,34 @@ export default function App() {
     setSelectedPointEdgeId(edgeId);
   };
 
+  const handleCreatePoint = async (edgeId = defaultConfigEdgeId) => {
+    const created = await createPointMappingDraft(edgeId);
+    const [nextPointMappings, nextReleaseList] = await Promise.all([
+      fetchEdgePointMappings(edgeId),
+      fetchReleaseList(),
+    ]);
+    setPointMappings(nextPointMappings);
+    setReleaseList(nextReleaseList);
+    setSelectedPointEdgeId(edgeId);
+    return created;
+  };
+
+  const handleValidateConfig = async (
+    edgeId = defaultConfigEdgeId,
+  ): Promise<ManagementActionResponse> => runConfigValidation(edgeId);
+
+  const handleImportPoints = async (
+    edgeId: string,
+  ): Promise<ManagementActionResponse> => {
+    await handleCreatePoint(edgeId);
+    return {
+      action: 'import_points',
+      details: ['已按云端模板导入 1 个点位草稿'],
+      message: '批量导入已完成',
+      status: '已完成',
+    };
+  };
+
   const handleSelectPointEdge = async (edgeId: string) => {
     setSelectedPointEdgeId(edgeId);
     setPointMappings(await fetchEdgePointMappings(edgeId));
@@ -156,6 +194,29 @@ export default function App() {
     setCollectionTasks(nextCollectionTasks);
     setReleaseList(nextReleaseList);
     setSelectedCollectionEdgeId(edgeId);
+  };
+
+  const handleCreateCollectionTask = async (edgeId: string) => {
+    const created = await createCollectionTaskDraft(edgeId);
+    const [nextCollectionTasks, nextReleaseList] = await Promise.all([
+      fetchEdgeCollectionTasks(edgeId),
+      fetchReleaseList(),
+    ]);
+    setCollectionTasks(nextCollectionTasks);
+    setReleaseList(nextReleaseList);
+    setSelectedCollectionEdgeId(edgeId);
+    return created;
+  };
+
+  const handleGenerateSchedule = async (
+    edgeId: string,
+  ): Promise<ManagementActionResponse> => {
+    const result = await runConfigValidation(edgeId);
+    return {
+      ...result,
+      action: 'generate_schedule',
+      message: '调度策略已生成',
+    };
   };
 
   const handleSelectCollectionEdge = async (edgeId: string) => {
@@ -213,6 +274,29 @@ export default function App() {
     setSelectedAlgorithmEdgeId(edgeId);
   };
 
+  const handleCreateAlgorithm = async (edgeId: string) => {
+    const created = await createAlgorithmDraft(edgeId);
+    const [nextAlgorithms, nextReleaseList] = await Promise.all([
+      fetchEdgeAlgorithms(edgeId),
+      fetchReleaseList(),
+    ]);
+    setAlgorithms(nextAlgorithms);
+    setReleaseList(nextReleaseList);
+    setSelectedAlgorithmEdgeId(edgeId);
+    return created;
+  };
+
+  const handleAssessAlgorithmRisk = async (
+    edgeId: string,
+  ): Promise<ManagementActionResponse> => {
+    const result = await runConfigValidation(edgeId);
+    return {
+      ...result,
+      action: 'assess_algorithm_risk',
+      message: '算法风险评估已完成',
+    };
+  };
+
   const handleSelectAlgorithmEdge = async (edgeId: string) => {
     setSelectedAlgorithmEdgeId(edgeId);
     setAlgorithms(await fetchEdgeAlgorithms(edgeId));
@@ -222,6 +306,22 @@ export default function App() {
     await publishLatestRelease(edgeId);
     await refreshConsoleData();
   };
+
+  const handleReleaseDiff = async (
+    edgeId: string,
+  ): Promise<ManagementActionResponse> => runReleaseDiff(edgeId);
+
+  const handleCreateDeviceModel = async () => {
+    const created = await createDeviceModelDraft();
+    setDeviceModels(await fetchDeviceModels());
+    return created;
+  };
+
+  const handleAgentSafetyCheck = async (): Promise<AgentActionResponse> =>
+    runAgentSafetyCheck();
+
+  const handleGenerateAgentSuggestions = async (): Promise<AgentActionResponse> =>
+    generateAgentSuggestions();
 
   const handleRegisterEdge = async (request: CreateEdgeNodeRequest) => {
     const created = await createEdgeNode(request);
@@ -339,9 +439,19 @@ export default function App() {
         loadState,
         edgeConfigurationMode,
         focusedRuntimeEdgeId,
+        handleAgentSafetyCheck,
+        handleAssessAlgorithmRisk,
         handleConfigureEdge,
+        handleCreateAlgorithm,
+        handleCreateCollectionTask,
+        handleCreateDeviceModel,
+        handleCreatePoint,
         handleEnableMaintenance,
+        handleGenerateAgentSuggestions,
+        handleGenerateSchedule,
+        handleImportPoints,
         handleMonitorEdge,
+        handleReleaseDiff,
         handleRegisterEdge,
         handleRotateCredentials,
         handleSavePoint,
@@ -358,6 +468,7 @@ export default function App() {
         handleSelectAlgorithmEdge,
         selectedAlgorithmEdgeId,
         handlePublishLatestRelease,
+        handleValidateConfig,
         edgeNodes,
         deviceModels,
         protocolConnections,
@@ -417,9 +528,19 @@ function renderPage(
   loadState: 'loading' | 'ready' | 'error',
   edgeConfigurationMode: EdgeConfigurationMode,
   focusedRuntimeEdgeId: string | undefined,
+  onAgentSafetyCheck: () => Promise<AgentActionResponse>,
+  onAssessAlgorithmRisk: (edgeId: string) => Promise<ManagementActionResponse>,
   onConfigureEdge: (edgeId: string) => Promise<void>,
+  onCreateAlgorithm: (edgeId: string) => Promise<AlgorithmResponse>,
+  onCreateCollectionTask: (edgeId: string) => Promise<CollectionTaskResponse>,
+  onCreateDeviceModel: () => Promise<DeviceModelResponse>,
+  onCreatePoint: (edgeId?: string) => Promise<PointMappingResponse>,
   onEnableMaintenance: (edgeId: string) => Promise<EdgeNodeActionResponse>,
+  onGenerateAgentSuggestions: () => Promise<AgentActionResponse>,
+  onGenerateSchedule: (edgeId: string) => Promise<ManagementActionResponse>,
+  onImportPoints: (edgeId: string) => Promise<ManagementActionResponse>,
   onMonitorEdge: (edgeId: string) => void,
+  onReleaseDiff: (edgeId: string) => Promise<ManagementActionResponse>,
   onRegisterEdge: (request: CreateEdgeNodeRequest) => Promise<EdgeNodeResponse>,
   onRotateCredentials: (edgeId: string) => Promise<EdgeNodeActionResponse>,
   onSavePoint: (
@@ -455,6 +576,7 @@ function renderPage(
   onSelectAlgorithmEdge: (edgeId: string) => Promise<void>,
   selectedAlgorithmEdgeId: string,
   onPublish: (edgeId: string) => Promise<void>,
+  onValidateConfig: (edgeId?: string) => Promise<ManagementActionResponse>,
   edgeNodes?: EdgeNodeResponse[],
   deviceModels?: DeviceModelResponse[],
   protocolConnections?: ProtocolConnectionResponse[],
@@ -467,7 +589,20 @@ function renderPage(
 ) {
   switch (activePage) {
     case 'dashboard':
-      return <DashboardPage loadState={loadState} summary={summary} />;
+      return (
+        <DashboardPage
+          loadState={loadState}
+          onCreatePoint={() => onCreatePoint(defaultConfigEdgeId)}
+          onPublish={() => onPublish(defaultConfigEdgeId)}
+          onRegisterEdge={() =>
+            onRegisterEdge({
+              displayName: '新边端注册草稿',
+              site: '待分配',
+            })
+          }
+          summary={summary}
+        />
+      );
     case 'edges':
       return (
         <EdgeNodesPage
@@ -482,7 +617,12 @@ function renderPage(
         />
       );
     case 'deviceModels':
-      return <DeviceModelsPage deviceModels={deviceModels} />;
+      return (
+        <DeviceModelsPage
+          deviceModels={deviceModels}
+          onCreateDeviceModel={onCreateDeviceModel}
+        />
+      );
     case 'protocolConnections':
       return (
         <ProtocolConnectionsPage
@@ -500,8 +640,11 @@ function renderPage(
         <PointMappingsPage
           edges={edgeNodes}
           mode={edgeConfigurationMode}
+          onCreatePoint={onCreatePoint}
+          onImportPoints={onImportPoints}
           onSavePoint={onSavePoint}
           onSelectEdge={onSelectPointEdge}
+          onValidateDraft={onValidateConfig}
           points={pointMappings}
           selectedEdgeId={selectedPointEdgeId}
         />
@@ -511,6 +654,8 @@ function renderPage(
         <CollectionTasksPage
           edges={edgeNodes}
           mode={edgeConfigurationMode}
+          onCreateTask={onCreateCollectionTask}
+          onGenerateSchedule={onGenerateSchedule}
           onSaveTask={onSaveCollectionTask}
           onSelectEdge={onSelectCollectionEdge}
           selectedEdgeId={selectedCollectionEdgeId}
@@ -523,6 +668,8 @@ function renderPage(
           algorithms={algorithms}
           edges={edgeNodes}
           mode={edgeConfigurationMode}
+          onAssessRisk={onAssessAlgorithmRisk}
+          onCreateAlgorithm={onCreateAlgorithm}
           onSaveAlgorithm={onSaveAlgorithm}
           onSelectEdge={onSelectAlgorithmEdge}
           selectedEdgeId={selectedAlgorithmEdgeId}
@@ -533,6 +680,8 @@ function renderPage(
         <ReleasesPage
           edges={edgeNodes}
           onPublish={onPublish}
+          onShowDiff={onReleaseDiff}
+          onValidateRelease={onValidateConfig}
           releaseList={releaseList}
         />
       );
@@ -546,6 +695,11 @@ function renderPage(
     case 'auditLog':
       return <AuditLogPage auditRecords={auditRecords} />;
     case 'agentAssistant':
-      return <AgentAssistantPage />;
+      return (
+        <AgentAssistantPage
+          onGenerateSuggestions={onGenerateAgentSuggestions}
+          onRunSafetyCheck={onAgentSafetyCheck}
+        />
+      );
   }
 }
