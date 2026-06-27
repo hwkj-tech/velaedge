@@ -10,7 +10,10 @@ pub mod storage;
 pub mod sync;
 
 pub use config::{AppliedEdgeConfig, ConfiguredSimulatedRuntime};
-pub use edgelink_client::{connect_edgelink_once, EdgeLinkConnectReport};
+pub use edgelink_client::{
+    connect_edgelink_once, connect_edgelink_tls_once, EdgeLinkClientTlsConfig,
+    EdgeLinkConnectReport,
+};
 pub use metrics::SimulatedRuntimeMetricsCollector;
 pub use protocol::{ProtocolAdapter, SimulatedProtocolAdapter};
 pub use reporting::{report_runtime_status_once, HttpRuntimeStatusReporter, RuntimeStatusReporter};
