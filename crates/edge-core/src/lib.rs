@@ -1,6 +1,7 @@
 //! Shared domain contracts for the edge-cloud platform.
 
 pub mod config;
+pub mod edgelink;
 pub mod message;
 pub mod model;
 pub mod observability;
@@ -10,6 +11,11 @@ pub mod shadow;
 pub use config::{
     CollectionTask, DeviceInstance, EdgeConfigPackage, PointAddress, ProtocolConnection,
     ProtocolType, TelemetryPointMapping,
+};
+pub use edgelink::{
+    decode_edgelink_frame, encode_edgelink_frame, EdgeLinkAck, EdgeLinkCommandResult,
+    EdgeLinkConfigReport, EdgeLinkFrameError, EdgeLinkHeartbeat, EdgeLinkHello, EdgeLinkMessage,
+    EdgeLinkMessageKind, EdgeLinkPayload, EDGELINK_MAX_FRAME_BYTES, EDGELINK_SCHEMA_VERSION,
 };
 pub use message::CloudEnvelope;
 pub use model::{
