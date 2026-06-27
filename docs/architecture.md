@@ -22,6 +22,7 @@ Shared contracts used by both edge and cloud:
 - `PolicyEngine`: deterministic safety validation for command candidates.
 - `DeviceShadow`: latest known local device state.
 - `CloudEnvelope`: versioned message wrapper for edge-cloud communication.
+- `EdgeLinkMessage`: private runtime-cloud message contract carried over a runtime-initiated TCP session.
 - `AlgorithmSpec`: descriptor for rule, WASM, ONNX, and Python algorithms.
 - `EdgeConfigPackage`: edge-targeted configuration bundle with devices, protocol connections, point mappings, collection tasks, and algorithms.
 
@@ -56,9 +57,10 @@ Cloud API and console hosting:
 
 - `GET /api/summary`: fleet and release summary for the console.
 - `POST /api/releases`: accepts an `EdgeConfigPackage` and creates a release through `cloud-control`.
+- `gateway`: EdgeLink session handling for runtime-initiated cloud connections.
 - Static fallback: serves `web/console/dist` so the built React console is available from the same service.
 
-The first API state is in-memory and intended for design validation. A database-backed implementation should preserve the same release and audit contracts.
+The first API state is in-memory and intended for design validation. A database-backed implementation should preserve the same release, gateway session, runtime status, and audit contracts.
 
 ### `web/console`
 
@@ -72,10 +74,11 @@ Built-in management UI:
 
 1. Cloud user or Agent creates a command draft.
 2. Cloud converts the draft into `CommandCandidate` and records intent.
-3. Cloud sync sends the command to the target edge node.
-4. Edge validates command id, target device, parameters, ranges, risk, and confirmation requirements.
-5. Edge protocol adapter executes only after policy approval.
-6. Edge records command result locally and reports the result to cloud.
+3. Cloud Control approves and records the command.
+4. Cloud Edge Gateway routes the command over the target runtime's EdgeLink session.
+5. Edge validates command id, target device, parameters, ranges, risk, and confirmation requirements.
+6. Edge protocol adapter executes only after policy approval.
+7. Edge records command result locally and reports the result to cloud.
 
 ## Configuration Lifecycle
 
@@ -86,26 +89,42 @@ Built-in management UI:
 5. Cloud user groups point mappings into collection tasks and attaches algorithms.
 6. Cloud creates a versioned `EdgeConfigPackage`.
 7. Release validation checks references, duplicate ids, and edge target consistency.
-8. Edge runtime receives the desired version, validates locally, applies it, and reports the applied version.
-9. Cloud compares desired and reported versions and records audit events.
+8. Cloud Edge Gateway sends the desired version through EdgeLink after the runtime connects.
+9. Edge runtime validates locally, applies it, and reports the applied version.
+10. Cloud compares desired and reported versions and records audit events.
 
 The cloud console owns authoring, validation, release planning, and auditability. The edge runtime owns real protocol execution, local storage, policy checks, and offline behavior.
 
 ## Storage Direction
 
-The MVP uses JSONL because each line can be inspected, replayed, and tested easily. Production storage can evolve behind the `LocalStore` trait:
+The MVP started with JSONL because each line can be inspected, replayed, and tested easily. The production direction is split by side:
 
-- SQLite for simple relational local history.
-- RocksDB for high-write embedded buffering.
+- Cloud uses SQLite for fleet metadata, config versions, Agent suggestions, audit records, gateway sessions, latest runtime status, and release state.
+- Edge runtime uses RocksDB for desired/applied config, active rule version, local shadow, offline telemetry/events/metrics queues, and idempotency records.
+- JSONL can remain as a development adapter behind `LocalStore`.
 - Parquet for batch-friendly history.
-- Hybrid JSONL plus object upload for low-cost offline capture.
+- Hybrid RocksDB plus object upload for low-cost offline capture.
 
 ## Protocol Direction
 
-Each real protocol adapter should keep low-level driver details isolated:
+Runtime-cloud transport and device protocol adapters are separate concerns.
+
+Runtime-cloud management and data flow:
 
 ```text
-protocol adapter -> normalized TelemetrySample -> edge runtime -> local store + shadow + cloud sync
+edge runtime -> EdgeLink TCP session -> Cloud Edge Gateway -> Cloud Control / Agent / SQLite
+```
+
+- Runtime actively connects to Cloud; edge nodes do not expose an inbound HTTP server.
+- Production transport is EdgeLink over TCP + TLS 1.3 with mTLS certificates.
+- The EdgeLink frame is a 4-byte big-endian length prefix followed by a versioned JSON message.
+- HTTP is retained for the management console/admin API and temporary development compatibility only.
+- Cloud Edge Gateway and Cloud Agent Service may run in one cloud process for the MVP, but their code responsibilities stay separate.
+
+Each real device protocol adapter should keep low-level driver details isolated:
+
+```text
+protocol adapter -> normalized TelemetrySample -> edge runtime -> local store + shadow + EdgeLink
 ```
 
 Recommended first adapters:
@@ -115,7 +134,7 @@ Recommended first adapters:
 - Siemens S7 for PLC integration.
 - Omron FINS for Omron PLCs.
 - BACnet for building automation.
-- MQTT for devices that can publish telemetry directly.
+- MQTT for devices that can publish telemetry directly into a protocol adapter.
 
 ## Agent Direction
 
