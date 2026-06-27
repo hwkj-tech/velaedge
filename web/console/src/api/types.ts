@@ -263,3 +263,47 @@ export interface RuntimeStatusResponse {
   edges: EdgeRuntimeMetricsSnapshot[];
   events: EdgeRuntimeEvent[];
 }
+
+export interface MqttUplinkResponse {
+  sinkId: string;
+  broker: string;
+  clientId: string;
+  topicTemplate: string;
+  qos: number;
+  batchSize: number;
+  flushIntervalMs: number;
+}
+
+export type SaveMqttUplinkRequest = MqttUplinkResponse;
+
+export interface RunDiscoveryRequest {
+  connectionId: string;
+  addressRange: string;
+}
+
+export interface DiscoveredPointResponse {
+  protocolConnectionId: string;
+  address: string;
+  valueType: string;
+  sampleValues: string[];
+  confidence: number;
+}
+
+export interface PointMappingSuggestionResponse {
+  pointId: string;
+  deviceId: string;
+  semanticId: string;
+  protocolConnectionId: string;
+  address: string;
+  valueType: string;
+  unit: string;
+  confidence: number;
+  evidence: string;
+}
+
+export interface DiscoveryReportResponse {
+  jobId: string;
+  protocolConnectionId: string;
+  discoveredPoints: DiscoveredPointResponse[];
+  suggestions: PointMappingSuggestionResponse[];
+}

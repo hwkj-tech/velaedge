@@ -8,7 +8,9 @@ import {
   LayoutDashboard,
   ListChecks,
   RadioTower,
+  Search,
   ScrollText,
+  Send,
   Settings2,
   ShieldCheck,
   type LucideIcon,
@@ -25,6 +27,8 @@ export type PageKey =
   | 'pointMappings'
   | 'collectionTasks'
   | 'algorithms'
+  | 'mqttUplink'
+  | 'discovery'
   | 'releases'
   | 'runtimeStatus'
   | 'auditLog'
@@ -44,6 +48,8 @@ export const navItems: NavItem[] = [
   { key: 'pointMappings', label: '点位配置', icon: Database },
   { key: 'collectionTasks', label: '采集任务', icon: ListChecks },
   { key: 'algorithms', label: '算法配置', icon: Settings2 },
+  { key: 'mqttUplink', label: 'MQTT 上报', icon: Send },
+  { key: 'discovery', label: '点位探测', icon: Search },
   { key: 'releases', label: '配置发布', icon: FileClock },
   { key: 'runtimeStatus', label: '运行状态', icon: Activity },
   { key: 'auditLog', label: '审计日志', icon: ScrollText },

@@ -9,6 +9,8 @@ pub struct EdgeConfigPackage {
     pub device_models: Vec<DeviceSpec>,
     pub devices: Vec<DeviceInstance>,
     pub protocol_connections: Vec<ProtocolConnection>,
+    #[serde(default)]
+    pub mqtt_uplinks: Vec<MqttUplinkConfig>,
     pub point_mappings: Vec<TelemetryPointMapping>,
     pub collection_tasks: Vec<CollectionTask>,
     pub algorithms: Vec<AlgorithmSpec>,
@@ -22,6 +24,7 @@ impl EdgeConfigPackage {
             device_models: Vec::new(),
             devices: Vec::new(),
             protocol_connections: Vec::new(),
+            mqtt_uplinks: Vec::new(),
             point_mappings: Vec::new(),
             collection_tasks: Vec::new(),
             algorithms: Vec::new(),
@@ -35,6 +38,11 @@ impl EdgeConfigPackage {
 
     pub fn with_protocol_connection(mut self, connection: ProtocolConnection) -> Self {
         self.protocol_connections.push(connection);
+        self
+    }
+
+    pub fn with_mqtt_uplink(mut self, uplink: MqttUplinkConfig) -> Self {
+        self.mqtt_uplinks.push(uplink);
         self
     }
 
@@ -69,6 +77,8 @@ pub struct ProtocolConnection {
     pub connection_id: String,
     pub protocol: ProtocolType,
     pub endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial: Option<SerialConnectionSettings>,
 }
 
 impl ProtocolConnection {
@@ -77,6 +87,19 @@ impl ProtocolConnection {
             connection_id: connection_id.into(),
             protocol: ProtocolType::Simulated,
             endpoint: None,
+            serial: None,
+        }
+    }
+
+    pub fn modbus_rtu_serial(
+        connection_id: impl Into<String>,
+        serial: SerialConnectionSettings,
+    ) -> Self {
+        Self {
+            connection_id: connection_id.into(),
+            protocol: ProtocolType::ModbusRtu,
+            endpoint: Some(serial.port.clone()),
+            serial: Some(serial),
         }
     }
 }
@@ -85,9 +108,87 @@ impl ProtocolConnection {
 pub enum ProtocolType {
     Simulated,
     ModbusTcp,
+    ModbusRtu,
+    Dlt645,
+    Iec101,
+    CustomSerial,
     OpcUa,
-    Mqtt,
     SiemensS7,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SerialConnectionSettings {
+    pub port: String,
+    pub baud_rate: u32,
+    pub data_bits: u8,
+    pub stop_bits: u8,
+    pub parity: String,
+}
+
+impl SerialConnectionSettings {
+    pub fn new(port: impl Into<String>, baud_rate: u32) -> Self {
+        Self {
+            port: port.into(),
+            baud_rate,
+            data_bits: 8,
+            stop_bits: 1,
+            parity: "none".to_string(),
+        }
+    }
+
+    pub fn with_data_bits(mut self, data_bits: u8) -> Self {
+        self.data_bits = data_bits;
+        self
+    }
+
+    pub fn with_stop_bits(mut self, stop_bits: u8) -> Self {
+        self.stop_bits = stop_bits;
+        self
+    }
+
+    pub fn with_parity(mut self, parity: impl Into<String>) -> Self {
+        self.parity = parity.into();
+        self
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MqttUplinkConfig {
+    pub sink_id: String,
+    pub broker: String,
+    pub client_id: String,
+    pub topic_template: String,
+    pub qos: u8,
+    pub batch_size: u32,
+    pub flush_interval_ms: u64,
+}
+
+impl MqttUplinkConfig {
+    pub fn velamq(
+        sink_id: impl Into<String>,
+        broker: impl Into<String>,
+        client_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            sink_id: sink_id.into(),
+            broker: broker.into(),
+            client_id: client_id.into(),
+            topic_template: "edge/{edge_id}/device/{device_id}/telemetry".to_string(),
+            qos: 1,
+            batch_size: 100,
+            flush_interval_ms: 1000,
+        }
+    }
+
+    pub fn with_topic_template(mut self, topic_template: impl Into<String>) -> Self {
+        self.topic_template = topic_template.into();
+        self
+    }
+
+    pub fn with_qos(mut self, qos: u8) -> Self {
+        self.qos = qos;
+        self
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -160,6 +261,121 @@ impl PointAddress {
             kind: "holding_register".to_string(),
             value: address.to_string(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DiscoveryReport {
+    pub job_id: String,
+    pub protocol_connection_id: String,
+    pub discovered_points: Vec<DiscoveredPoint>,
+    pub suggestions: Vec<PointMappingSuggestion>,
+}
+
+impl DiscoveryReport {
+    pub fn new(job_id: impl Into<String>, protocol_connection_id: impl Into<String>) -> Self {
+        Self {
+            job_id: job_id.into(),
+            protocol_connection_id: protocol_connection_id.into(),
+            discovered_points: Vec::new(),
+            suggestions: Vec::new(),
+        }
+    }
+
+    pub fn with_point(mut self, point: DiscoveredPoint) -> Self {
+        self.discovered_points.push(point);
+        self
+    }
+
+    pub fn with_suggestion(mut self, suggestion: PointMappingSuggestion) -> Self {
+        self.suggestions.push(suggestion);
+        self
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DiscoveredPoint {
+    pub protocol_connection_id: String,
+    pub address: PointAddress,
+    pub value_type: TelemetryType,
+    pub sample_values: Vec<String>,
+    pub confidence: f64,
+}
+
+impl DiscoveredPoint {
+    pub fn new(
+        protocol_connection_id: impl Into<String>,
+        address: PointAddress,
+        value_type: TelemetryType,
+    ) -> Self {
+        Self {
+            protocol_connection_id: protocol_connection_id.into(),
+            address,
+            value_type,
+            sample_values: Vec::new(),
+            confidence: 0.0,
+        }
+    }
+
+    pub fn with_sample_values(mut self, sample_values: Vec<String>) -> Self {
+        self.sample_values = sample_values;
+        self
+    }
+
+    pub fn with_confidence(mut self, confidence: f64) -> Self {
+        self.confidence = confidence;
+        self
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PointMappingSuggestion {
+    pub point_id: String,
+    pub device_id: String,
+    pub semantic_id: String,
+    pub protocol_connection_id: String,
+    pub address: PointAddress,
+    pub value_type: TelemetryType,
+    pub unit: Option<String>,
+    pub confidence: f64,
+    pub evidence: String,
+}
+
+impl PointMappingSuggestion {
+    pub fn new(
+        point_id: impl Into<String>,
+        device_id: impl Into<String>,
+        semantic_id: impl Into<String>,
+        protocol_connection_id: impl Into<String>,
+        address: PointAddress,
+        value_type: TelemetryType,
+    ) -> Self {
+        Self {
+            point_id: point_id.into(),
+            device_id: device_id.into(),
+            semantic_id: semantic_id.into(),
+            protocol_connection_id: protocol_connection_id.into(),
+            address,
+            value_type,
+            unit: None,
+            confidence: 0.0,
+            evidence: String::new(),
+        }
+    }
+
+    pub fn with_unit(mut self, unit: impl Into<String>) -> Self {
+        self.unit = Some(unit.into());
+        self
+    }
+
+    pub fn with_confidence(mut self, confidence: f64) -> Self {
+        self.confidence = confidence;
+        self
+    }
+
+    pub fn with_evidence(mut self, evidence: impl Into<String>) -> Self {
+        self.evidence = evidence.into();
+        self
     }
 }
 

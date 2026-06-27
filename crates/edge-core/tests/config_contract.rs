@@ -1,6 +1,7 @@
 use edge_core::{
-    CollectionTask, DeviceInstance, EdgeConfigPackage, NumberRange, PointAddress,
-    ProtocolConnection, ProtocolType, TelemetryPointMapping, TelemetryType,
+    CollectionTask, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, NumberRange, PointAddress,
+    ProtocolConnection, ProtocolType, SerialConnectionSettings, TelemetryPointMapping,
+    TelemetryType,
 };
 
 #[test]
@@ -44,4 +45,41 @@ fn modbus_point_address_preserves_register_metadata() {
 
     assert_eq!(address.kind, "holding_register");
     assert_eq!(address.value, "40001");
+}
+
+#[test]
+fn modbus_rtu_connection_preserves_serial_settings() {
+    let serial = SerialConnectionSettings::new("/dev/ttyUSB0", 9600)
+        .with_data_bits(8)
+        .with_stop_bits(1)
+        .with_parity("none");
+    let connection = ProtocolConnection::modbus_rtu_serial("meter-rs485-bus-1", serial.clone());
+
+    assert_eq!(connection.protocol, ProtocolType::ModbusRtu);
+    assert_eq!(connection.endpoint.as_deref(), Some("/dev/ttyUSB0"));
+    assert_eq!(connection.serial.as_ref(), Some(&serial));
+}
+
+#[test]
+fn mqtt_is_modeled_as_northbound_uplink_not_device_protocol() {
+    let protocol_json =
+        serde_json::to_string(&ProtocolType::ModbusRtu).expect("protocol serializes");
+
+    assert_ne!(protocol_json, "\"Mqtt\"");
+
+    let uplink = MqttUplinkConfig::velamq(
+        "velamq-main",
+        "mqtts://velamq.local:8883",
+        "edge-dev-runtime-dev",
+    )
+    .with_topic_template("edge/{edge_id}/device/{device_id}/telemetry")
+    .with_qos(1);
+
+    assert_eq!(uplink.sink_id, "velamq-main");
+    assert_eq!(uplink.broker, "mqtts://velamq.local:8883");
+    assert_eq!(uplink.qos, 1);
+    assert_eq!(
+        uplink.topic_template,
+        "edge/{edge_id}/device/{device_id}/telemetry"
+    );
 }

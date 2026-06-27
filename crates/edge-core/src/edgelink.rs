@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    CommandCandidate, EdgeConfigPackage, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot,
-    TelemetrySample,
+    CommandCandidate, DiscoveryReport, EdgeConfigPackage, EdgeRuntimeEvent,
+    EdgeRuntimeMetricsSnapshot, TelemetrySample,
 };
 
 pub const EDGELINK_SCHEMA_VERSION: &str = "1.0";
@@ -163,6 +163,20 @@ impl EdgeLinkMessage {
         )
     }
 
+    pub fn discovery_report(
+        edge_id: impl Into<String>,
+        runtime_id: impl Into<String>,
+        sequence: u64,
+        report: DiscoveryReport,
+    ) -> Self {
+        Self::new(
+            edge_id,
+            Some(runtime_id.into()),
+            sequence,
+            EdgeLinkPayload::DiscoveryReport(report),
+        )
+    }
+
     pub fn kind(&self) -> EdgeLinkMessageKind {
         self.payload.kind()
     }
@@ -200,6 +214,7 @@ pub enum EdgeLinkMessageKind {
     TelemetryBatch,
     RuntimeMetrics,
     RuntimeEvent,
+    DiscoveryReport,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -216,6 +231,7 @@ pub enum EdgeLinkPayload {
     TelemetryBatch(Vec<TelemetrySample>),
     RuntimeMetrics(EdgeRuntimeMetricsSnapshot),
     RuntimeEvent(EdgeRuntimeEvent),
+    DiscoveryReport(DiscoveryReport),
 }
 
 impl EdgeLinkPayload {
@@ -232,6 +248,7 @@ impl EdgeLinkPayload {
             Self::TelemetryBatch(_) => EdgeLinkMessageKind::TelemetryBatch,
             Self::RuntimeMetrics(_) => EdgeLinkMessageKind::RuntimeMetrics,
             Self::RuntimeEvent(_) => EdgeLinkMessageKind::RuntimeEvent,
+            Self::DiscoveryReport(_) => EdgeLinkMessageKind::DiscoveryReport,
         }
     }
 }

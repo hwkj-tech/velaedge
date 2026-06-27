@@ -16,11 +16,15 @@ import {
   fetchReleaseList,
   fetchRuntimeStatus,
   fetchSummary,
+  fetchMqttUplink,
+  fetchDiscoverySuggestions,
   generateAgentSuggestions,
   publishLatestRelease,
   runAgentSafetyCheck,
   runConfigValidation,
   runReleaseDiff,
+  runDiscovery,
+  saveMqttUplink,
   createEdgeProtocolConnection,
   rotateEdgeCredentials,
   enableEdgeMaintenanceMode,
@@ -35,13 +39,17 @@ import type {
   AuditRecordResponse,
   CollectionTaskResponse,
   CreateEdgeNodeRequest,
+  DiscoveryReportResponse,
   DeviceModelResponse,
   EdgeNodeActionResponse,
   EdgeNodeResponse,
   ManagementActionResponse,
+  MqttUplinkResponse,
   PointMappingResponse,
+  PointMappingSuggestionResponse,
   ProtocolConnectionResponse,
   ReleaseListResponse,
+  RunDiscoveryRequest,
   RuntimeStatusResponse,
   SaveAlgorithmRequest,
   SaveCollectionTaskRequest,
@@ -57,7 +65,9 @@ import { AuditLogPage } from './pages/AuditLogPage';
 import { CollectionTasksPage } from './pages/CollectionTasksPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { DeviceModelsPage } from './pages/DeviceModelsPage';
+import { DiscoveryPage } from './pages/DiscoveryPage';
 import { EdgeNodesPage } from './pages/EdgeNodesPage';
+import { MqttUplinkPage } from './pages/MqttUplinkPage';
 import { PointMappingsPage } from './pages/PointMappingsPage';
 import { ProtocolConnectionsPage } from './pages/ProtocolConnectionsPage';
 import { ReleasesPage } from './pages/ReleasesPage';
@@ -86,6 +96,8 @@ interface ConsoleSnapshot {
   edgeNodes: EdgeNodeResponse[];
   pointMappings: PointMappingResponse[];
   protocolConnections: ProtocolConnectionResponse[];
+  mqttUplink: MqttUplinkResponse;
+  discoverySuggestions: PointMappingSuggestionResponse[];
   releaseList: ReleaseListResponse;
   runtimeStatus: RuntimeStatusResponse;
   summary: SummaryResponse;
@@ -105,6 +117,9 @@ export default function App() {
   const [selectedCollectionEdgeId, setSelectedCollectionEdgeId] = useState('edge-dev');
   const [algorithms, setAlgorithms] = useState<AlgorithmResponse[]>();
   const [selectedAlgorithmEdgeId, setSelectedAlgorithmEdgeId] = useState('edge-dev');
+  const [mqttUplink, setMqttUplink] = useState<MqttUplinkResponse>();
+  const [discoverySuggestions, setDiscoverySuggestions] =
+    useState<PointMappingSuggestionResponse[]>();
   const [releaseList, setReleaseList] = useState<ReleaseListResponse>();
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatusResponse>();
   const [auditRecords, setAuditRecords] = useState<AuditRecordResponse[]>();
@@ -120,6 +135,8 @@ export default function App() {
     setEdgeNodes(snapshot.edgeNodes);
     setDeviceModels(snapshot.deviceModels);
     setProtocolConnections(snapshot.protocolConnections);
+    setMqttUplink(snapshot.mqttUplink);
+    setDiscoverySuggestions(snapshot.discoverySuggestions);
     setPointMappings(snapshot.pointMappings);
     setCollectionTasks(snapshot.collectionTasks);
     setAlgorithms(snapshot.algorithms);
@@ -323,6 +340,25 @@ export default function App() {
   const handleGenerateAgentSuggestions = async (): Promise<AgentActionResponse> =>
     generateAgentSuggestions();
 
+  const handleSaveMqttUplink = async (
+    edgeId: string,
+    request: MqttUplinkResponse,
+  ) => {
+    const saved = await saveMqttUplink(edgeId, request);
+    setMqttUplink(saved);
+    setReleaseList(await fetchReleaseList());
+    return saved;
+  };
+
+  const handleRunDiscovery = async (
+    edgeId: string,
+    request: RunDiscoveryRequest,
+  ): Promise<DiscoveryReportResponse> => {
+    const report = await runDiscovery(edgeId, request);
+    setDiscoverySuggestions(report.suggestions);
+    return report;
+  };
+
   const handleRegisterEdge = async (request: CreateEdgeNodeRequest) => {
     const created = await createEdgeNode(request);
     const [nextEdgeNodes, nextSummary] = await Promise.all([
@@ -352,7 +388,7 @@ export default function App() {
 
   const handleNavigate = (page: PageKey) => {
     setActivePage(page);
-    if (!configurationPages.has(page)) {
+    if (!configurationPages.has(page) || page === activePage) {
       setEdgeConfigurationMode('list');
     }
     if (page !== 'runtimeStatus') {
@@ -448,6 +484,7 @@ export default function App() {
         handleCreatePoint,
         handleEnableMaintenance,
         handleGenerateAgentSuggestions,
+        handleRunDiscovery,
         handleGenerateSchedule,
         handleImportPoints,
         handleMonitorEdge,
@@ -467,11 +504,14 @@ export default function App() {
         handleSaveAlgorithm,
         handleSelectAlgorithmEdge,
         selectedAlgorithmEdgeId,
+        handleSaveMqttUplink,
         handlePublishLatestRelease,
         handleValidateConfig,
         edgeNodes,
         deviceModels,
         protocolConnections,
+        mqttUplink,
+        discoverySuggestions,
         pointMappings,
         collectionTasks,
         algorithms,
@@ -489,6 +529,8 @@ async function loadConsoleSnapshot(): Promise<ConsoleSnapshot> {
     edgeNodes,
     deviceModels,
     protocolConnections,
+    mqttUplink,
+    discoverySuggestions,
     pointMappings,
     collectionTasks,
     algorithms,
@@ -500,6 +542,8 @@ async function loadConsoleSnapshot(): Promise<ConsoleSnapshot> {
     fetchEdgeNodes(),
     fetchDeviceModels(),
     fetchEdgeProtocolConnections(defaultConfigEdgeId),
+    fetchMqttUplink(defaultConfigEdgeId),
+    fetchDiscoverySuggestions(defaultConfigEdgeId),
     fetchEdgePointMappings(defaultConfigEdgeId),
     fetchEdgeCollectionTasks(defaultConfigEdgeId),
     fetchEdgeAlgorithms(defaultConfigEdgeId),
@@ -516,6 +560,8 @@ async function loadConsoleSnapshot(): Promise<ConsoleSnapshot> {
     edgeNodes,
     pointMappings,
     protocolConnections,
+    mqttUplink,
+    discoverySuggestions,
     releaseList,
     runtimeStatus,
     summary,
@@ -537,6 +583,10 @@ function renderPage(
   onCreatePoint: (edgeId?: string) => Promise<PointMappingResponse>,
   onEnableMaintenance: (edgeId: string) => Promise<EdgeNodeActionResponse>,
   onGenerateAgentSuggestions: () => Promise<AgentActionResponse>,
+  onRunDiscovery: (
+    edgeId: string,
+    request: RunDiscoveryRequest,
+  ) => Promise<DiscoveryReportResponse>,
   onGenerateSchedule: (edgeId: string) => Promise<ManagementActionResponse>,
   onImportPoints: (edgeId: string) => Promise<ManagementActionResponse>,
   onMonitorEdge: (edgeId: string) => void,
@@ -575,11 +625,17 @@ function renderPage(
   ) => Promise<void>,
   onSelectAlgorithmEdge: (edgeId: string) => Promise<void>,
   selectedAlgorithmEdgeId: string,
+  onSaveMqttUplink: (
+    edgeId: string,
+    request: MqttUplinkResponse,
+  ) => Promise<MqttUplinkResponse>,
   onPublish: (edgeId: string) => Promise<void>,
   onValidateConfig: (edgeId?: string) => Promise<ManagementActionResponse>,
   edgeNodes?: EdgeNodeResponse[],
   deviceModels?: DeviceModelResponse[],
   protocolConnections?: ProtocolConnectionResponse[],
+  mqttUplink?: MqttUplinkResponse,
+  discoverySuggestions?: PointMappingSuggestionResponse[],
   pointMappings?: PointMappingResponse[],
   collectionTasks?: CollectionTaskResponse[],
   algorithms?: AlgorithmResponse[],
@@ -673,6 +729,22 @@ function renderPage(
           onSaveAlgorithm={onSaveAlgorithm}
           onSelectEdge={onSelectAlgorithmEdge}
           selectedEdgeId={selectedAlgorithmEdgeId}
+        />
+      );
+    case 'mqttUplink':
+      return (
+        <MqttUplinkPage
+          onSave={onSaveMqttUplink}
+          selectedEdgeId={defaultConfigEdgeId}
+          uplink={mqttUplink}
+        />
+      );
+    case 'discovery':
+      return (
+        <DiscoveryPage
+          onRunDiscovery={onRunDiscovery}
+          selectedEdgeId={defaultConfigEdgeId}
+          suggestions={discoverySuggestions}
         />
       );
     case 'releases':

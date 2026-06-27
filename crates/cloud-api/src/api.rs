@@ -6,9 +6,10 @@ use axum::{
 };
 use cloud_control::{AuditAction, EdgeNode, ReleaseService, ReleaseStatus};
 use edge_core::{
-    AlgorithmRuntime, AlgorithmSpec, CollectionTask, DeviceSpec, EdgeConfigPackage, EdgeHealth,
-    EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, PointAddress, ProtocolConnection, ProtocolType,
-    TelemetryPoint, TelemetryPointMapping, TelemetryType,
+    AlgorithmRuntime, AlgorithmSpec, CollectionTask, DeviceSpec, DiscoveredPoint, DiscoveryReport,
+    EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, MqttUplinkConfig,
+    PointAddress, PointMappingSuggestion, ProtocolConnection, ProtocolType, TelemetryPoint,
+    TelemetryPointMapping, TelemetryType,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -71,6 +72,18 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/api/edges/{edge_id}/runtime-events",
             get(runtime_status).post(report_runtime_event),
+        )
+        .route(
+            "/api/edges/{edge_id}/mqtt-uplink",
+            get(edge_mqtt_uplink).put(save_edge_mqtt_uplink),
+        )
+        .route(
+            "/api/edges/{edge_id}/discovery/run",
+            post(run_edge_discovery),
+        )
+        .route(
+            "/api/edges/{edge_id}/discovery/suggestions",
+            get(edge_discovery_suggestions),
         )
         .route(
             "/api/edges/{edge_id}/reported-config",
@@ -238,6 +251,131 @@ async fn edge_nodes(State(state): State<AppState>) -> Json<Vec<EdgeNodeResponse>
     rows.sort_by(|left, right| left.edge_id.cmp(&right.edge_id));
 
     Json(rows)
+}
+
+async fn edge_mqtt_uplink(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<Json<MqttUplinkResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let uplink = store
+        .mqtt_uplink(&edge_id)
+        .cloned()
+        .or_else(|| {
+            store
+                .latest_config_package_for_edge(&edge_id)
+                .and_then(|package| package.mqtt_uplinks.first().cloned())
+        })
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing mqtt uplink config"))?;
+
+    Ok(Json(mqtt_uplink_response(uplink)))
+}
+
+async fn save_edge_mqtt_uplink(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+    Json(request): Json<SaveMqttUplinkRequest>,
+) -> Result<Json<MqttUplinkResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let uplink = MqttUplinkConfig {
+        sink_id: request.sink_id,
+        broker: request.broker,
+        client_id: request.client_id,
+        topic_template: request.topic_template,
+        qos: request.qos,
+        batch_size: request.batch_size,
+        flush_interval_ms: request.flush_interval_ms,
+    };
+
+    let package_to_persist = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut package = store
+            .latest_config_package_for_edge(&edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+        package.version = next_version(&package.version);
+        package.mqtt_uplinks = vec![uplink.clone()];
+        store.upsert_config_package(package.clone());
+        store.upsert_mqtt_uplink(edge_id.clone(), uplink.clone());
+        package
+    };
+
+    state
+        .persist_config_package(package_to_persist)
+        .await
+        .map_err(persistence_error)?;
+    state
+        .persist_mqtt_uplink(&edge_id, uplink.clone())
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(Json(mqtt_uplink_response(uplink)))
+}
+
+async fn run_edge_discovery(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+    Json(request): Json<RunDiscoveryRequest>,
+) -> Result<(StatusCode, Json<DiscoveryReportResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let report = simulated_discovery_report(&edge_id, &request.connection_id);
+    {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        if store.latest_config_package_for_edge(&edge_id).is_none() {
+            return Err(error(StatusCode::NOT_FOUND, "missing edge config package"));
+        }
+        store.insert_discovery_report(edge_id.clone(), report.clone());
+        store.push_audit(AuditAction::UpdateConfig, format!("{edge_id}:discovery"));
+    }
+
+    state
+        .persist_discovery_report(&edge_id, report.clone())
+        .await
+        .map_err(persistence_error)?;
+
+    Ok((StatusCode::CREATED, Json(discovery_report_response(report))))
+}
+
+async fn edge_discovery_suggestions(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Json<Vec<PointMappingSuggestionResponse>> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    Json(
+        store
+            .discovery_suggestions(&edge_id)
+            .into_iter()
+            .map(point_mapping_suggestion_response)
+            .collect(),
+    )
+}
+
+fn simulated_discovery_report(edge_id: &str, connection_id: &str) -> DiscoveryReport {
+    let job_id = format!(
+        "discovery-{edge_id}-{}",
+        if edge_id == "edge-dev" { 1 } else { 0 }
+    );
+    DiscoveryReport::new(job_id, connection_id)
+        .with_point(
+            DiscoveredPoint::new(
+                connection_id,
+                PointAddress::modbus_holding_register(40001),
+                TelemetryType::Float,
+            )
+            .with_sample_values(vec!["220.1".to_string(), "220.3".to_string()])
+            .with_confidence(0.72),
+        )
+        .with_suggestion(
+            PointMappingSuggestion::new(
+                "meter_voltage_a",
+                "meter-1",
+                "electric.voltage_a",
+                connection_id,
+                PointAddress::modbus_holding_register(40001),
+                TelemetryType::Float,
+            )
+            .with_unit("V")
+            .with_confidence(0.82)
+            .with_evidence("数值范围和波动特征符合 A 相电压"),
+        )
 }
 
 async fn create_edge_node(
@@ -486,6 +624,7 @@ async fn create_edge_protocol_connection(
             endpoint: request
                 .endpoint
                 .filter(|endpoint| !endpoint.trim().is_empty()),
+            serial: None,
         };
 
         package.version = next_version(&package.version);
@@ -1421,6 +1560,70 @@ pub struct RuntimeStatusResponse {
     pub events: Vec<EdgeRuntimeEvent>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MqttUplinkResponse {
+    pub sink_id: String,
+    pub broker: String,
+    pub client_id: String,
+    pub topic_template: String,
+    pub qos: u8,
+    pub batch_size: u32,
+    pub flush_interval_ms: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveMqttUplinkRequest {
+    pub sink_id: String,
+    pub broker: String,
+    pub client_id: String,
+    pub topic_template: String,
+    pub qos: u8,
+    pub batch_size: u32,
+    pub flush_interval_ms: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunDiscoveryRequest {
+    pub connection_id: String,
+    pub address_range: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveryReportResponse {
+    pub job_id: String,
+    pub protocol_connection_id: String,
+    pub discovered_points: Vec<DiscoveredPointResponse>,
+    pub suggestions: Vec<PointMappingSuggestionResponse>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveredPointResponse {
+    pub protocol_connection_id: String,
+    pub address: String,
+    pub value_type: String,
+    pub sample_values: Vec<String>,
+    pub confidence: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PointMappingSuggestionResponse {
+    pub point_id: String,
+    pub device_id: String,
+    pub semantic_id: String,
+    pub protocol_connection_id: String,
+    pub address: String,
+    pub value_type: String,
+    pub unit: String,
+    pub confidence: f64,
+    pub evidence: String,
+}
+
 #[derive(Serialize)]
 pub struct ErrorResponse {
     pub message: String,
@@ -1898,11 +2101,69 @@ fn format_protocol(protocol: ProtocolType) -> String {
     match protocol {
         ProtocolType::Simulated => "Simulated",
         ProtocolType::ModbusTcp => "Modbus TCP",
+        ProtocolType::ModbusRtu => "Modbus RTU",
+        ProtocolType::Dlt645 => "DL/T645",
+        ProtocolType::Iec101 => "IEC-101",
+        ProtocolType::CustomSerial => "自定义串口",
         ProtocolType::OpcUa => "OPC UA",
-        ProtocolType::Mqtt => "MQTT",
         ProtocolType::SiemensS7 => "Siemens S7",
     }
     .to_string()
+}
+
+fn mqtt_uplink_response(uplink: MqttUplinkConfig) -> MqttUplinkResponse {
+    MqttUplinkResponse {
+        sink_id: uplink.sink_id,
+        broker: uplink.broker,
+        client_id: uplink.client_id,
+        topic_template: uplink.topic_template,
+        qos: uplink.qos,
+        batch_size: uplink.batch_size,
+        flush_interval_ms: uplink.flush_interval_ms,
+    }
+}
+
+fn discovery_report_response(report: DiscoveryReport) -> DiscoveryReportResponse {
+    DiscoveryReportResponse {
+        job_id: report.job_id,
+        protocol_connection_id: report.protocol_connection_id,
+        discovered_points: report
+            .discovered_points
+            .into_iter()
+            .map(discovered_point_response)
+            .collect(),
+        suggestions: report
+            .suggestions
+            .into_iter()
+            .map(point_mapping_suggestion_response)
+            .collect(),
+    }
+}
+
+fn discovered_point_response(point: DiscoveredPoint) -> DiscoveredPointResponse {
+    DiscoveredPointResponse {
+        protocol_connection_id: point.protocol_connection_id,
+        address: format_address(&point.address),
+        value_type: format_telemetry_type(point.value_type),
+        sample_values: point.sample_values,
+        confidence: point.confidence,
+    }
+}
+
+fn point_mapping_suggestion_response(
+    suggestion: PointMappingSuggestion,
+) -> PointMappingSuggestionResponse {
+    PointMappingSuggestionResponse {
+        point_id: suggestion.point_id,
+        device_id: suggestion.device_id,
+        semantic_id: suggestion.semantic_id,
+        protocol_connection_id: suggestion.protocol_connection_id,
+        address: format_address(&suggestion.address),
+        value_type: format_telemetry_type(suggestion.value_type),
+        unit: suggestion.unit.unwrap_or_else(|| "-".to_string()),
+        confidence: suggestion.confidence,
+        evidence: suggestion.evidence,
+    }
 }
 
 fn format_telemetry_type(value_type: TelemetryType) -> String {

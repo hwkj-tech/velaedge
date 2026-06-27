@@ -90,8 +90,11 @@ fn format_protocol(protocol: ProtocolType) -> String {
     match protocol {
         ProtocolType::Simulated => "Simulated",
         ProtocolType::ModbusTcp => "Modbus TCP",
+        ProtocolType::ModbusRtu => "Modbus RTU",
+        ProtocolType::Dlt645 => "DL/T645",
+        ProtocolType::Iec101 => "IEC-101",
+        ProtocolType::CustomSerial => "Custom Serial",
         ProtocolType::OpcUa => "OPC UA",
-        ProtocolType::Mqtt => "MQTT",
         ProtocolType::SiemensS7 => "Siemens S7",
     }
     .to_string()

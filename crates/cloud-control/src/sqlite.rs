@@ -1,7 +1,10 @@
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use edge_core::{DeviceSpec, EdgeConfigPackage, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot};
+use edge_core::{
+    DeviceSpec, DiscoveryReport, EdgeConfigPackage, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot,
+    MqttUplinkConfig, PointMappingSuggestion,
+};
 use serde::{de::DeserializeOwned, Serialize};
 use sqlx::{sqlite::SqliteConnectOptions, sqlite::SqlitePoolOptions, Row, SqlitePool};
 use uuid::Uuid;
@@ -86,6 +89,19 @@ impl SqliteCloudStore {
                 event_json TEXT NOT NULL
             )
             "#,
+            r#"
+            CREATE TABLE IF NOT EXISTS mqtt_uplinks (
+                edge_id TEXT PRIMARY KEY NOT NULL,
+                uplink_json TEXT NOT NULL
+            )
+            "#,
+            r#"
+            CREATE TABLE IF NOT EXISTS discovery_reports (
+                report_id TEXT PRIMARY KEY NOT NULL,
+                edge_id TEXT NOT NULL,
+                report_json TEXT NOT NULL
+            )
+            "#,
         ] {
             sqlx::query(statement)
                 .execute(&self.pool)
@@ -94,6 +110,113 @@ impl SqliteCloudStore {
         }
 
         Ok(())
+    }
+
+    pub async fn upsert_mqtt_uplink(&self, edge_id: &str, uplink: MqttUplinkConfig) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO mqtt_uplinks (edge_id, uplink_json)
+            VALUES (?1, ?2)
+            ON CONFLICT(edge_id) DO UPDATE SET uplink_json = excluded.uplink_json
+            "#,
+        )
+        .bind(edge_id)
+        .bind(encode(&uplink)?)
+        .execute(&self.pool)
+        .await
+        .context("upsert mqtt uplink")?;
+        Ok(())
+    }
+
+    pub async fn mqtt_uplink(&self, edge_id: &str) -> Result<Option<MqttUplinkConfig>> {
+        let row = sqlx::query("SELECT uplink_json FROM mqtt_uplinks WHERE edge_id = ?1")
+            .bind(edge_id)
+            .fetch_optional(&self.pool)
+            .await
+            .context("get mqtt uplink")?;
+        row.map(|row| decode_column(row, "uplink_json")).transpose()
+    }
+
+    pub async fn mqtt_uplinks(&self) -> Result<Vec<(String, MqttUplinkConfig)>> {
+        let rows = sqlx::query("SELECT edge_id, uplink_json FROM mqtt_uplinks ORDER BY edge_id")
+            .fetch_all(&self.pool)
+            .await
+            .context("list mqtt uplinks")?;
+        rows.into_iter()
+            .map(|row| {
+                let edge_id: String = row.try_get("edge_id").context("decode edge_id")?;
+                let uplink = decode_column(row, "uplink_json")?;
+                Ok((edge_id, uplink))
+            })
+            .collect()
+    }
+
+    pub async fn insert_discovery_report(
+        &self,
+        edge_id: &str,
+        report: DiscoveryReport,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO discovery_reports (report_id, edge_id, report_json)
+            VALUES (?1, ?2, ?3)
+            "#,
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(edge_id)
+        .bind(encode(&report)?)
+        .execute(&self.pool)
+        .await
+        .context("insert discovery report")?;
+        Ok(())
+    }
+
+    pub async fn discovery_reports(&self, edge_id: &str) -> Result<Vec<DiscoveryReport>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT report_json
+            FROM discovery_reports
+            WHERE edge_id = ?1
+            ORDER BY rowid
+            "#,
+        )
+        .bind(edge_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("list discovery reports")?;
+        decode_rows(rows, "report_json")
+    }
+
+    pub async fn discovery_report_entries(&self) -> Result<Vec<(String, DiscoveryReport)>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT edge_id, report_json
+            FROM discovery_reports
+            ORDER BY edge_id, rowid
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list discovery report entries")?;
+        rows.into_iter()
+            .map(|row| {
+                let edge_id: String = row.try_get("edge_id").context("decode edge_id")?;
+                let report = decode_column(row, "report_json")?;
+                Ok((edge_id, report))
+            })
+            .collect()
+    }
+
+    pub async fn discovery_suggestions(
+        &self,
+        edge_id: &str,
+    ) -> Result<Vec<PointMappingSuggestion>> {
+        Ok(self
+            .discovery_reports(edge_id)
+            .await?
+            .into_iter()
+            .flat_map(|report| report.suggestions)
+            .collect())
     }
 
     pub async fn upsert_edge_node(&self, node: EdgeNode) -> Result<()> {
@@ -179,7 +302,7 @@ impl SqliteCloudStore {
         .fetch_optional(&self.pool)
         .await
         .context("get config package")?;
-        row.map(|row| decode_column(row, "package_json"))
+        row.map(|row| decode_config_package_column(row, "package_json"))
             .transpose()
     }
 
@@ -194,7 +317,9 @@ impl SqliteCloudStore {
         .fetch_all(&self.pool)
         .await
         .context("list config packages")?;
-        decode_rows(rows, "package_json")
+        rows.into_iter()
+            .map(|row| decode_config_package_column(row, "package_json"))
+            .collect()
     }
 
     pub async fn latest_config_package_for_edge(
@@ -214,7 +339,7 @@ impl SqliteCloudStore {
         .fetch_optional(&self.pool)
         .await
         .context("get latest config package")?;
-        row.map(|row| decode_column(row, "package_json"))
+        row.map(|row| decode_config_package_column(row, "package_json"))
             .transpose()
     }
 
@@ -433,6 +558,39 @@ where
         .try_get(column)
         .with_context(|| format!("read sqlite json column: {column}"))?;
     serde_json::from_str(&payload).with_context(|| format!("decode sqlite json column: {column}"))
+}
+
+fn decode_config_package_column(
+    row: sqlx::sqlite::SqliteRow,
+    column: &str,
+) -> Result<EdgeConfigPackage> {
+    let payload: String = row
+        .try_get(column)
+        .with_context(|| format!("read sqlite json column: {column}"))?;
+    decode_config_package_payload(&payload)
+        .with_context(|| format!("decode sqlite json column: {column}"))
+}
+
+fn decode_config_package_payload(payload: &str) -> Result<EdgeConfigPackage> {
+    let mut value: serde_json::Value =
+        serde_json::from_str(payload).context("parse config package json")?;
+
+    if let Some(connections) = value
+        .get_mut("protocol_connections")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for connection in connections {
+            if connection
+                .get("protocol")
+                .and_then(serde_json::Value::as_str)
+                == Some("Mqtt")
+            {
+                connection["protocol"] = serde_json::Value::String("CustomSerial".to_string());
+            }
+        }
+    }
+
+    serde_json::from_value(value).context("deserialize config package json")
 }
 
 fn decode_rows<T>(rows: Vec<sqlx::sqlite::SqliteRow>, column: &str) -> Result<Vec<T>>

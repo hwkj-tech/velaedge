@@ -6,8 +6,9 @@ use edge_core::{
     RuntimeEventCategory, RuntimeEventSeverity, SystemRuntimeMetrics,
 };
 use edge_runtime::{
-    connect_edgelink_once, publish_edgelink_runtime_status_once,
-    publish_edgelink_runtime_status_with_store_once, RocksEdgeRuntimeStore,
+    connect_edgelink_once, connect_edgelink_once_with_capabilities,
+    publish_edgelink_runtime_status_once, publish_edgelink_runtime_status_with_store_once,
+    RocksEdgeRuntimeStore,
 };
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -67,6 +68,49 @@ async fn runtime_client_sends_hello_and_accepts_cloud_ack() {
     assert_eq!(
         payload.applied_config_version.as_deref(),
         Some("2026.06.26-001")
+    );
+}
+
+#[tokio::test]
+async fn runtime_client_sends_configured_capabilities_in_hello() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let gateway_addr = listener.local_addr().expect("listener should expose addr");
+
+    let gateway = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("runtime should connect");
+        let hello = read_one_message(&mut stream).await;
+        write_ack_for(&mut stream, &hello).await;
+        hello
+    });
+
+    connect_edgelink_once_with_capabilities(
+        &gateway_addr.to_string(),
+        "edge-dev",
+        "runtime-dev",
+        "0.1.0",
+        None,
+        vec![
+            "protocol:modbus-rtu".to_string(),
+            "transport:serial".to_string(),
+            "uplink:mqtt".to_string(),
+        ],
+    )
+    .await
+    .expect("runtime client should connect");
+
+    let observed = gateway.await.expect("gateway task should finish");
+    let EdgeLinkPayload::Hello(payload) = observed.payload else {
+        panic!("expected hello payload");
+    };
+    assert_eq!(
+        payload.capabilities,
+        vec![
+            "protocol:modbus-rtu".to_string(),
+            "transport:serial".to_string(),
+            "uplink:mqtt".to_string()
+        ]
     );
 }
 

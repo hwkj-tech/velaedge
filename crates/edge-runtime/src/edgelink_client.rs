@@ -83,6 +83,25 @@ pub async fn connect_edgelink_once(
     runtime_version: &str,
     applied_config_version: Option<String>,
 ) -> Result<EdgeLinkConnectReport> {
+    connect_edgelink_once_with_capabilities(
+        gateway_addr,
+        edge_id,
+        runtime_id,
+        runtime_version,
+        applied_config_version,
+        Vec::new(),
+    )
+    .await
+}
+
+pub async fn connect_edgelink_once_with_capabilities(
+    gateway_addr: &str,
+    edge_id: &str,
+    runtime_id: &str,
+    runtime_version: &str,
+    applied_config_version: Option<String>,
+    capabilities: Vec<String>,
+) -> Result<EdgeLinkConnectReport> {
     let mut stream = TcpStream::connect(gateway_addr)
         .await
         .with_context(|| format!("failed to connect EdgeLink gateway at {gateway_addr}"))?;
@@ -93,6 +112,7 @@ pub async fn connect_edgelink_once(
         runtime_id,
         runtime_version,
         applied_config_version,
+        capabilities,
     )
     .await
 }
@@ -122,6 +142,7 @@ pub async fn connect_edgelink_tls_once(
         runtime_id,
         runtime_version,
         applied_config_version,
+        Vec::new(),
     )
     .await
 }
@@ -142,6 +163,7 @@ pub async fn publish_edgelink_runtime_status_once(
         snapshot,
         events,
         None,
+        Vec::new(),
     )
     .await
 }
@@ -155,6 +177,29 @@ pub async fn publish_edgelink_runtime_status_with_store_once(
     events: Vec<EdgeRuntimeEvent>,
     store: &RocksEdgeRuntimeStore,
 ) -> Result<EdgeLinkPublishReport> {
+    publish_edgelink_runtime_status_with_store_and_capabilities_once(
+        gateway_addr,
+        edge_id,
+        runtime_id,
+        runtime_version,
+        snapshot,
+        events,
+        store,
+        Vec::new(),
+    )
+    .await
+}
+
+pub async fn publish_edgelink_runtime_status_with_store_and_capabilities_once(
+    gateway_addr: &str,
+    edge_id: &str,
+    runtime_id: &str,
+    runtime_version: &str,
+    snapshot: EdgeRuntimeMetricsSnapshot,
+    events: Vec<EdgeRuntimeEvent>,
+    store: &RocksEdgeRuntimeStore,
+    capabilities: Vec<String>,
+) -> Result<EdgeLinkPublishReport> {
     publish_edgelink_runtime_status_inner(
         gateway_addr,
         edge_id,
@@ -163,6 +208,7 @@ pub async fn publish_edgelink_runtime_status_with_store_once(
         snapshot,
         events,
         Some(store),
+        capabilities,
     )
     .await
 }
@@ -175,6 +221,7 @@ async fn publish_edgelink_runtime_status_inner(
     snapshot: EdgeRuntimeMetricsSnapshot,
     events: Vec<EdgeRuntimeEvent>,
     store: Option<&RocksEdgeRuntimeStore>,
+    capabilities: Vec<String>,
 ) -> Result<EdgeLinkPublishReport> {
     if snapshot.edge_id != edge_id {
         bail!("runtime metrics edge_id does not match EdgeLink edge_id");
@@ -198,6 +245,7 @@ async fn publish_edgelink_runtime_status_inner(
         runtime_id,
         runtime_version,
         Some(snapshot.config_version.clone()),
+        capabilities,
     )
     .await?;
 
@@ -242,6 +290,7 @@ async fn connect_edgelink_over_stream<S>(
     runtime_id: &str,
     runtime_version: &str,
     applied_config_version: Option<String>,
+    capabilities: Vec<String>,
 ) -> Result<EdgeLinkConnectReport>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -251,7 +300,7 @@ where
         runtime_id,
         runtime_version,
         applied_config_version,
-        Vec::new(),
+        capabilities,
     );
     write_edgelink_message(stream, &hello)
         .await

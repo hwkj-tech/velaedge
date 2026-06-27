@@ -21,8 +21,11 @@ import {
   fetchReleaseList,
   fetchRuntimeStatus,
   fetchSummary,
+  fetchMqttUplink,
+  fetchDiscoverySuggestions,
   generateAgentSuggestions,
   publishLatestRelease,
+  runDiscovery,
   runAgentSafetyCheck,
   runConfigValidation,
   runReleaseDiff,
@@ -33,6 +36,7 @@ import {
   saveEdgeCollectionTask,
   saveEdgePointMapping,
   saveEdgeProtocolConnection,
+  saveMqttUplink,
 } from './api/client';
 import type {
   AlgorithmResponse,
@@ -70,8 +74,11 @@ vi.mock('./api/client', () => ({
   fetchReleaseList: vi.fn(),
   fetchRuntimeStatus: vi.fn(),
   fetchSummary: vi.fn(),
+  fetchMqttUplink: vi.fn(),
+  fetchDiscoverySuggestions: vi.fn(),
   generateAgentSuggestions: vi.fn(),
   publishLatestRelease: vi.fn(),
+  runDiscovery: vi.fn(),
   runAgentSafetyCheck: vi.fn(),
   runConfigValidation: vi.fn(),
   runReleaseDiff: vi.fn(),
@@ -82,6 +89,7 @@ vi.mock('./api/client', () => ({
   saveEdgeCollectionTask: vi.fn(),
   saveEdgePointMapping: vi.fn(),
   saveEdgeProtocolConnection: vi.fn(),
+  saveMqttUplink: vi.fn(),
 }));
 
 const basePoint: PointMappingResponse = {
@@ -133,6 +141,30 @@ const updatedReleaseList: ReleaseListResponse = {
     },
   ],
 };
+
+const mqttUplink = {
+  sinkId: 'velamq-main',
+  broker: 'mqtts://velamq.local:8883',
+  clientId: 'edge-dev-runtime-dev',
+  topicTemplate: 'edge/{edge_id}/device/{device_id}/telemetry',
+  qos: 1,
+  batchSize: 100,
+  flushIntervalMs: 1000,
+};
+
+const discoverySuggestions = [
+  {
+    pointId: 'meter_voltage_a',
+    deviceId: 'meter-1',
+    semanticId: 'electric.voltage_a',
+    protocolConnectionId: 'meter-rs485-bus-1',
+    address: 'holding_register:40001',
+    valueType: 'float32',
+    unit: 'V',
+    confidence: 0.82,
+    evidence: '数值范围和波动特征符合 A 相电压',
+  },
+];
 
 const edgeNodes: EdgeNodeResponse[] = [
   {
@@ -362,6 +394,8 @@ describe('App cloud console write actions', () => {
     vi.mocked(fetchReleaseList).mockResolvedValue(initialReleaseList);
     vi.mocked(fetchRuntimeStatus).mockResolvedValue(runtimeStatus);
     vi.mocked(fetchAuditRecords).mockResolvedValue(auditRecords);
+    vi.mocked(fetchMqttUplink).mockResolvedValue(mqttUplink);
+    vi.mocked(fetchDiscoverySuggestions).mockResolvedValue(discoverySuggestions);
     vi.mocked(createAlgorithmDraft).mockResolvedValue(createdAlgorithm);
     vi.mocked(createCollectionTaskDraft).mockResolvedValue(createdCollectionTask);
     vi.mocked(createDeviceModelDraft).mockResolvedValue(createdDeviceModel);
@@ -443,6 +477,13 @@ describe('App cloud console write actions', () => {
       version: '1.1.0',
     });
     vi.mocked(publishLatestRelease).mockResolvedValue(updatedReleaseList);
+    vi.mocked(saveMqttUplink).mockResolvedValue(mqttUplink);
+    vi.mocked(runDiscovery).mockResolvedValue({
+      jobId: 'discovery-edge-dev-1',
+      protocolConnectionId: 'meter-rs485-bus-1',
+      discoveredPoints: [],
+      suggestions: discoverySuggestions,
+    });
   });
 
   it('saves point drafts through the API and refreshes point mappings', async () => {
@@ -627,6 +668,19 @@ describe('App cloud console write actions', () => {
     expect(screen.queryByRole('button', { name: '新建算法' })).not.toBeInTheDocument();
     expect(screen.queryByText('编辑算法 pump-anomaly-v1')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('查看边端')).not.toBeInTheDocument();
+  });
+
+  it('returns configurable sections to list mode when opened from the sidebar', async () => {
+    render(<App />);
+
+    await openEdgeConfiguration();
+    expect(screen.getByText('编辑连接 modbus-line-a')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /协议连接/ }));
+
+    expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
+    expect(screen.queryByText('编辑连接 modbus-line-a')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '新建连接' })).not.toBeInTheDocument();
   });
 
   it('opens selected edge configuration from the edge management row', async () => {

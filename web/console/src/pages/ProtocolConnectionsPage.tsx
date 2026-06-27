@@ -37,8 +37,11 @@ const fallbackEdges: EdgeNodeResponse[] = [
 
 const protocolOptions = [
   ['ModbusTcp', 'Modbus TCP'],
+  ['ModbusRtu', 'Modbus RTU'],
+  ['Dlt645', 'DL/T645'],
+  ['Iec101', 'IEC-101'],
+  ['CustomSerial', '自定义串口'],
   ['OpcUa', 'OPC UA'],
-  ['Mqtt', 'MQTT'],
   ['SiemensS7', 'Siemens S7'],
   ['Simulated', 'Simulated'],
 ];
@@ -357,11 +360,17 @@ function inferProtocolType(protocol: string): string {
   if (normalized.includes('opc')) {
     return 'OpcUa';
   }
-  if (normalized.includes('mqtt')) {
-    return 'Mqtt';
+  if (normalized.includes('rtu') || normalized.includes('rs485')) {
+    return 'ModbusRtu';
   }
   if (normalized.includes('s7') || normalized.includes('siemens')) {
     return 'SiemensS7';
+  }
+  if (normalized.includes('dlt') || normalized.includes('645')) {
+    return 'Dlt645';
+  }
+  if (normalized.includes('iec')) {
+    return 'Iec101';
   }
   if (normalized.includes('simulated')) {
     return 'Simulated';

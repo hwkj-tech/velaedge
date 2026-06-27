@@ -6,14 +6,19 @@ import type {
   CreateEdgeNodeRequest,
   EdgeNodeActionResponse,
   DeviceModelResponse,
+  DiscoveryReportResponse,
   EdgeNodeResponse,
+  MqttUplinkResponse,
   PointMappingResponse,
+  PointMappingSuggestionResponse,
   ProtocolConnectionResponse,
   ReleaseListResponse,
+  RunDiscoveryRequest,
   RuntimeStatusResponse,
   ManagementActionResponse,
   SaveAlgorithmRequest,
   SaveCollectionTaskRequest,
+  SaveMqttUplinkRequest,
   SavePointMappingRequest,
   SaveProtocolConnectionRequest,
   CreateProtocolConnectionRequest,
@@ -205,6 +210,58 @@ export async function fetchRuntimeStatus(
   fetcher: typeof fetch = fetch,
 ): Promise<RuntimeStatusResponse> {
   return requestJson<RuntimeStatusResponse>('/api/runtime-status', fetcher);
+}
+
+export async function fetchMqttUplink(
+  edgeId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<MqttUplinkResponse> {
+  return requestJson<MqttUplinkResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/mqtt-uplink`,
+    fetcher,
+  );
+}
+
+export async function saveMqttUplink(
+  edgeId: string,
+  request: SaveMqttUplinkRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<MqttUplinkResponse> {
+  return requestJson<MqttUplinkResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/mqtt-uplink`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    },
+  );
+}
+
+export async function runDiscovery(
+  edgeId: string,
+  request: RunDiscoveryRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<DiscoveryReportResponse> {
+  return requestJson<DiscoveryReportResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/discovery/run`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    },
+  );
+}
+
+export async function fetchDiscoverySuggestions(
+  edgeId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<PointMappingSuggestionResponse[]> {
+  return requestJson<PointMappingSuggestionResponse[]>(
+    `/api/edges/${encodeURIComponent(edgeId)}/discovery/suggestions`,
+    fetcher,
+  );
 }
 
 export async function savePointMapping(

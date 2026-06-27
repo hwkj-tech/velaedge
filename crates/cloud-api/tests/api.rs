@@ -3,6 +3,8 @@ use axum::{
     http::{Request, StatusCode},
 };
 use cloud_api::{app, AppState};
+use cloud_control::{EdgeNode, SqliteCloudStore};
+use edge_core::{EdgeConfigPackage, ProtocolConnection};
 use serde_json::json;
 use tower::ServiceExt;
 
@@ -728,8 +730,8 @@ async fn edge_protocol_connection_create_adds_selected_edge_draft() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "protocolType": "Mqtt",
-                        "endpoint": "mqtt://broker.local:1883"
+                        "protocolType": "ModbusRtu",
+                        "endpoint": "/dev/ttyUSB0"
                     })
                     .to_string(),
                 ))
@@ -744,9 +746,9 @@ async fn edge_protocol_connection_create_adds_selected_edge_draft() {
     let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(created["edgeId"], "edge-dev");
     assert_eq!(created["connectionId"], "connection-draft-2");
-    assert_eq!(created["protocolType"], "Mqtt");
-    assert_eq!(created["protocol"], "MQTT");
-    assert_eq!(created["endpoint"], "mqtt://broker.local:1883");
+    assert_eq!(created["protocolType"], "ModbusRtu");
+    assert_eq!(created["protocol"], "Modbus RTU");
+    assert_eq!(created["endpoint"], "/dev/ttyUSB0");
 
     let response = router
         .oneshot(
@@ -767,7 +769,167 @@ async fn edge_protocol_connection_create_adds_selected_edge_draft() {
     );
     assert_eq!(
         config["package"]["protocol_connections"][1]["protocol"],
-        "Mqtt"
+        "ModbusRtu"
+    );
+}
+
+#[tokio::test]
+async fn mqtt_uplink_endpoints_manage_velamq_northbound_config() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::get("/api/edges/edge-dev/mqtt-uplink")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let initial: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(initial["broker"], "mqtts://velamq.local:8883");
+    assert_eq!(initial["sinkId"], "velamq-main");
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/edges/edge-dev/mqtt-uplink")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "sinkId": "velamq-prod",
+                        "broker": "mqtts://velamq.prod:8883",
+                        "clientId": "edge-dev-runtime-dev",
+                        "topicTemplate": "velamq/{edge_id}/{device_id}/telemetry",
+                        "qos": 1,
+                        "batchSize": 200,
+                        "flushIntervalMs": 500
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(saved["sinkId"], "velamq-prod");
+    assert_eq!(saved["broker"], "mqtts://velamq.prod:8883");
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/desired-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        config["package"]["mqtt_uplinks"][0]["broker"],
+        "mqtts://velamq.prod:8883"
+    );
+}
+
+#[tokio::test]
+async fn sqlite_app_state_backfills_missing_mqtt_uplink_for_legacy_edges() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let database_url = format!("sqlite://{}", tempdir.path().join("cloud.db").display());
+    let sqlite_store = SqliteCloudStore::connect(&database_url).await.unwrap();
+    sqlite_store
+        .upsert_edge_node(EdgeNode::new("edge-legacy", "历史边端"))
+        .await
+        .unwrap();
+    sqlite_store
+        .upsert_config_package(
+            EdgeConfigPackage::new("edge-legacy", "2026.06.26-legacy")
+                .with_protocol_connection(ProtocolConnection::simulated("sim-main")),
+        )
+        .await
+        .unwrap();
+
+    let state = AppState::with_sqlite(&database_url).await.unwrap();
+    let router = app(state);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::get("/api/edges/edge-legacy/mqtt-uplink")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let uplink: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(uplink["broker"], "mqtts://velamq.local:8883");
+    assert_eq!(uplink["clientId"], "edge-legacy-runtime-dev");
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-legacy/desired-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        config["package"]["mqtt_uplinks"][0]["sink_id"],
+        "velamq-main"
+    );
+}
+
+#[tokio::test]
+async fn discovery_run_endpoint_returns_agent_mapping_suggestions() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/discovery/run")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "connectionId": "meter-rs485-bus-1",
+                        "addressRange": "holding_register:40001-40002"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(report["jobId"], "discovery-edge-dev-1");
+    assert_eq!(report["suggestions"][0]["pointId"], "meter_voltage_a");
+    assert_eq!(report["suggestions"][0]["confidence"], 0.82);
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/discovery/suggestions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let suggestions: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(suggestions[0]["semanticId"], "electric.voltage_a");
+    assert_eq!(
+        suggestions[0]["evidence"],
+        "数值范围和波动特征符合 A 相电压"
     );
 }
 

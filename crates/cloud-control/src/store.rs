@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use edge_core::{DeviceSpec, EdgeConfigPackage, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot};
+use edge_core::{
+    DeviceSpec, DiscoveryReport, EdgeConfigPackage, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot,
+    MqttUplinkConfig, PointMappingSuggestion,
+};
 use uuid::Uuid;
 
 use crate::{AuditAction, AuditRecord, EdgeNode, ReleaseRecord};
@@ -14,6 +17,8 @@ pub struct CloudControlStore {
     audit_records: Vec<AuditRecord>,
     runtime_metrics: BTreeMap<String, EdgeRuntimeMetricsSnapshot>,
     runtime_events: Vec<EdgeRuntimeEvent>,
+    mqtt_uplinks: BTreeMap<String, MqttUplinkConfig>,
+    discovery_reports: BTreeMap<String, Vec<DiscoveryReport>>,
 }
 
 impl CloudControlStore {
@@ -96,5 +101,44 @@ impl CloudControlStore {
 
     pub fn runtime_events(&self) -> &[EdgeRuntimeEvent] {
         &self.runtime_events
+    }
+
+    pub fn upsert_mqtt_uplink(&mut self, edge_id: impl Into<String>, uplink: MqttUplinkConfig) {
+        self.mqtt_uplinks.insert(edge_id.into(), uplink);
+    }
+
+    pub fn mqtt_uplink(&self, edge_id: &str) -> Option<&MqttUplinkConfig> {
+        self.mqtt_uplinks.get(edge_id)
+    }
+
+    pub fn mqtt_uplinks(&self) -> impl Iterator<Item = (&String, &MqttUplinkConfig)> {
+        self.mqtt_uplinks.iter()
+    }
+
+    pub fn insert_discovery_report(&mut self, edge_id: impl Into<String>, report: DiscoveryReport) {
+        self.discovery_reports
+            .entry(edge_id.into())
+            .or_default()
+            .push(report);
+    }
+
+    pub fn discovery_reports(&self, edge_id: &str) -> &[DiscoveryReport] {
+        self.discovery_reports
+            .get(edge_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub fn discovery_report_entries(
+        &self,
+    ) -> impl Iterator<Item = (&String, &Vec<DiscoveryReport>)> {
+        self.discovery_reports.iter()
+    }
+
+    pub fn discovery_suggestions(&self, edge_id: &str) -> Vec<PointMappingSuggestion> {
+        self.discovery_reports(edge_id)
+            .iter()
+            .flat_map(|report| report.suggestions.clone())
+            .collect()
     }
 }

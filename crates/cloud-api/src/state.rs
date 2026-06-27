@@ -7,8 +7,8 @@ use edge_core::{
     AlgorithmRuntime, AlgorithmSpec, CloudSyncMetrics, CollectionRuntimeMetrics, CollectionTask,
     CommandRisk, CommandSpec, DeviceInstance, DeviceSpec, EdgeConfigPackage, EdgeHealth,
     EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, EventSeverity, EventSpec, LocalStoreMetrics,
-    NumberRange, PointAddress, ProtocolConnection, ProtocolRuntimeMetrics, ProtocolType,
-    SystemRuntimeMetrics, TelemetryPoint, TelemetryPointMapping, TelemetryType,
+    MqttUplinkConfig, NumberRange, PointAddress, ProtocolConnection, ProtocolRuntimeMetrics,
+    ProtocolType, SystemRuntimeMetrics, TelemetryPoint, TelemetryPointMapping, TelemetryType,
 };
 
 #[derive(Clone)]
@@ -27,6 +27,8 @@ impl AppState {
         if store.edge_nodes().next().is_none() {
             store = demo_store();
             persist_store_snapshot(&sqlite_store, &store).await?;
+        } else {
+            ensure_default_mqtt_uplinks(&sqlite_store, &mut store).await?;
         }
 
         Ok(Self {
@@ -92,6 +94,24 @@ impl AppState {
         }
         Ok(())
     }
+
+    pub async fn persist_mqtt_uplink(&self, edge_id: &str, uplink: MqttUplinkConfig) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.upsert_mqtt_uplink(edge_id, uplink).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn persist_discovery_report(
+        &self,
+        edge_id: &str,
+        report: edge_core::DiscoveryReport,
+    ) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.insert_discovery_report(edge_id, report).await?;
+        }
+        Ok(())
+    }
 }
 
 impl Default for AppState {
@@ -109,8 +129,10 @@ fn demo_store() -> CloudControlStore {
     store.register_edge(
         EdgeNode::new("edge-dev", "研发实验室边端")
             .at_site("研发/实验室")
-            .with_capability("protocol:modbus-tcp")
-            .with_capability("local-store:jsonl"),
+            .with_capability("protocol:modbus-rtu")
+            .with_capability("transport:serial")
+            .with_capability("uplink:mqtt")
+            .with_capability("local-store:rocksdb"),
     );
 
     let pump_model = DeviceSpec::new("pump", "v1")
@@ -134,7 +156,13 @@ fn demo_store() -> CloudControlStore {
             connection_id: "modbus-line-a".to_string(),
             protocol: ProtocolType::ModbusTcp,
             endpoint: Some("10.12.0.20:502".to_string()),
+            serial: None,
         })
+        .with_mqtt_uplink(MqttUplinkConfig::velamq(
+            "velamq-main",
+            "mqtts://velamq.local:8883",
+            "edge-dev-runtime-dev",
+        ))
         .with_point_mapping(
             TelemetryPointMapping::new(
                 "pressure",
@@ -176,6 +204,7 @@ fn demo_store() -> CloudControlStore {
         outputs: vec!["pump.anomaly_score".to_string()],
     });
     store.upsert_device_model(pump_model);
+    store.upsert_mqtt_uplink("edge-dev", default_mqtt_uplink("edge-dev"));
 
     let release = ReleaseService::create_release(&mut store, package)
         .expect("demo config package should be valid");
@@ -228,6 +257,44 @@ fn demo_store() -> CloudControlStore {
     store
 }
 
+async fn ensure_default_mqtt_uplinks(
+    sqlite_store: &SqliteCloudStore,
+    store: &mut CloudControlStore,
+) -> Result<()> {
+    let edge_ids = store
+        .edge_nodes()
+        .map(|edge| edge.edge_id.clone())
+        .collect::<Vec<_>>();
+
+    for edge_id in edge_ids {
+        if store.mqtt_uplink(&edge_id).is_some() {
+            continue;
+        }
+
+        let uplink = default_mqtt_uplink(&edge_id);
+        if let Some(mut package) = store.latest_config_package_for_edge(&edge_id).cloned() {
+            if package.mqtt_uplinks.is_empty() {
+                package.mqtt_uplinks.push(uplink.clone());
+                store.upsert_config_package(package.clone());
+                sqlite_store.upsert_config_package(package).await?;
+            }
+        }
+
+        store.upsert_mqtt_uplink(edge_id.clone(), uplink.clone());
+        sqlite_store.upsert_mqtt_uplink(&edge_id, uplink).await?;
+    }
+
+    Ok(())
+}
+
+fn default_mqtt_uplink(edge_id: &str) -> MqttUplinkConfig {
+    MqttUplinkConfig::velamq(
+        "velamq-main",
+        "mqtts://velamq.local:8883",
+        format!("{edge_id}-runtime-dev"),
+    )
+}
+
 async fn hydrate_from_sqlite(
     sqlite_store: &SqliteCloudStore,
     store: &mut CloudControlStore,
@@ -246,6 +313,12 @@ async fn hydrate_from_sqlite(
     }
     for event in sqlite_store.runtime_events().await? {
         store.push_runtime_event(event);
+    }
+    for (edge_id, uplink) in sqlite_store.mqtt_uplinks().await? {
+        store.upsert_mqtt_uplink(edge_id, uplink);
+    }
+    for (edge_id, report) in sqlite_store.discovery_report_entries().await? {
+        store.insert_discovery_report(edge_id, report);
     }
     Ok(())
 }
@@ -272,6 +345,18 @@ async fn persist_store_snapshot(
     }
     for event in store.runtime_events().to_vec() {
         sqlite_store.push_runtime_event(event).await?;
+    }
+    for (edge_id, uplink) in store.mqtt_uplinks() {
+        sqlite_store
+            .upsert_mqtt_uplink(edge_id, uplink.clone())
+            .await?;
+    }
+    for (edge_id, reports) in store.discovery_report_entries() {
+        for report in reports {
+            sqlite_store
+                .insert_discovery_report(edge_id, report.clone())
+                .await?;
+        }
     }
     Ok(())
 }

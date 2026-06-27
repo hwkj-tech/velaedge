@@ -42,6 +42,15 @@ fn edge_runtime_cli_reports_metrics_over_edgelink_once() {
     assert_eq!(messages[0].kind, EdgeLinkMessageKind::Hello);
     assert_eq!(messages[1].kind, EdgeLinkMessageKind::RuntimeMetrics);
 
+    let EdgeLinkPayload::Hello(hello) = &messages[0].payload else {
+        panic!("expected hello payload");
+    };
+    assert!(hello
+        .capabilities
+        .contains(&"protocol:modbus-rtu".to_string()));
+    assert!(hello.capabilities.contains(&"transport:serial".to_string()));
+    assert!(hello.capabilities.contains(&"uplink:mqtt".to_string()));
+
     let EdgeLinkPayload::RuntimeMetrics(metrics) = &messages[1].payload else {
         panic!("expected runtime metrics payload");
     };

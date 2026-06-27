@@ -24,13 +24,14 @@ Shared contracts used by both edge and cloud:
 - `CloudEnvelope`: versioned message wrapper for edge-cloud communication.
 - `EdgeLinkMessage`: private runtime-cloud message contract carried over a runtime-initiated TCP session.
 - `AlgorithmSpec`: descriptor for rule, WASM, ONNX, and Python algorithms.
-- `EdgeConfigPackage`: edge-targeted configuration bundle with devices, protocol connections, point mappings, collection tasks, and algorithms.
+- `EdgeConfigPackage`: edge-targeted configuration bundle with devices, protocol connections, MQTT uplinks, point mappings, collection tasks, and algorithms.
 
 ### `crates/edge-runtime`
 
 Deterministic edge runtime:
 
 - `ProtocolAdapter`: trait for protocol-specific telemetry collection.
+- Runtime capability config: declares enabled serial collection protocols, MQTT northbound uplink support, and the local storage backend.
 - `SimulatedProtocolAdapter`: test and demo adapter for MVP validation.
 - `LocalStore`: trait for local persistence.
 - `JsonlLocalStore`: simple inspectable local store for telemetry samples.
@@ -57,6 +58,8 @@ Cloud API and console hosting:
 
 - `GET /api/summary`: fleet and release summary for the console.
 - `POST /api/releases`: accepts an `EdgeConfigPackage` and creates a release through `cloud-control`.
+- `GET/PUT /api/edges/{edge_id}/mqtt-uplink`: manages runtime northbound publishing to velaMQ.
+- `POST /api/edges/{edge_id}/discovery/run`: starts a controlled point discovery job and returns Agent mapping suggestions.
 - `gateway`: EdgeLink session handling for runtime-initiated cloud connections.
 - Static fallback: serves `web/console/dist` so the built React console is available from the same service.
 
@@ -66,7 +69,7 @@ The first API state is in-memory and intended for design validation. A database-
 
 Built-in management UI:
 
-- Workbench, edge management, device models, protocol connections, point mappings, collection tasks, algorithms, releases, runtime status, audit log, and Agent assistant views.
+- Workbench, edge management, device models, protocol connections, point mappings, collection tasks, algorithms, MQTT uplink, point discovery, releases, runtime status, audit log, and Agent assistant views.
 - Point configuration page owns the central cloud-side mapping workflow.
 - Release page shows validation, change summary, desired versions, reported versions, and edge apply status.
 
@@ -84,14 +87,17 @@ Built-in management UI:
 
 1. Cloud user registers or selects an edge node.
 2. Cloud user defines semantic device models.
-3. Cloud user configures reusable protocol connections.
-4. Cloud user maps semantic telemetry points to protocol addresses.
-5. Cloud user groups point mappings into collection tasks and attaches algorithms.
-6. Cloud creates a versioned `EdgeConfigPackage`.
-7. Release validation checks references, duplicate ids, and edge target consistency.
-8. Cloud Edge Gateway sends the desired version through EdgeLink after the runtime connects.
-9. Edge runtime validates locally, applies it, and reports the applied version.
-10. Cloud compares desired and reported versions and records audit events.
+3. Cloud user configures reusable serial protocol connections.
+4. Runtime may run controlled serial point discovery and report evidence to cloud.
+5. Cloud Agent converts discovery evidence into point mapping candidates for user review.
+6. Cloud user maps semantic telemetry points to protocol addresses.
+7. Cloud user groups point mappings into collection tasks and attaches algorithms.
+8. Cloud user configures the MQTT northbound uplink to velaMQ.
+9. Cloud creates a versioned `EdgeConfigPackage`.
+10. Release validation checks references, duplicate ids, and edge target consistency.
+11. Cloud Edge Gateway sends the desired version through EdgeLink after the runtime connects.
+12. Edge runtime validates locally, applies it, and reports the applied version.
+13. Cloud compares desired and reported versions and records audit events.
 
 The cloud console owns authoring, validation, release planning, and auditability. The edge runtime owns real protocol execution, local storage, policy checks, and offline behavior.
 
@@ -124,17 +130,22 @@ edge runtime -> EdgeLink TCP session -> Cloud Edge Gateway -> Cloud Control / Ag
 Each real device protocol adapter should keep low-level driver details isolated:
 
 ```text
-protocol adapter -> normalized TelemetrySample -> edge runtime -> local store + shadow + EdgeLink
+serial protocol adapter -> normalized TelemetrySample -> edge runtime -> RocksDB outbox -> MQTT uplink -> velaMQ
+                                                    -> local shadow + EdgeLink runtime status
 ```
 
 Recommended first adapters:
 
-- Modbus TCP/RTU for baseline register collection.
-- OPC UA for semantic industrial servers.
+- Modbus RTU for baseline RS-485 register collection.
+- DL/T645 for electric meters.
+- IEC 101 for power and telemetry devices.
+- Custom serial framing for project-specific instruments.
+- Modbus TCP and OPC UA can remain future adapters when Ethernet devices enter scope.
 - Siemens S7 for PLC integration.
 - Omron FINS for Omron PLCs.
 - BACnet for building automation.
-- MQTT for devices that can publish telemetry directly into a protocol adapter.
+
+MQTT is not modeled as a southbound device protocol in the current runtime. It is a northbound publishing sink used after serial collection, so the same data can enter velaMQ and downstream systems.
 
 ## Agent Direction
 

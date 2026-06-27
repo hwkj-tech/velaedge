@@ -1,6 +1,8 @@
 //! Deterministic edge runtime components.
 
+pub mod capability;
 pub mod config;
+pub mod discovery;
 pub mod edgelink_client;
 pub mod local_db;
 pub mod metrics;
@@ -10,9 +12,13 @@ pub mod runtime;
 pub mod storage;
 pub mod sync;
 
+pub use capability::RuntimeCapabilityConfig;
 pub use config::{AppliedEdgeConfig, ConfiguredSimulatedRuntime};
+pub use discovery::SimulatedSerialDiscovery;
 pub use edgelink_client::{
-    connect_edgelink_once, connect_edgelink_tls_once, publish_edgelink_runtime_status_once,
+    connect_edgelink_once, connect_edgelink_once_with_capabilities, connect_edgelink_tls_once,
+    publish_edgelink_runtime_status_once,
+    publish_edgelink_runtime_status_with_store_and_capabilities_once,
     publish_edgelink_runtime_status_with_store_once, EdgeLinkClientTlsConfig,
     EdgeLinkConnectReport, EdgeLinkPublishReport,
 };

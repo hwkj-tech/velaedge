@@ -8,6 +8,7 @@ import {
   createPointMappingDraft,
   createEdgeProtocolConnection,
   enableEdgeMaintenanceMode,
+  fetchDiscoverySuggestions,
   generateAgentSuggestions,
   fetchAlgorithms,
   fetchAuditRecords,
@@ -22,10 +23,13 @@ import {
   fetchProtocolConnections,
   fetchReleaseList,
   fetchRuntimeStatus,
+  fetchMqttUplink,
   fetchSummary,
   runAgentSafetyCheck,
   runConfigValidation,
   runReleaseDiff,
+  runDiscovery,
+  saveMqttUplink,
   publishLatestRelease,
   rotateEdgeCredentials,
   saveEdgeCollectionTask,
@@ -205,6 +209,84 @@ describe('fetchRuntimeStatus', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/runtime-status');
     expect(result.edges[0].edge_id).toBe('edge-dev');
     expect(result.averageCollectionLatencyMs).toBe(24);
+  });
+});
+
+describe('mqtt uplink and discovery clients', () => {
+  it('loads and saves mqtt uplink config for an edge', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        sinkId: 'velamq-main',
+        broker: 'mqtts://velamq.local:8883',
+        clientId: 'edge-dev-runtime-dev',
+        topicTemplate: 'edge/{edge_id}/device/{device_id}/telemetry',
+        qos: 1,
+        batchSize: 100,
+        flushIntervalMs: 1000,
+      }),
+    });
+
+    const uplink = await fetchMqttUplink(
+      'edge-dev',
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/mqtt-uplink');
+    expect(uplink.broker).toBe('mqtts://velamq.local:8883');
+
+    await saveMqttUplink('edge-dev', uplink, fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/edges/edge-dev/mqtt-uplink', {
+      body: JSON.stringify(uplink),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    });
+  });
+
+  it('runs discovery and loads agent mapping suggestions', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        jobId: 'discovery-edge-dev-1',
+        protocolConnectionId: 'meter-rs485-bus-1',
+        discoveredPoints: [],
+        suggestions: [
+          {
+            pointId: 'meter_voltage_a',
+            deviceId: 'meter-1',
+            semanticId: 'electric.voltage_a',
+            protocolConnectionId: 'meter-rs485-bus-1',
+            address: 'holding_register:40001',
+            valueType: 'float32',
+            unit: 'V',
+            confidence: 0.82,
+            evidence: '数值范围和波动特征符合 A 相电压',
+          },
+        ],
+      }),
+    });
+
+    const report = await runDiscovery(
+      'edge-dev',
+      {
+        addressRange: 'holding_register:40001-40002',
+        connectionId: 'meter-rs485-bus-1',
+      },
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/discovery/run', {
+      body: JSON.stringify({
+        addressRange: 'holding_register:40001-40002',
+        connectionId: 'meter-rs485-bus-1',
+      }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(report.suggestions[0].pointId).toBe('meter_voltage_a');
+
+    await fetchDiscoverySuggestions('edge-dev', fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/edges/edge-dev/discovery/suggestions',
+    );
   });
 });
 

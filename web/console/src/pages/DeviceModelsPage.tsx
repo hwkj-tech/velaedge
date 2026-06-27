@@ -65,7 +65,7 @@ export function DeviceModelsPage({
         <div>
           <h2>语义设备模型</h2>
           <p>
-            先定义设备语义，再在点位配置中绑定具体 Modbus、OPC UA、MQTT 或模拟地址。
+            先定义设备语义，再在点位配置中绑定具体 Modbus RTU、DL/T645、IEC 101 或模拟地址。
           </p>
         </div>
         <div className="toolbar">

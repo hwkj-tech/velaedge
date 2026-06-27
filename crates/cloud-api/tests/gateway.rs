@@ -8,9 +8,10 @@ use cloud_api::gateway::{
 use cloud_control::{CloudControlStore, ReleaseService, ReleaseStatus, SqliteCloudStore};
 use edge_core::{
     decode_edgelink_frame, encode_edgelink_frame, CloudSyncMetrics, CollectionRuntimeMetrics,
-    EdgeConfigPackage, EdgeHealth, EdgeLinkMessage, EdgeLinkMessageKind, EdgeLinkPayload,
-    EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, LocalStoreMetrics, ProtocolRuntimeMetrics,
-    RuntimeEventCategory, RuntimeEventSeverity, SystemRuntimeMetrics,
+    DiscoveredPoint, DiscoveryReport, EdgeConfigPackage, EdgeHealth, EdgeLinkMessage,
+    EdgeLinkMessageKind, EdgeLinkPayload, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot,
+    LocalStoreMetrics, PointAddress, PointMappingSuggestion, ProtocolRuntimeMetrics,
+    RuntimeEventCategory, RuntimeEventSeverity, SystemRuntimeMetrics, TelemetryType,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -204,6 +205,75 @@ async fn gateway_persists_runtime_metrics_and_events_to_sqlite() {
     let events = reopened.runtime_events().await.unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].code, "modbus.timeout");
+}
+
+#[tokio::test]
+async fn gateway_ingests_discovery_reports_and_persists_suggestions() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let database_url = format!("sqlite://{}", tempdir.path().join("cloud.db").display());
+    let sqlite_store = SqliteCloudStore::connect(&database_url).await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let gateway_addr = listener.local_addr().expect("listener should expose addr");
+    let store = Arc::new(Mutex::new(CloudControlStore::default()));
+    let gateway_store = store.clone();
+
+    let gateway = tokio::spawn(async move {
+        let (stream, peer_addr) = listener.accept().await.expect("runtime should connect");
+        handle_edgelink_session_with_store_and_sqlite(
+            stream,
+            peer_addr,
+            gateway_store,
+            sqlite_store,
+        )
+        .await
+        .expect("session should process discovery report")
+    });
+
+    let mut runtime = TcpStream::connect(gateway_addr)
+        .await
+        .expect("runtime should connect to gateway");
+    let hello = EdgeLinkMessage::hello(
+        "edge-discovery",
+        "runtime-discovery",
+        "0.1.0",
+        None,
+        vec![
+            "protocol:modbus-rtu".to_string(),
+            "transport:serial".to_string(),
+        ],
+    );
+    write_one_message(&mut runtime, &hello).await;
+    assert_ack_for(&mut runtime, &hello).await;
+
+    let discovery = EdgeLinkMessage::discovery_report(
+        "edge-discovery",
+        "runtime-discovery",
+        2,
+        discovery_report(),
+    );
+    write_one_message(&mut runtime, &discovery).await;
+    assert_ack_for(&mut runtime, &discovery).await;
+    drop(runtime);
+
+    let report = gateway.await.expect("gateway task should finish");
+    assert_eq!(report.accepted_message_count, 1);
+
+    {
+        let store = store.lock().expect("store mutex should not be poisoned");
+        let suggestions = store.discovery_suggestions("edge-discovery");
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].point_id, "meter_voltage_a");
+    }
+
+    let reopened = SqliteCloudStore::connect(&database_url).await.unwrap();
+    let suggestions = reopened
+        .discovery_suggestions("edge-discovery")
+        .await
+        .unwrap();
+    assert_eq!(suggestions.len(), 1);
+    assert_eq!(suggestions[0].semantic_id, "electric.voltage_a");
 }
 
 #[tokio::test]
@@ -402,4 +472,30 @@ fn runtime_metrics(edge_id: &str, runtime_id: &str) -> EdgeRuntimeMetricsSnapsho
             reported_version: "2026.06.27-001".to_string(),
         },
     }
+}
+
+fn discovery_report() -> DiscoveryReport {
+    DiscoveryReport::new("job-1", "meter-rs485-bus-1")
+        .with_point(
+            DiscoveredPoint::new(
+                "meter-rs485-bus-1",
+                PointAddress::modbus_holding_register(40001),
+                TelemetryType::Float,
+            )
+            .with_sample_values(vec!["220.1".to_string(), "220.3".to_string()])
+            .with_confidence(0.72),
+        )
+        .with_suggestion(
+            PointMappingSuggestion::new(
+                "meter_voltage_a",
+                "meter-1",
+                "electric.voltage_a",
+                "meter-rs485-bus-1",
+                PointAddress::modbus_holding_register(40001),
+                TelemetryType::Float,
+            )
+            .with_unit("V")
+            .with_confidence(0.82)
+            .with_evidence("数值范围和波动特征符合 A 相电压"),
+        )
 }

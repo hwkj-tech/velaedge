@@ -9,9 +9,9 @@ use edge_core::{
     TelemetrySample, TelemetryValue,
 };
 use edge_runtime::{
-    publish_edgelink_runtime_status_with_store_once, sync_and_report_once, EdgeRuntime,
-    HttpEdgeConfigSyncClient, HttpRuntimeStatusReporter, JsonlLocalStore, RocksEdgeRuntimeStore,
-    SimulatedProtocolAdapter,
+    publish_edgelink_runtime_status_with_store_and_capabilities_once, sync_and_report_once,
+    EdgeRuntime, HttpEdgeConfigSyncClient, HttpRuntimeStatusReporter, JsonlLocalStore,
+    RocksEdgeRuntimeStore, RuntimeCapabilityConfig, SimulatedProtocolAdapter,
 };
 use tracing::info;
 
@@ -48,7 +48,8 @@ async fn main() -> Result<()> {
     if let Some(cloud_gateway_addr) = args.cloud_gateway_addr {
         let snapshot = runtime_metrics_snapshot(&args.edge_id, &args.runtime_id, &args.storage);
         let runtime_store = RocksEdgeRuntimeStore::open(&args.runtime_db)?;
-        let report = publish_edgelink_runtime_status_with_store_once(
+        let capabilities = RuntimeCapabilityConfig::serial_mqtt_defaults().capabilities();
+        let report = publish_edgelink_runtime_status_with_store_and_capabilities_once(
             &cloud_gateway_addr,
             &args.edge_id,
             &args.runtime_id,
@@ -56,6 +57,7 @@ async fn main() -> Result<()> {
             snapshot,
             Vec::new(),
             &runtime_store,
+            capabilities,
         )
         .await?;
 

@@ -1,6 +1,7 @@
 use edge_core::{
-    decode_edgelink_frame, encode_edgelink_frame, EdgeConfigPackage, EdgeLinkMessage,
-    EdgeLinkMessageKind, EdgeLinkPayload,
+    decode_edgelink_frame, encode_edgelink_frame, DiscoveredPoint, DiscoveryReport,
+    EdgeConfigPackage, EdgeLinkMessage, EdgeLinkMessageKind, EdgeLinkPayload, PointAddress,
+    PointMappingSuggestion, TelemetryType,
 };
 
 #[test]
@@ -100,4 +101,45 @@ fn edgelink_decode_rejects_invalid_json() {
 
     let error = decode_edgelink_frame(&frame).expect_err("invalid json should fail");
     assert!(error.to_string().contains("invalid EdgeLink frame JSON"));
+}
+
+#[test]
+fn edgelink_discovery_report_round_trips_discovered_serial_points() {
+    let report = DiscoveryReport::new("job-1", "meter-rs485-bus-1")
+        .with_point(
+            DiscoveredPoint::new(
+                "meter-rs485-bus-1",
+                PointAddress::modbus_holding_register(40001),
+                TelemetryType::Float,
+            )
+            .with_sample_values(vec!["220.1".to_string(), "220.3".to_string()])
+            .with_confidence(0.72),
+        )
+        .with_suggestion(
+            PointMappingSuggestion::new(
+                "meter_voltage_a",
+                "meter-1",
+                "electric.voltage_a",
+                "meter-rs485-bus-1",
+                PointAddress::modbus_holding_register(40001),
+                TelemetryType::Float,
+            )
+            .with_unit("V")
+            .with_confidence(0.82)
+            .with_evidence("数值范围和波动特征符合 A 相电压"),
+        );
+
+    let message = EdgeLinkMessage::discovery_report("edge-dev", "runtime-dev", 4, report);
+    let encoded = encode_edgelink_frame(&message).expect("frame should encode");
+    let decoded = decode_edgelink_frame(&encoded).expect("frame should decode");
+
+    assert_eq!(decoded.kind, EdgeLinkMessageKind::DiscoveryReport);
+    let EdgeLinkPayload::DiscoveryReport(payload) = decoded.payload else {
+        panic!("expected discovery report payload");
+    };
+    assert_eq!(payload.job_id, "job-1");
+    assert_eq!(payload.discovered_points.len(), 1);
+    assert_eq!(payload.suggestions.len(), 1);
+    assert_eq!(payload.suggestions[0].point_id, "meter_voltage_a");
+    assert_eq!(payload.suggestions[0].confidence, 0.82);
 }

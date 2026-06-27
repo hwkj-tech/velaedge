@@ -470,6 +470,24 @@ async fn persist_runtime_message(
                 ack_sequence,
             ))
         }
+        EdgeLinkPayload::DiscoveryReport(report) => {
+            store
+                .lock()
+                .map_err(|_| anyhow!("cloud control store mutex poisoned"))?
+                .insert_discovery_report(session.edge_id.clone(), report.clone());
+            if let Some(sqlite_store) = sqlite_store {
+                sqlite_store
+                    .insert_discovery_report(&session.edge_id, report)
+                    .await
+                    .context("persist EdgeLink discovery report to sqlite")?;
+            }
+            Ok(EdgeLinkMessage::ack(
+                session.edge_id.clone(),
+                session.runtime_id.clone(),
+                ack_message_id,
+                ack_sequence,
+            ))
+        }
         EdgeLinkPayload::Heartbeat(_) => Ok(EdgeLinkMessage::ack(
             session.edge_id.clone(),
             session.runtime_id.clone(),
