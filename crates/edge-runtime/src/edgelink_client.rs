@@ -7,6 +7,7 @@ use edge_core::{
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::time::{timeout, Duration};
 use tokio_rustls::{
     rustls::{
         self,
@@ -15,6 +16,8 @@ use tokio_rustls::{
     },
     TlsConnector,
 };
+
+use crate::{AppliedEdgeConfig, ConfiguredSimulatedRuntime};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EdgeLinkConnectReport {
@@ -30,6 +33,7 @@ pub struct EdgeLinkPublishReport {
     pub runtime_id: String,
     pub gateway_addr: String,
     pub acked_message_count: usize,
+    pub applied_config_version: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -155,13 +159,20 @@ pub async fn publish_edgelink_runtime_status_once(
     )
     .await?;
 
+    let config_apply = apply_optional_config_deploy(&mut stream, edge_id, runtime_id).await?;
     let mut acked_message_count = 0;
-    let metrics = EdgeLinkMessage::runtime_metrics(edge_id, runtime_id, 2, snapshot);
+    let metrics =
+        EdgeLinkMessage::runtime_metrics(edge_id, runtime_id, config_apply.next_sequence, snapshot);
     write_edgelink_message_and_expect_ack(&mut stream, &metrics).await?;
     acked_message_count += 1;
 
     for (index, event) in events.into_iter().enumerate() {
-        let message = EdgeLinkMessage::runtime_event(edge_id, runtime_id, index as u64 + 3, event);
+        let message = EdgeLinkMessage::runtime_event(
+            edge_id,
+            runtime_id,
+            config_apply.next_sequence + index as u64 + 1,
+            event,
+        );
         write_edgelink_message_and_expect_ack(&mut stream, &message).await?;
         acked_message_count += 1;
     }
@@ -171,7 +182,14 @@ pub async fn publish_edgelink_runtime_status_once(
         runtime_id: runtime_id.to_string(),
         gateway_addr: gateway_addr.to_string(),
         acked_message_count,
+        applied_config_version: config_apply.applied_config_version,
     })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EdgeLinkOptionalConfigApply {
+    applied_config_version: Option<String>,
+    next_sequence: u64,
 }
 
 async fn connect_edgelink_over_stream<S>(
@@ -211,6 +229,84 @@ where
         runtime_id: runtime_id.to_string(),
         gateway_addr: gateway_addr.to_string(),
         acked: payload.accepted,
+    })
+}
+
+async fn apply_optional_config_deploy<S>(
+    stream: &mut S,
+    edge_id: &str,
+    runtime_id: &str,
+) -> Result<EdgeLinkOptionalConfigApply>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let message = match timeout(Duration::from_millis(50), read_edgelink_message(stream)).await {
+        Err(_) => {
+            return Ok(EdgeLinkOptionalConfigApply {
+                applied_config_version: None,
+                next_sequence: 2,
+            });
+        }
+        Ok(result) => result.context("failed to read optional EdgeLink config deploy")?,
+    };
+
+    let EdgeLinkPayload::ConfigDeploy(package) = message.payload else {
+        bail!("expected EdgeLink config deploy from gateway");
+    };
+    let desired_version = package.version.clone();
+    let report_sequence = message.sequence + 1;
+
+    if package.edge_id != edge_id {
+        let report = EdgeLinkMessage::config_report(
+            edge_id,
+            runtime_id,
+            report_sequence,
+            desired_version,
+            None,
+            false,
+            Some("config package targets a different edge".to_string()),
+        );
+        write_edgelink_message_and_expect_ack(stream, &report).await?;
+        bail!("config package targets a different edge");
+    }
+
+    let applied = match AppliedEdgeConfig::apply(package) {
+        Ok(applied) => applied,
+        Err(error) => {
+            let report = EdgeLinkMessage::config_report(
+                edge_id,
+                runtime_id,
+                report_sequence,
+                desired_version,
+                None,
+                false,
+                Some(error.to_string()),
+            );
+            write_edgelink_message_and_expect_ack(stream, &report).await?;
+            return Err(error).context("failed to apply EdgeLink config deploy");
+        }
+    };
+    let mut runtime = ConfiguredSimulatedRuntime::new(applied.clone());
+    runtime
+        .collect_once()
+        .await
+        .context("failed to run collection after EdgeLink config deploy")?;
+    let applied_version = runtime.reported_version().to_string();
+
+    let report = EdgeLinkMessage::config_report(
+        edge_id,
+        runtime_id,
+        report_sequence,
+        desired_version,
+        Some(applied_version.clone()),
+        true,
+        None,
+    );
+    write_edgelink_message_and_expect_ack(stream, &report).await?;
+
+    Ok(EdgeLinkOptionalConfigApply {
+        applied_config_version: Some(applied_version),
+        next_sequence: report_sequence + 1,
     })
 }
 

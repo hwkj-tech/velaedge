@@ -113,6 +113,42 @@ impl EdgeLinkMessage {
         )
     }
 
+    pub fn config_deploy(
+        edge_id: impl Into<String>,
+        runtime_id: impl Into<String>,
+        sequence: u64,
+        package: EdgeConfigPackage,
+    ) -> Self {
+        Self::new(
+            edge_id,
+            Some(runtime_id.into()),
+            sequence,
+            EdgeLinkPayload::ConfigDeploy(package),
+        )
+    }
+
+    pub fn config_report(
+        edge_id: impl Into<String>,
+        runtime_id: impl Into<String>,
+        sequence: u64,
+        desired_version: impl Into<String>,
+        applied_version: Option<String>,
+        accepted: bool,
+        reason: Option<String>,
+    ) -> Self {
+        Self::new(
+            edge_id,
+            Some(runtime_id.into()),
+            sequence,
+            EdgeLinkPayload::ConfigReport(EdgeLinkConfigReport {
+                desired_version: desired_version.into(),
+                applied_version,
+                accepted,
+                reason,
+            }),
+        )
+    }
+
     pub fn runtime_event(
         edge_id: impl Into<String>,
         runtime_id: impl Into<String>,

@@ -1,9 +1,9 @@
 use chrono::Utc;
 use edge_core::{
     decode_edgelink_frame, encode_edgelink_frame, CloudSyncMetrics, CollectionRuntimeMetrics,
-    EdgeHealth, EdgeLinkMessage, EdgeLinkMessageKind, EdgeLinkPayload, EdgeRuntimeEvent,
-    EdgeRuntimeMetricsSnapshot, LocalStoreMetrics, ProtocolRuntimeMetrics, RuntimeEventCategory,
-    RuntimeEventSeverity, SystemRuntimeMetrics,
+    EdgeConfigPackage, EdgeHealth, EdgeLinkMessage, EdgeLinkMessageKind, EdgeLinkPayload,
+    EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, LocalStoreMetrics, ProtocolRuntimeMetrics,
+    RuntimeEventCategory, RuntimeEventSeverity, SystemRuntimeMetrics,
 };
 use edge_runtime::{connect_edgelink_once, publish_edgelink_runtime_status_once};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -123,6 +123,70 @@ async fn runtime_client_publishes_metrics_and_events_after_hello() {
         panic!("expected runtime event payload");
     };
     assert_eq!(event.code, "modbus.timeout");
+}
+
+#[tokio::test]
+async fn runtime_client_applies_config_deploy_before_publishing_metrics() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let gateway_addr = listener.local_addr().expect("listener should expose addr");
+
+    let gateway = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("runtime should connect");
+
+        let hello = read_one_message(&mut stream).await;
+        write_ack_for(&mut stream, &hello).await;
+
+        let deploy = EdgeLinkMessage::config_deploy(
+            "edge-dev",
+            "runtime-dev",
+            2,
+            EdgeConfigPackage::new("edge-dev", "2026.06.27-010"),
+        );
+        let deploy_frame = encode_edgelink_frame(&deploy).expect("deploy should encode");
+        stream
+            .write_all(&deploy_frame)
+            .await
+            .expect("deploy should be written");
+
+        let report = read_one_message(&mut stream).await;
+        write_ack_for(&mut stream, &report).await;
+
+        let metrics = read_one_message(&mut stream).await;
+        write_ack_for(&mut stream, &metrics).await;
+
+        vec![hello, report, metrics]
+    });
+
+    let report = publish_edgelink_runtime_status_once(
+        &gateway_addr.to_string(),
+        "edge-dev",
+        "runtime-dev",
+        "0.1.0",
+        runtime_metrics("edge-dev", "runtime-dev"),
+        Vec::new(),
+    )
+    .await
+    .expect("runtime status should publish");
+
+    assert_eq!(
+        report.applied_config_version.as_deref(),
+        Some("2026.06.27-010")
+    );
+
+    let observed = gateway.await.expect("gateway task should finish");
+    assert_eq!(observed[1].kind, EdgeLinkMessageKind::ConfigReport);
+    let EdgeLinkPayload::ConfigReport(config_report) = &observed[1].payload else {
+        panic!("expected config report payload");
+    };
+    assert_eq!(config_report.desired_version, "2026.06.27-010");
+    assert_eq!(
+        config_report.applied_version.as_deref(),
+        Some("2026.06.27-010")
+    );
+    assert!(config_report.accepted);
+    assert_eq!(observed[2].kind, EdgeLinkMessageKind::RuntimeMetrics);
 }
 
 async fn read_one_message(stream: &mut TcpStream) -> EdgeLinkMessage {

@@ -5,12 +5,12 @@ use cloud_api::gateway::{
     handle_edgelink_session, handle_edgelink_session_with_store,
     serve_edgelink_gateway_for_sessions,
 };
-use cloud_control::CloudControlStore;
+use cloud_control::{CloudControlStore, ReleaseService, ReleaseStatus};
 use edge_core::{
     decode_edgelink_frame, encode_edgelink_frame, CloudSyncMetrics, CollectionRuntimeMetrics,
-    EdgeHealth, EdgeLinkMessage, EdgeLinkMessageKind, EdgeLinkPayload, EdgeRuntimeEvent,
-    EdgeRuntimeMetricsSnapshot, LocalStoreMetrics, ProtocolRuntimeMetrics, RuntimeEventCategory,
-    RuntimeEventSeverity, SystemRuntimeMetrics,
+    EdgeConfigPackage, EdgeHealth, EdgeLinkMessage, EdgeLinkMessageKind, EdgeLinkPayload,
+    EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, LocalStoreMetrics, ProtocolRuntimeMetrics,
+    RuntimeEventCategory, RuntimeEventSeverity, SystemRuntimeMetrics,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -178,6 +178,73 @@ async fn gateway_listener_accepts_runtime_session_and_updates_store() {
             .runtime_id,
         "runtime-listener"
     );
+}
+
+#[tokio::test]
+async fn gateway_deploys_latest_config_and_marks_release_applied_from_report() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let gateway_addr = listener.local_addr().expect("listener should expose addr");
+    let mut seeded = CloudControlStore::default();
+    let release = ReleaseService::create_release(
+        &mut seeded,
+        EdgeConfigPackage::new("edge-config", "2026.06.27-010"),
+    )
+    .expect("release should be valid");
+    let store = Arc::new(Mutex::new(seeded));
+    let gateway_store = store.clone();
+
+    let gateway = tokio::spawn(async move {
+        let (stream, peer_addr) = listener.accept().await.expect("runtime should connect");
+        handle_edgelink_session_with_store(stream, peer_addr, gateway_store)
+            .await
+            .expect("session should process config report")
+    });
+
+    let mut runtime = TcpStream::connect(gateway_addr)
+        .await
+        .expect("runtime should connect to gateway");
+    let hello = EdgeLinkMessage::hello(
+        "edge-config",
+        "runtime-config",
+        "0.1.0",
+        Some("2026.06.27-009".to_string()),
+        Vec::new(),
+    );
+    write_one_message(&mut runtime, &hello).await;
+    assert_ack_for(&mut runtime, &hello).await;
+
+    let deploy = read_one_message(&mut runtime).await;
+    assert_eq!(deploy.kind, EdgeLinkMessageKind::ConfigDeploy);
+    let EdgeLinkPayload::ConfigDeploy(package) = deploy.payload else {
+        panic!("expected config deploy payload");
+    };
+    assert_eq!(package.edge_id, "edge-config");
+    assert_eq!(package.version, "2026.06.27-010");
+
+    let report = EdgeLinkMessage::config_report(
+        "edge-config",
+        "runtime-config",
+        2,
+        "2026.06.27-010",
+        Some("2026.06.27-010".to_string()),
+        true,
+        None,
+    );
+    write_one_message(&mut runtime, &report).await;
+    assert_ack_for(&mut runtime, &report).await;
+    drop(runtime);
+
+    let session = gateway.await.expect("gateway task should finish");
+    assert_eq!(session.config_report_count, 1);
+
+    let store = store.lock().expect("store mutex should not be poisoned");
+    let updated = store
+        .release(release.release_id)
+        .expect("release should still exist");
+    assert_eq!(updated.status, ReleaseStatus::Applied);
+    assert_eq!(updated.reported_version.as_deref(), Some("2026.06.27-010"));
 }
 
 async fn read_one_message(stream: &mut TcpStream) -> EdgeLinkMessage {

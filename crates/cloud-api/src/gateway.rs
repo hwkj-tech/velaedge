@@ -5,10 +5,10 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use cloud_control::CloudControlStore;
+use cloud_control::{CloudControlStore, ReleaseService, ReleaseStatus};
 use edge_core::{
-    decode_edgelink_frame, encode_edgelink_frame, EdgeLinkMessage, EdgeLinkPayload,
-    EDGELINK_MAX_FRAME_BYTES,
+    decode_edgelink_frame, encode_edgelink_frame, EdgeConfigPackage, EdgeLinkConfigReport,
+    EdgeLinkMessage, EdgeLinkPayload, EDGELINK_MAX_FRAME_BYTES,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -34,6 +34,7 @@ pub struct EdgeGatewaySession {
 pub struct EdgeGatewaySessionReport {
     pub session: EdgeGatewaySession,
     pub accepted_message_count: usize,
+    pub config_report_count: usize,
 }
 
 #[derive(Clone)]
@@ -126,12 +127,15 @@ pub async fn handle_edgelink_session_with_store(
     store: Arc<Mutex<CloudControlStore>>,
 ) -> Result<EdgeGatewaySessionReport> {
     let session = handle_edgelink_stream(&mut stream, peer_addr).await?;
+    let config_report_count =
+        deploy_pending_config_if_available(&mut stream, &session, store.clone()).await?;
     let accepted_message_count =
         handle_edgelink_runtime_messages(&mut stream, &session, store).await?;
 
     Ok(EdgeGatewaySessionReport {
         session,
         accepted_message_count,
+        config_report_count,
     })
 }
 
@@ -160,12 +164,15 @@ pub async fn handle_edgelink_tls_session_with_store(
         .await
         .context("failed to accept EdgeLink TLS session")?;
     let session = handle_edgelink_stream(&mut stream, peer_addr).await?;
+    let config_report_count =
+        deploy_pending_config_if_available(&mut stream, &session, store.clone()).await?;
     let accepted_message_count =
         handle_edgelink_runtime_messages(&mut stream, &session, store).await?;
 
     Ok(EdgeGatewaySessionReport {
         session,
         accepted_message_count,
+        config_report_count,
     })
 }
 
@@ -229,6 +236,114 @@ where
     }
 
     Ok(accepted)
+}
+
+async fn deploy_pending_config_if_available<S>(
+    stream: &mut S,
+    session: &EdgeGatewaySession,
+    store: Arc<Mutex<CloudControlStore>>,
+) -> Result<usize>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let Some(package) = pending_config_package(&store, &session.edge_id)? else {
+        return Ok(0);
+    };
+
+    let desired_version = package.version.clone();
+    let deploy = EdgeLinkMessage::config_deploy(
+        session.edge_id.clone(),
+        session.runtime_id.clone(),
+        2,
+        package,
+    );
+    write_edgelink_message(stream, &deploy)
+        .await
+        .context("failed to write EdgeLink config deploy")?;
+
+    let report_message = read_edgelink_message(stream)
+        .await
+        .context("failed to read EdgeLink config report")?;
+    if report_message.edge_id != session.edge_id {
+        bail!("config report edge_id does not match session edge_id");
+    }
+    if report_message.runtime_id.as_deref() != Some(session.runtime_id.as_str()) {
+        bail!("config report runtime_id does not match session runtime_id");
+    }
+
+    let EdgeLinkPayload::ConfigReport(report) = report_message.payload.clone() else {
+        bail!("expected EdgeLink config report after config deploy");
+    };
+    persist_config_report(&store, &session.edge_id, &desired_version, &report)?;
+
+    let ack = EdgeLinkMessage::ack(
+        session.edge_id.clone(),
+        session.runtime_id.clone(),
+        report_message.message_id,
+        report_message.sequence,
+    );
+    write_edgelink_message(stream, &ack)
+        .await
+        .context("failed to write EdgeLink config report ack")?;
+
+    Ok(1)
+}
+
+fn pending_config_package(
+    store: &Arc<Mutex<CloudControlStore>>,
+    edge_id: &str,
+) -> Result<Option<EdgeConfigPackage>> {
+    let store = store
+        .lock()
+        .map_err(|_| anyhow!("cloud control store mutex poisoned"))?;
+    let Some(release) = store
+        .releases()
+        .filter(|release| release.edge_id == edge_id && release.status == ReleaseStatus::Pending)
+        .max_by(|left, right| left.desired_version.cmp(&right.desired_version))
+    else {
+        return Ok(None);
+    };
+
+    Ok(store
+        .config_package(&release.edge_id, &release.desired_version)
+        .cloned())
+}
+
+fn persist_config_report(
+    store: &Arc<Mutex<CloudControlStore>>,
+    edge_id: &str,
+    expected_version: &str,
+    report: &EdgeLinkConfigReport,
+) -> Result<()> {
+    if report.desired_version != expected_version {
+        bail!(
+            "config report desired version {} does not match deployed version {}",
+            report.desired_version,
+            expected_version
+        );
+    }
+
+    let mut store = store
+        .lock()
+        .map_err(|_| anyhow!("cloud control store mutex poisoned"))?;
+    let Some(release_id) = store
+        .releases()
+        .find(|release| {
+            release.edge_id == edge_id
+                && release.desired_version == report.desired_version
+                && release.status == ReleaseStatus::Pending
+        })
+        .map(|release| release.release_id)
+    else {
+        return Ok(());
+    };
+
+    let reported_version = report
+        .applied_version
+        .clone()
+        .unwrap_or_else(|| "rejected".to_string());
+    ReleaseService::mark_reported(&mut store, release_id, reported_version);
+    Ok(())
 }
 
 fn persist_runtime_message(

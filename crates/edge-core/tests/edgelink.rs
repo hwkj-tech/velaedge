@@ -1,6 +1,6 @@
 use edge_core::{
-    decode_edgelink_frame, encode_edgelink_frame, EdgeLinkMessage, EdgeLinkMessageKind,
-    EdgeLinkPayload,
+    decode_edgelink_frame, encode_edgelink_frame, EdgeConfigPackage, EdgeLinkMessage,
+    EdgeLinkMessageKind, EdgeLinkPayload,
 };
 
 #[test]
@@ -50,6 +50,35 @@ fn edgelink_ack_references_received_message() {
     };
     assert_eq!(payload.ack_message_id, hello.message_id);
     assert_eq!(payload.ack_sequence, hello.sequence);
+    assert!(payload.accepted);
+}
+
+#[test]
+fn edgelink_config_deploy_and_report_use_versioned_payloads() {
+    let package = EdgeConfigPackage::new("edge-dev", "2026.06.27-010");
+    let deploy = EdgeLinkMessage::config_deploy("edge-dev", "runtime-dev", 2, package.clone());
+
+    assert_eq!(deploy.kind, EdgeLinkMessageKind::ConfigDeploy);
+    let EdgeLinkPayload::ConfigDeploy(payload) = deploy.payload else {
+        panic!("expected config deploy payload");
+    };
+    assert_eq!(payload.version, package.version);
+
+    let report = EdgeLinkMessage::config_report(
+        "edge-dev",
+        "runtime-dev",
+        3,
+        "2026.06.27-010",
+        Some("2026.06.27-010".to_string()),
+        true,
+        None,
+    );
+    assert_eq!(report.kind, EdgeLinkMessageKind::ConfigReport);
+    let EdgeLinkPayload::ConfigReport(payload) = report.payload else {
+        panic!("expected config report payload");
+    };
+    assert_eq!(payload.desired_version, "2026.06.27-010");
+    assert_eq!(payload.applied_version.as_deref(), Some("2026.06.27-010"));
     assert!(payload.accepted);
 }
 
