@@ -38,9 +38,6 @@ describe('EdgeNodesPage', () => {
   });
 
   it('runs lifecycle toolbar actions through handlers', async () => {
-    const onRegisterEdge = vi.fn().mockResolvedValue({
-      edgeId: 'edge-draft-2',
-    });
     const onRotateCredentials = vi.fn().mockResolvedValue({
       credentialVersion: 'credential-v2',
     });
@@ -52,19 +49,12 @@ describe('EdgeNodesPage', () => {
       <EdgeNodesPage
         edges={edges}
         onEnableMaintenance={onEnableMaintenance}
-        onRegisterEdge={onRegisterEdge}
         onRotateCredentials={onRotateCredentials}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '注册边端' }));
-    await waitFor(() => {
-      expect(onRegisterEdge).toHaveBeenCalledWith({
-        displayName: '新边端注册草稿',
-        site: '待分配',
-      });
-    });
-    expect(await screen.findByText('已注册边端草稿 edge-draft-2')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '注册边端' })).not.toBeInTheDocument();
+    expect(screen.getByText('runtime 连接后自动登记')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '轮换凭证' }));
     await waitFor(() => {
@@ -77,5 +67,24 @@ describe('EdgeNodesPage', () => {
       expect(onEnableMaintenance).toHaveBeenCalledWith('edge-dev');
     });
     expect(await screen.findByText('维护模式已启用 维护中')).toBeInTheDocument();
+  });
+
+  it('paginates edge rows locally', () => {
+    const manyEdges = Array.from({ length: 12 }, (_, index) => ({
+      ...edges[0],
+      edgeId: `edge-${index + 1}`,
+    }));
+
+    render(<EdgeNodesPage edges={manyEdges} pageSize={5} />);
+
+    expect(screen.getByText('第 1 / 3 页')).toBeInTheDocument();
+    expect(screen.getByText('edge-1')).toBeInTheDocument();
+    expect(screen.queryByText('edge-6')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+
+    expect(screen.getByText('第 2 / 3 页')).toBeInTheDocument();
+    expect(screen.getByText('edge-6')).toBeInTheDocument();
+    expect(screen.queryByText('edge-1')).not.toBeInTheDocument();
   });
 });

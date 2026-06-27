@@ -1,6 +1,7 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
+    response::IntoResponse,
     routing::{get, post, put},
     Json, Router,
 };
@@ -239,7 +240,10 @@ async fn create_edge_point_mapping(
     Ok((StatusCode::CREATED, Json(response)))
 }
 
-async fn edge_nodes(State(state): State<AppState>) -> Json<Vec<EdgeNodeResponse>> {
+async fn edge_nodes(
+    Query(query): Query<EdgeNodesQuery>,
+    State(state): State<AppState>,
+) -> axum::response::Response {
     let store = state.store.lock().expect("store mutex poisoned");
     let mut rows = store
         .edge_nodes()
@@ -250,7 +254,29 @@ async fn edge_nodes(State(state): State<AppState>) -> Json<Vec<EdgeNodeResponse>
         .collect::<Vec<_>>();
     rows.sort_by(|left, right| left.edge_id.cmp(&right.edge_id));
 
-    Json(rows)
+    if query.page.is_none() && query.page_size.is_none() {
+        return Json(rows).into_response();
+    }
+
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
+    let total = rows.len();
+    let total_pages = total.div_ceil(page_size).max(1);
+    let start = (page.saturating_sub(1) * page_size).min(total);
+    let items = rows
+        .into_iter()
+        .skip(start)
+        .take(page_size)
+        .collect::<Vec<_>>();
+
+    Json(EdgeNodesPageResponse {
+        items,
+        page,
+        page_size,
+        total,
+        total_pages,
+    })
+    .into_response()
 }
 
 async fn edge_mqtt_uplink(
@@ -1429,6 +1455,23 @@ pub struct EdgeNodeResponse {
     pub resources: String,
     pub heartbeat: String,
     pub capabilities: Vec<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeNodesQuery {
+    pub page: Option<usize>,
+    pub page_size: Option<usize>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeNodesPageResponse {
+    pub items: Vec<EdgeNodeResponse>,
+    pub page: usize,
+    pub page_size: usize,
+    pub total: usize,
+    pub total_pages: usize,
 }
 
 #[derive(Deserialize)]

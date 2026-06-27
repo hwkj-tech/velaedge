@@ -121,6 +121,18 @@ async fn gateway_ingests_runtime_metrics_and_events_after_hello() {
     assert_eq!(report.accepted_message_count, 2);
 
     let store = store.lock().expect("store mutex should not be poisoned");
+    let node = store
+        .edge_nodes()
+        .find(|edge| edge.edge_id == "edge-live")
+        .expect("runtime hello should auto-register edge node");
+    assert_eq!(node.display_name, "edge-live");
+    assert_eq!(node.site.as_deref(), Some("runtime/runtime-live"));
+    assert!(node
+        .capabilities
+        .contains(&"registration:runtime-discovered".to_string()));
+    assert!(node
+        .capabilities
+        .contains(&"protocol:modbus-tcp".to_string()));
     let stored_metrics = store
         .runtime_metrics("edge-live")
         .expect("metrics should be stored");
@@ -196,6 +208,12 @@ async fn gateway_persists_runtime_metrics_and_events_to_sqlite() {
     assert_eq!(report.accepted_message_count, 2);
 
     let reopened = SqliteCloudStore::connect(&database_url).await.unwrap();
+    let edges = reopened.edge_nodes().await.unwrap();
+    let edge = edges
+        .iter()
+        .find(|edge| edge.edge_id == "edge-sqlite")
+        .expect("runtime-discovered edge should persist");
+    assert_eq!(edge.site.as_deref(), Some("runtime/runtime-sqlite"));
     let stored_metrics = reopened
         .runtime_metrics("edge-sqlite")
         .await

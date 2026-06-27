@@ -1295,6 +1295,29 @@ async fn edge_scoped_publish_endpoint_releases_selected_edge_draft() {
 }
 
 #[tokio::test]
+async fn edge_nodes_endpoint_supports_pagination_metadata() {
+    let router = app(AppState::default());
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edge-nodes?page=1&pageSize=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload["page"], 1);
+    assert_eq!(payload["pageSize"], 1);
+    assert_eq!(payload["total"], 1);
+    assert_eq!(payload["items"][0]["edgeId"], "edge-dev");
+}
+
+#[tokio::test]
 async fn edge_desired_config_endpoint_returns_latest_package() {
     let router = app(AppState::default());
     let update = json!({

@@ -9,9 +9,6 @@ describe('DashboardPage', () => {
       pointId: 'point-draft-3',
     });
     const onPublish = vi.fn().mockResolvedValue(undefined);
-    const onRegisterEdge = vi.fn().mockResolvedValue({
-      edgeId: 'edge-draft-2',
-    });
 
     render(
       <DashboardPage
@@ -19,15 +16,11 @@ describe('DashboardPage', () => {
         summary={{ edge_count: 1, pending_release_count: 0 }}
         onCreatePoint={onCreatePoint}
         onPublish={onPublish}
-        onRegisterEdge={onRegisterEdge}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '注册边端' }));
-    await waitFor(() => {
-      expect(onRegisterEdge).toHaveBeenCalledOnce();
-    });
-    expect(await screen.findByText('已注册边端草稿 edge-draft-2')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '注册边端' })).not.toBeInTheDocument();
+    expect(screen.getByText('边端连接后自动发现')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '创建点位' }));
     await waitFor(() => {

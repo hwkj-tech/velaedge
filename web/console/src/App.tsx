@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 
 import {
   createAlgorithmDraft,
-  createEdgeNode,
   createCollectionTaskDraft,
   createDeviceModelDraft,
   createPointMappingDraft,
@@ -38,7 +37,6 @@ import type {
   AgentActionResponse,
   AuditRecordResponse,
   CollectionTaskResponse,
-  CreateEdgeNodeRequest,
   DiscoveryReportResponse,
   DeviceModelResponse,
   EdgeNodeActionResponse,
@@ -359,17 +357,6 @@ export default function App() {
     return report;
   };
 
-  const handleRegisterEdge = async (request: CreateEdgeNodeRequest) => {
-    const created = await createEdgeNode(request);
-    const [nextEdgeNodes, nextSummary] = await Promise.all([
-      fetchEdgeNodes(),
-      fetchSummary(),
-    ]);
-    setEdgeNodes(nextEdgeNodes);
-    setSummary(nextSummary);
-    return created;
-  };
-
   const handleRotateCredentials = async (
     edgeId: string,
   ): Promise<EdgeNodeActionResponse> => {
@@ -489,7 +476,6 @@ export default function App() {
         handleImportPoints,
         handleMonitorEdge,
         handleReleaseDiff,
-        handleRegisterEdge,
         handleRotateCredentials,
         handleSavePoint,
         handleSelectPointEdge,
@@ -591,7 +577,6 @@ function renderPage(
   onImportPoints: (edgeId: string) => Promise<ManagementActionResponse>,
   onMonitorEdge: (edgeId: string) => void,
   onReleaseDiff: (edgeId: string) => Promise<ManagementActionResponse>,
-  onRegisterEdge: (request: CreateEdgeNodeRequest) => Promise<EdgeNodeResponse>,
   onRotateCredentials: (edgeId: string) => Promise<EdgeNodeActionResponse>,
   onSavePoint: (
     edgeId: string,
@@ -650,12 +635,6 @@ function renderPage(
           loadState={loadState}
           onCreatePoint={() => onCreatePoint(defaultConfigEdgeId)}
           onPublish={() => onPublish(defaultConfigEdgeId)}
-          onRegisterEdge={() =>
-            onRegisterEdge({
-              displayName: '新边端注册草稿',
-              site: '待分配',
-            })
-          }
           summary={summary}
         />
       );
@@ -668,7 +647,6 @@ function renderPage(
           }}
           onEnableMaintenance={onEnableMaintenance}
           onMonitorEdge={onMonitorEdge}
-          onRegisterEdge={onRegisterEdge}
           onRotateCredentials={onRotateCredentials}
         />
       );

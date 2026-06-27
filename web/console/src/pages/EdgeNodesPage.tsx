@@ -1,8 +1,7 @@
 import { useState } from 'react';
-import { Activity, KeyRound, Plus, Settings2, Wrench } from 'lucide-react';
+import { Activity, ChevronLeft, ChevronRight, KeyRound, Settings2, Wrench } from 'lucide-react';
 
 import type {
-  CreateEdgeNodeRequest,
   EdgeNodeActionResponse,
   EdgeNodeResponse,
 } from '../api/types';
@@ -25,8 +24,8 @@ export function EdgeNodesPage({
   onConfigureEdge,
   onEnableMaintenance,
   onMonitorEdge,
-  onRegisterEdge,
   onRotateCredentials,
+  pageSize = 10,
 }: {
   edges?: EdgeNodeResponse[];
   onConfigureEdge?: (edgeId: string) => void;
@@ -34,37 +33,21 @@ export function EdgeNodesPage({
     edgeId: string,
   ) => Promise<EdgeNodeActionResponse> | EdgeNodeActionResponse;
   onMonitorEdge?: (edgeId: string) => void;
-  onRegisterEdge?: (
-    request: CreateEdgeNodeRequest,
-  ) => Promise<EdgeNodeResponse> | EdgeNodeResponse;
   onRotateCredentials?: (
     edgeId: string,
   ) => Promise<EdgeNodeActionResponse> | EdgeNodeActionResponse;
+  pageSize?: number;
 }) {
   const [toolbarMessage, setToolbarMessage] = useState('');
-  const [actionState, setActionState] = useState<
-    'idle' | 'registering' | 'rotating' | 'maintenance'
-  >('idle');
+  const [actionState, setActionState] = useState<'idle' | 'rotating' | 'maintenance'>(
+    'idle',
+  );
+  const [page, setPage] = useState(1);
   const primaryEdgeId = edges[0]?.edgeId ?? fallbackEdges[0].edgeId;
-
-  const handleRegisterEdge = async () => {
-    setActionState('registering');
-    setToolbarMessage('');
-
-    try {
-      const created = await onRegisterEdge?.({
-        displayName: '新边端注册草稿',
-        site: '待分配',
-      });
-      setToolbarMessage(
-        created ? `已注册边端草稿 ${created.edgeId}` : '已注册边端草稿',
-      );
-    } catch {
-      setToolbarMessage('注册边端失败');
-    } finally {
-      setActionState('idle');
-    }
-  };
+  const totalPages = Math.max(1, Math.ceil(edges.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pageStart = (currentPage - 1) * pageSize;
+  const visibleEdges = edges.slice(pageStart, pageStart + pageSize);
 
   const handleRotateCredentials = async () => {
     setActionState('rotating');
@@ -106,7 +89,7 @@ export function EdgeNodesPage({
         <div>
           <h2>边端生命周期</h2>
           <p>
-            维护边端注册、分组、凭证轮换和运行能力，云端只下发配置与策略，具体采集由边端 runtime 执行。
+            边端由 runtime 通过 EdgeLink 主动连接后自动登记，云端负责识别、配置、凭证和运行治理。
           </p>
         </div>
         <div className="toolbar">
@@ -115,6 +98,7 @@ export function EdgeNodesPage({
               {toolbarMessage}
             </span>
           ) : null}
+          <span className="toolbar-status">runtime 连接后自动登记</span>
           <button
             className="secondary-button"
             disabled={actionState === 'rotating'}
@@ -136,17 +120,6 @@ export function EdgeNodesPage({
           >
             <Wrench size={15} aria-hidden="true" />
             {actionState === 'maintenance' ? '启用中' : '维护模式'}
-          </button>
-          <button
-            className="primary-button"
-            disabled={actionState === 'registering'}
-            onClick={() => {
-              void handleRegisterEdge();
-            }}
-            type="button"
-          >
-            <Plus size={15} aria-hidden="true" />
-            {actionState === 'registering' ? '注册中' : '注册边端'}
           </button>
         </div>
       </section>
@@ -171,7 +144,7 @@ export function EdgeNodesPage({
               </tr>
             </thead>
             <tbody>
-              {edges.map((edge) => (
+              {visibleEdges.map((edge) => (
                 <tr key={edge.edgeId}>
                   <td>{edge.edgeId}</td>
                   <td>{edge.displayName}</td>
@@ -210,6 +183,31 @@ export function EdgeNodesPage({
               ))}
             </tbody>
           </table>
+        </div>
+        <div className="pagination-bar" aria-label="边端分页">
+          <span>
+            第 {currentPage} / {totalPages} 页
+          </span>
+          <div className="row-actions">
+            <button
+              className="secondary-button compact"
+              disabled={currentPage === 1}
+              onClick={() => setPage((value) => Math.max(1, value - 1))}
+              type="button"
+            >
+              <ChevronLeft size={14} aria-hidden="true" />
+              上一页
+            </button>
+            <button
+              className="secondary-button compact"
+              disabled={currentPage === totalPages}
+              onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+              type="button"
+            >
+              <ChevronRight size={14} aria-hidden="true" />
+              下一页
+            </button>
+          </div>
         </div>
       </section>
     </div>

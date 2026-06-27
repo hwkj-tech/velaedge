@@ -1,11 +1,7 @@
 import { useState } from 'react';
-import { Plus, Send, Wrench } from 'lucide-react';
+import { Send, Wrench } from 'lucide-react';
 
-import type {
-  EdgeNodeResponse,
-  PointMappingResponse,
-  SummaryResponse,
-} from '../api/types';
+import type { PointMappingResponse, SummaryResponse } from '../api/types';
 
 const edgeHealth = [
   ['edge-shanghai-01', '上海一厂', '在线', 'v2026.06.26-001', 'v2026.06.26-001', '18 秒前'],
@@ -23,36 +19,18 @@ export function DashboardPage({
   loadState,
   onCreatePoint,
   onPublish,
-  onRegisterEdge,
   summary,
 }: {
   loadState: 'loading' | 'ready' | 'error';
   onCreatePoint?: () => Promise<PointMappingResponse> | PointMappingResponse;
   onPublish?: () => Promise<void> | void;
-  onRegisterEdge?: () => Promise<EdgeNodeResponse> | EdgeNodeResponse;
   summary: SummaryResponse;
 }) {
   const onlineRate = summary.edge_count > 0 ? '66.7%' : '--';
   const [toolbarMessage, setToolbarMessage] = useState('');
   const [actionState, setActionState] = useState<
-    'idle' | 'registering' | 'creating-point' | 'publishing'
+    'idle' | 'creating-point' | 'publishing'
   >('idle');
-
-  const handleRegisterEdge = async () => {
-    setActionState('registering');
-    setToolbarMessage('');
-
-    try {
-      const created = await onRegisterEdge?.();
-      setToolbarMessage(
-        created ? `已注册边端草稿 ${created.edgeId}` : '已注册边端草稿',
-      );
-    } catch {
-      setToolbarMessage('注册边端失败');
-    } finally {
-      setActionState('idle');
-    }
-  };
 
   const handleCreatePoint = async () => {
     setActionState('creating-point');
@@ -99,17 +77,7 @@ export function DashboardPage({
               {toolbarMessage}
             </span>
           ) : null}
-          <button
-            className="secondary-button"
-            disabled={actionState === 'registering'}
-            onClick={() => {
-              void handleRegisterEdge();
-            }}
-            type="button"
-          >
-            <Plus size={15} aria-hidden="true" />
-            {actionState === 'registering' ? '注册中' : '注册边端'}
-          </button>
+          <span className="toolbar-status">边端连接后自动发现</span>
           <button
             className="secondary-button"
             disabled={actionState === 'creating-point'}

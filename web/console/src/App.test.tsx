@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createAlgorithmDraft,
-  createEdgeNode,
   createCollectionTaskDraft,
   createDeviceModelDraft,
   createPointMappingDraft,
@@ -56,7 +55,6 @@ import App from './App';
 
 vi.mock('./api/client', () => ({
   createAlgorithmDraft: vi.fn(),
-  createEdgeNode: vi.fn(),
   createCollectionTaskDraft: vi.fn(),
   createDeviceModelDraft: vi.fn(),
   createPointMappingDraft: vi.fn(),
@@ -178,17 +176,6 @@ const edgeNodes: EdgeNodeResponse[] = [
     capabilities: ['protocol:modbus-tcp'],
   },
 ];
-
-const registeredEdgeNode: EdgeNodeResponse = {
-  edgeId: 'edge-draft-2',
-  displayName: '新边端注册草稿',
-  site: '待分配',
-  runtimeId: '-',
-  status: '未上报',
-  resources: '-',
-  heartbeat: '-',
-  capabilities: ['registration:draft'],
-};
 
 const maintenanceEdgeNodes: EdgeNodeResponse[] = [
   {
@@ -453,7 +440,6 @@ describe('App cloud console write actions', () => {
       protocolType: 'OpcUa',
     });
     vi.mocked(createEdgeProtocolConnection).mockResolvedValue(createdProtocolConnection);
-    vi.mocked(createEdgeNode).mockResolvedValue(registeredEdgeNode);
     vi.mocked(rotateEdgeCredentials).mockResolvedValue({
       action: 'rotate_credentials',
       credentialVersion: 'credential-v2',
@@ -710,35 +696,14 @@ describe('App cloud console write actions', () => {
     expect(screen.getByText('18.5%')).toBeInTheDocument();
   });
 
-  it('registers edge drafts through the edge management API', async () => {
-    vi.mocked(fetchEdgeNodes)
-      .mockResolvedValueOnce(edgeNodes)
-      .mockResolvedValueOnce([...edgeNodes, registeredEdgeNode]);
-    vi.mocked(fetchSummary)
-      .mockResolvedValueOnce({
-        edge_count: 1,
-        pending_release_count: 0,
-      })
-      .mockResolvedValueOnce({
-        edge_count: 2,
-        pending_release_count: 0,
-      });
-
+  it('keeps edge registration automatic from runtime connections', async () => {
     render(<App />);
 
     fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
     expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '注册边端' }));
-
-    await waitFor(() => {
-      expect(createEdgeNode).toHaveBeenCalledWith({
-        displayName: '新边端注册草稿',
-        site: '待分配',
-      });
-    });
-    expect(await screen.findByText('edge-draft-2')).toBeInTheDocument();
-    expect(screen.getByText('已注册边端草稿 edge-draft-2')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '注册边端' })).not.toBeInTheDocument();
+    expect(screen.getByText('runtime 连接后自动登记')).toBeInTheDocument();
   });
 
   it('runs credential rotation and maintenance mode through edge APIs', async () => {
@@ -843,30 +808,11 @@ describe('App cloud console write actions', () => {
   });
 
   it('runs dashboard quick actions through real API clients', async () => {
-    vi.mocked(fetchEdgeNodes)
-      .mockResolvedValueOnce(edgeNodes)
-      .mockResolvedValueOnce([...edgeNodes, registeredEdgeNode]);
-    vi.mocked(fetchSummary)
-      .mockResolvedValueOnce({
-        edge_count: 1,
-        pending_release_count: 0,
-      })
-      .mockResolvedValueOnce({
-        edge_count: 2,
-        pending_release_count: 0,
-      });
-
     render(<App />);
     expect(await screen.findByText('运行总览')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '注册边端' }));
-    await waitFor(() => {
-      expect(createEdgeNode).toHaveBeenCalledWith({
-        displayName: '新边端注册草稿',
-        site: '待分配',
-      });
-    });
-    expect(await screen.findByText('已注册边端草稿 edge-draft-2')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '注册边端' })).not.toBeInTheDocument();
+    expect(screen.getByText('边端连接后自动发现')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '创建点位' }));
     await waitFor(() => {

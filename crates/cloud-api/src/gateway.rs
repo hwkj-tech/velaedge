@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use cloud_control::{CloudControlStore, ReleaseService, ReleaseStatus, SqliteCloudStore};
+use cloud_control::{CloudControlStore, EdgeNode, ReleaseService, ReleaseStatus, SqliteCloudStore};
 use edge_core::{
     decode_edgelink_frame, encode_edgelink_frame, EdgeConfigPackage, EdgeLinkConfigReport,
     EdgeLinkMessage, EdgeLinkPayload, EDGELINK_MAX_FRAME_BYTES,
@@ -27,6 +27,8 @@ use tracing::warn;
 pub struct EdgeGatewaySession {
     pub edge_id: String,
     pub runtime_id: String,
+    pub runtime_version: String,
+    pub capabilities: Vec<String>,
     pub peer_addr: SocketAddr,
 }
 
@@ -176,6 +178,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let session = handle_edgelink_stream(stream, peer_addr).await?;
+    persist_runtime_discovered_edge(&session, store.clone(), sqlite_store.as_ref()).await?;
     let config_report_count =
         deploy_pending_config_if_available(stream, &session, store.clone(), sqlite_store.as_ref())
             .await?;
@@ -214,6 +217,7 @@ pub async fn handle_edgelink_tls_session_with_store(
         .await
         .context("failed to accept EdgeLink TLS session")?;
     let session = handle_edgelink_stream(&mut stream, peer_addr).await?;
+    persist_runtime_discovered_edge(&session, store.clone(), None).await?;
     let config_report_count =
         deploy_pending_config_if_available(&mut stream, &session, store.clone(), None).await?;
     let accepted_message_count =
@@ -261,8 +265,64 @@ where
     Ok(EdgeGatewaySession {
         edge_id: message.edge_id,
         runtime_id: hello.runtime_id.clone(),
+        runtime_version: hello.runtime_version.clone(),
+        capabilities: hello.capabilities.clone(),
         peer_addr,
     })
+}
+
+async fn persist_runtime_discovered_edge(
+    session: &EdgeGatewaySession,
+    store: Arc<Mutex<CloudControlStore>>,
+    sqlite_store: Option<&SqliteCloudStore>,
+) -> Result<()> {
+    let node = {
+        let mut store = store.lock().expect("store mutex poisoned");
+        let existing = store
+            .edge_nodes()
+            .find(|edge| edge.edge_id == session.edge_id)
+            .cloned();
+        let mut node = existing.unwrap_or_else(|| {
+            EdgeNode::new(session.edge_id.clone(), session.edge_id.clone())
+                .at_site(format!("runtime/{}", session.runtime_id))
+        });
+        if node.display_name.trim().is_empty() || node.display_name == "新边端注册草稿" {
+            node.display_name = session.edge_id.clone();
+        }
+        if node.site.as_deref().is_none() || node.site.as_deref() == Some("待分配") {
+            node.site = Some(format!("runtime/{}", session.runtime_id));
+        }
+        node.capabilities
+            .retain(|capability| capability != "registration:draft");
+        push_unique(
+            &mut node.capabilities,
+            "registration:runtime-discovered".to_string(),
+        );
+        push_unique(
+            &mut node.capabilities,
+            format!("runtime-version:{}", session.runtime_version),
+        );
+        for capability in &session.capabilities {
+            push_unique(&mut node.capabilities, capability.clone());
+        }
+        store.register_edge(node.clone());
+        node
+    };
+
+    if let Some(sqlite_store) = sqlite_store {
+        sqlite_store
+            .upsert_edge_node(node)
+            .await
+            .context("persist runtime-discovered edge node")?;
+    }
+
+    Ok(())
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values.iter().any(|existing| existing == &value) {
+        values.push(value);
+    }
 }
 
 async fn handle_edgelink_runtime_messages<S>(
