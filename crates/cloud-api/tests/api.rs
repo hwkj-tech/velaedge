@@ -220,6 +220,7 @@ async fn management_endpoints_return_seeded_control_plane_data() {
     let connections: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(connections[0]["connectionId"], "modbus-line-a");
     assert_eq!(connections[0]["protocol"], "Modbus TCP");
+    assert_eq!(connections[0]["protocolType"], "ModbusTcp");
 
     let tasks_response = router
         .clone()
@@ -268,6 +269,82 @@ async fn management_endpoints_return_seeded_control_plane_data() {
     let audit_records: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(audit_records[0]["actor"], "system");
     assert!(audit_records[0]["action"].is_string());
+}
+
+#[tokio::test]
+async fn edge_protocol_connections_endpoint_returns_selected_edge_connections() {
+    let response = app(AppState::default())
+        .oneshot(
+            Request::get("/api/edges/edge-dev/protocol-connections")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(payload[0]["edgeId"], "edge-dev");
+    assert_eq!(payload[0]["connectionId"], "modbus-line-a");
+    assert_eq!(payload[0]["protocolType"], "ModbusTcp");
+    assert_eq!(payload[0]["endpoint"], "10.12.0.20:502");
+}
+
+#[tokio::test]
+async fn edge_protocol_connection_save_updates_selected_edge_draft() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/edges/edge-dev/protocol-connections/modbus-line-a")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "protocolType": "OpcUa",
+                        "endpoint": "opc.tcp://10.12.0.80:4840"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(saved["edgeId"], "edge-dev");
+    assert_eq!(saved["connectionId"], "modbus-line-a");
+    assert_eq!(saved["protocolType"], "OpcUa");
+    assert_eq!(saved["protocol"], "OPC UA");
+    assert_eq!(saved["endpoint"], "opc.tcp://10.12.0.80:4840");
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/desired-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(config["desiredVersion"], "2026.06.26-002");
+    assert_eq!(
+        config["package"]["protocol_connections"][0]["protocol"],
+        "OpcUa"
+    );
+    assert_eq!(
+        config["package"]["protocol_connections"][0]["endpoint"],
+        "opc.tcp://10.12.0.80:4840"
+    );
 }
 
 #[tokio::test]

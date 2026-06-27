@@ -10,6 +10,7 @@ import type {
   RuntimeStatusResponse,
   SaveCollectionTaskRequest,
   SavePointMappingRequest,
+  SaveProtocolConnectionRequest,
   SummaryResponse,
 } from './types';
 
@@ -58,6 +59,16 @@ export async function fetchProtocolConnections(
 ): Promise<ProtocolConnectionResponse[]> {
   return requestJson<ProtocolConnectionResponse[]>(
     '/api/protocol-connections',
+    fetcher,
+  );
+}
+
+export async function fetchEdgeProtocolConnections(
+  edgeId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ProtocolConnectionResponse[]> {
+  return requestJson<ProtocolConnectionResponse[]>(
+    `/api/edges/${encodeURIComponent(edgeId)}/protocol-connections`,
     fetcher,
   );
 }
@@ -137,6 +148,23 @@ export async function saveEdgeCollectionTask(
 ): Promise<CollectionTaskResponse> {
   return requestJson<CollectionTaskResponse>(
     `/api/edges/${encodeURIComponent(edgeId)}/collection-tasks/${encodeURIComponent(taskId)}`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    },
+  );
+}
+
+export async function saveEdgeProtocolConnection(
+  edgeId: string,
+  connectionId: string,
+  request: SaveProtocolConnectionRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<ProtocolConnectionResponse> {
+  return requestJson<ProtocolConnectionResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/protocol-connections/${encodeURIComponent(connectionId)}`,
     fetcher,
     {
       body: JSON.stringify(request),

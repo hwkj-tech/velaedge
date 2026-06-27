@@ -8,6 +8,7 @@ import {
   fetchDeviceModels,
   fetchEdgeCollectionTasks,
   fetchEdgePointMappings,
+  fetchEdgeProtocolConnections,
   fetchEdgeNodes,
   fetchPointMappings,
   fetchProtocolConnections,
@@ -17,6 +18,7 @@ import {
   publishLatestRelease,
   saveEdgeCollectionTask,
   saveEdgePointMapping,
+  saveEdgeProtocolConnection,
 } from './api/client';
 import type {
   AlgorithmResponse,
@@ -29,6 +31,7 @@ import type {
   ReleaseListResponse,
   RuntimeStatusResponse,
   SaveCollectionTaskRequest,
+  SaveProtocolConnectionRequest,
 } from './api/types';
 import App from './App';
 
@@ -39,6 +42,7 @@ vi.mock('./api/client', () => ({
   fetchDeviceModels: vi.fn(),
   fetchEdgeCollectionTasks: vi.fn(),
   fetchEdgePointMappings: vi.fn(),
+  fetchEdgeProtocolConnections: vi.fn(),
   fetchEdgeNodes: vi.fn(),
   fetchPointMappings: vi.fn(),
   fetchProtocolConnections: vi.fn(),
@@ -48,6 +52,7 @@ vi.mock('./api/client', () => ({
   publishLatestRelease: vi.fn(),
   saveEdgeCollectionTask: vi.fn(),
   saveEdgePointMapping: vi.fn(),
+  saveEdgeProtocolConnection: vi.fn(),
 }));
 
 const basePoint: PointMappingResponse = {
@@ -137,6 +142,7 @@ const protocolConnections: ProtocolConnectionResponse[] = [
     edgeId: 'edge-dev',
     connectionId: 'modbus-line-a',
     protocol: 'Modbus TCP',
+    protocolType: 'ModbusTcp',
     endpoint: '10.12.0.20:502',
     status: '启用',
     policy: '1000ms timeout / 3 retry',
@@ -245,6 +251,7 @@ describe('App cloud console write actions', () => {
     vi.mocked(fetchEdgeNodes).mockResolvedValue(edgeNodes);
     vi.mocked(fetchDeviceModels).mockResolvedValue(deviceModels);
     vi.mocked(fetchProtocolConnections).mockResolvedValue(protocolConnections);
+    vi.mocked(fetchEdgeProtocolConnections).mockResolvedValue(protocolConnections);
     vi.mocked(fetchPointMappings).mockResolvedValue([basePoint]);
     vi.mocked(fetchEdgePointMappings).mockResolvedValue([basePoint]);
     vi.mocked(fetchCollectionTasks).mockResolvedValue(collectionTasks);
@@ -266,6 +273,12 @@ describe('App cloud console write actions', () => {
       pointIds: ['pressure'],
       pointList: 'pressure',
       status: '暂停',
+    });
+    vi.mocked(saveEdgeProtocolConnection).mockResolvedValue({
+      ...protocolConnections[0],
+      endpoint: 'opc.tcp://10.12.0.80:4840',
+      protocol: 'OPC UA',
+      protocolType: 'OpcUa',
     });
     vi.mocked(publishLatestRelease).mockResolvedValue(updatedReleaseList);
   });
@@ -351,6 +364,45 @@ describe('App cloud console write actions', () => {
       );
     });
     expect((await screen.findAllByText('pressure')).length).toBeGreaterThan(0);
+    expect(screen.getByText('草稿已保存')).toBeInTheDocument();
+  });
+
+  it('saves protocol connection drafts through the selected edge API', async () => {
+    vi.mocked(fetchProtocolConnections).mockResolvedValueOnce(protocolConnections);
+    vi.mocked(fetchEdgeProtocolConnections).mockResolvedValueOnce([
+      {
+        ...protocolConnections[0],
+        endpoint: 'opc.tcp://10.12.0.80:4840',
+        protocol: 'OPC UA',
+        protocolType: 'OpcUa',
+      },
+    ]);
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /协议连接/ }));
+    expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('协议类型'), {
+      target: { value: 'OpcUa' },
+    });
+    fireEvent.change(screen.getByLabelText('端点'), {
+      target: { value: 'opc.tcp://10.12.0.80:4840' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+
+    const expectedRequest: SaveProtocolConnectionRequest = {
+      endpoint: 'opc.tcp://10.12.0.80:4840',
+      protocolType: 'OpcUa',
+    };
+    await waitFor(() => {
+      expect(saveEdgeProtocolConnection).toHaveBeenCalledWith(
+        'edge-dev',
+        'modbus-line-a',
+        expectedRequest,
+      );
+    });
+    expect(await screen.findByText('opc.tcp://10.12.0.80:4840')).toBeInTheDocument();
     expect(screen.getByText('草稿已保存')).toBeInTheDocument();
   });
 

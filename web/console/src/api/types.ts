@@ -77,10 +77,16 @@ export interface DeviceModelResponse {
 export interface ProtocolConnectionResponse {
   edgeId: string;
   connectionId: string;
+  protocolType: string;
   protocol: string;
   endpoint: string;
   status: string;
   policy: string;
+}
+
+export interface SaveProtocolConnectionRequest {
+  protocolType: string;
+  endpoint: string | null;
 }
 
 export interface CollectionTaskResponse {

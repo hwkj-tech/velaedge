@@ -7,7 +7,8 @@ use axum::{
 use cloud_control::{AuditAction, ReleaseService, ReleaseStatus};
 use edge_core::{
     AlgorithmRuntime, CollectionTask, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent,
-    EdgeRuntimeMetricsSnapshot, PointAddress, ProtocolType, TelemetryPointMapping, TelemetryType,
+    EdgeRuntimeMetricsSnapshot, PointAddress, ProtocolConnection, ProtocolType,
+    TelemetryPointMapping, TelemetryType,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -28,6 +29,14 @@ pub fn app(state: AppState) -> Router {
         .route("/api/edge-nodes", get(edge_nodes))
         .route("/api/device-models", get(device_models))
         .route("/api/protocol-connections", get(protocol_connections))
+        .route(
+            "/api/edges/{edge_id}/protocol-connections",
+            get(edge_protocol_connections),
+        )
+        .route(
+            "/api/edges/{edge_id}/protocol-connections/{connection_id}",
+            put(save_edge_protocol_connection),
+        )
         .route("/api/collection-tasks", get(collection_tasks))
         .route(
             "/api/edges/{edge_id}/collection-tasks",
@@ -229,30 +238,44 @@ async fn protocol_connections(
                     .iter()
                     .find(|protocol| protocol.connection_id == connection.connection_id)
             });
-            rows.push(ProtocolConnectionResponse {
-                edge_id: package.edge_id.clone(),
-                connection_id: connection.connection_id.clone(),
-                protocol: format_protocol(connection.protocol),
-                endpoint: connection
-                    .endpoint
-                    .clone()
-                    .unwrap_or_else(|| "runtime://simulated".to_string()),
-                status: runtime_connection
-                    .map(|metrics| {
-                        if metrics.connected {
-                            "启用".to_string()
-                        } else {
-                            "异常".to_string()
-                        }
-                    })
-                    .unwrap_or_else(|| "启用".to_string()),
-                policy: "1000ms timeout / 3 retry".to_string(),
-            });
+            rows.push(protocol_connection_response(
+                package,
+                connection,
+                runtime_connection.map(|metrics| metrics.connected),
+            ));
         }
     }
     rows.sort_by(|left, right| left.connection_id.cmp(&right.connection_id));
 
     Json(rows)
+}
+
+async fn edge_protocol_connections(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<Json<Vec<ProtocolConnectionResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let package = store
+        .latest_config_package_for_edge(&edge_id)
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+    let runtime = store.runtime_metrics(&edge_id);
+    let mut connections = package
+        .protocol_connections
+        .iter()
+        .map(|connection| {
+            let connected = runtime.and_then(|snapshot| {
+                snapshot
+                    .protocols
+                    .iter()
+                    .find(|protocol| protocol.connection_id == connection.connection_id)
+                    .map(|metrics| metrics.connected)
+            });
+            protocol_connection_response(package, connection, connected)
+        })
+        .collect::<Vec<_>>();
+    connections.sort_by(|left, right| left.connection_id.cmp(&right.connection_id));
+
+    Ok(Json(connections))
 }
 
 async fn collection_tasks(State(state): State<AppState>) -> Json<Vec<CollectionTaskResponse>> {
@@ -564,6 +587,49 @@ async fn save_edge_collection_task(
     Ok(Json(response))
 }
 
+async fn save_edge_protocol_connection(
+    State(state): State<AppState>,
+    Path((edge_id, connection_id)): Path<(String, String)>,
+    Json(request): Json<SaveProtocolConnectionRequest>,
+) -> Result<Json<ProtocolConnectionResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let (package, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut package = store
+            .latest_config_package_for_edge(&edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+        let connection_index = package
+            .protocol_connections
+            .iter()
+            .position(|connection| connection.connection_id == connection_id)
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing protocol connection"))?;
+
+        package.version = next_version(&package.version);
+        {
+            let connection = &mut package.protocol_connections[connection_index];
+            connection.protocol = request.protocol_type;
+            connection.endpoint = request
+                .endpoint
+                .filter(|endpoint| !endpoint.trim().is_empty());
+        }
+
+        let response = protocol_connection_response(
+            &package,
+            &package.protocol_connections[connection_index],
+            None,
+        );
+        store.upsert_config_package(package.clone());
+        (package, response)
+    };
+
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(Json(response))
+}
+
 async fn publish_latest_release(
     State(state): State<AppState>,
 ) -> Result<Json<ReleaseListResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -785,6 +851,7 @@ pub struct TelemetryModelResponse {
 pub struct ProtocolConnectionResponse {
     pub edge_id: String,
     pub connection_id: String,
+    pub protocol_type: ProtocolType,
     pub protocol: String,
     pub endpoint: String,
     pub status: String,
@@ -875,6 +942,13 @@ pub struct SaveCollectionTaskRequest {
     pub point_ids: Vec<String>,
     pub interval_ms: u64,
     pub enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProtocolConnectionRequest {
+    pub protocol_type: ProtocolType,
+    pub endpoint: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -981,6 +1055,33 @@ fn collection_task_response(
         interval: format!("{}ms", task.interval_ms),
         enabled: task.enabled,
         status: if task.enabled { "启用" } else { "暂停" }.to_string(),
+    }
+}
+
+fn protocol_connection_response(
+    package: &EdgeConfigPackage,
+    connection: &ProtocolConnection,
+    connected: Option<bool>,
+) -> ProtocolConnectionResponse {
+    ProtocolConnectionResponse {
+        edge_id: package.edge_id.clone(),
+        connection_id: connection.connection_id.clone(),
+        protocol_type: connection.protocol,
+        protocol: format_protocol(connection.protocol),
+        endpoint: connection
+            .endpoint
+            .clone()
+            .unwrap_or_else(|| "runtime://simulated".to_string()),
+        status: connected
+            .map(|connected| {
+                if connected {
+                    "启用".to_string()
+                } else {
+                    "异常".to_string()
+                }
+            })
+            .unwrap_or_else(|| "启用".to_string()),
+        policy: "1000ms timeout / 3 retry".to_string(),
     }
 }
 

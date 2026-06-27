@@ -7,6 +7,7 @@ import {
   fetchDeviceModels,
   fetchEdgeCollectionTasks,
   fetchEdgePointMappings,
+  fetchEdgeProtocolConnections,
   fetchEdgeNodes,
   fetchPointMappings,
   fetchProtocolConnections,
@@ -16,6 +17,7 @@ import {
   publishLatestRelease,
   saveEdgeCollectionTask,
   saveEdgePointMapping,
+  saveEdgeProtocolConnection,
 } from './api/client';
 import type {
   AlgorithmResponse,
@@ -29,6 +31,7 @@ import type {
   RuntimeStatusResponse,
   SaveCollectionTaskRequest,
   SavePointMappingRequest,
+  SaveProtocolConnectionRequest,
   SummaryResponse,
 } from './api/types';
 import { AppShell, type PageKey } from './layout/AppShell';
@@ -69,6 +72,7 @@ export default function App() {
   const [deviceModels, setDeviceModels] = useState<DeviceModelResponse[]>();
   const [protocolConnections, setProtocolConnections] =
     useState<ProtocolConnectionResponse[]>();
+  const [selectedProtocolEdgeId, setSelectedProtocolEdgeId] = useState('edge-dev');
   const [pointMappings, setPointMappings] = useState<PointMappingResponse[]>();
   const [selectedPointEdgeId, setSelectedPointEdgeId] = useState('edge-dev');
   const [collectionTasks, setCollectionTasks] = useState<CollectionTaskResponse[]>();
@@ -139,6 +143,26 @@ export default function App() {
     setCollectionTasks(await fetchEdgeCollectionTasks(edgeId));
   };
 
+  const handleSaveProtocolConnection = async (
+    edgeId: string,
+    connectionId: string,
+    request: SaveProtocolConnectionRequest,
+  ) => {
+    await saveEdgeProtocolConnection(edgeId, connectionId, request);
+    const [nextProtocolConnections, nextReleaseList] = await Promise.all([
+      fetchEdgeProtocolConnections(edgeId),
+      fetchReleaseList(),
+    ]);
+    setProtocolConnections(nextProtocolConnections);
+    setReleaseList(nextReleaseList);
+    setSelectedProtocolEdgeId(edgeId);
+  };
+
+  const handleSelectProtocolEdge = async (edgeId: string) => {
+    setSelectedProtocolEdgeId(edgeId);
+    setProtocolConnections(await fetchEdgeProtocolConnections(edgeId));
+  };
+
   const handlePublishLatestRelease = async (edgeId: string) => {
     await publishLatestRelease(edgeId);
     await refreshConsoleData();
@@ -196,6 +220,9 @@ export default function App() {
         handleSaveCollectionTask,
         handleSelectCollectionEdge,
         selectedCollectionEdgeId,
+        handleSaveProtocolConnection,
+        handleSelectProtocolEdge,
+        selectedProtocolEdgeId,
         handlePublishLatestRelease,
         edgeNodes,
         deviceModels,
@@ -268,6 +295,13 @@ function renderPage(
   ) => Promise<void>,
   onSelectCollectionEdge: (edgeId: string) => Promise<void>,
   selectedCollectionEdgeId: string,
+  onSaveProtocolConnection: (
+    edgeId: string,
+    connectionId: string,
+    request: SaveProtocolConnectionRequest,
+  ) => Promise<void>,
+  onSelectProtocolEdge: (edgeId: string) => Promise<void>,
+  selectedProtocolEdgeId: string,
   onPublish: (edgeId: string) => Promise<void>,
   edgeNodes?: EdgeNodeResponse[],
   deviceModels?: DeviceModelResponse[],
@@ -287,7 +321,15 @@ function renderPage(
     case 'deviceModels':
       return <DeviceModelsPage deviceModels={deviceModels} />;
     case 'protocolConnections':
-      return <ProtocolConnectionsPage connections={protocolConnections} />;
+      return (
+        <ProtocolConnectionsPage
+          connections={protocolConnections}
+          edges={edgeNodes}
+          onSaveConnection={onSaveProtocolConnection}
+          onSelectEdge={onSelectProtocolEdge}
+          selectedEdgeId={selectedProtocolEdgeId}
+        />
+      );
     case 'pointMappings':
       return (
         <PointMappingsPage

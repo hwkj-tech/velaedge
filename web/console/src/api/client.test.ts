@@ -8,6 +8,7 @@ import {
   fetchEdgeCollectionTasks,
   fetchEdgeNodes,
   fetchEdgePointMappings,
+  fetchEdgeProtocolConnections,
   fetchPointMappings,
   fetchProtocolConnections,
   fetchReleaseList,
@@ -16,6 +17,7 @@ import {
   publishLatestRelease,
   saveEdgeCollectionTask,
   saveEdgePointMapping,
+  saveEdgeProtocolConnection,
   savePointMapping,
 } from './client';
 
@@ -197,7 +199,9 @@ describe('management data clients', () => {
     const payloads: Record<string, unknown> = {
       '/api/edge-nodes': [{ edgeId: 'edge-dev' }],
       '/api/device-models': [{ deviceType: 'pump' }],
-      '/api/protocol-connections': [{ connectionId: 'modbus-line-a' }],
+      '/api/protocol-connections': [
+        { connectionId: 'modbus-line-a', protocolType: 'ModbusTcp' },
+      ],
       '/api/collection-tasks': [{ taskId: 'pump-main' }],
       '/api/algorithms': [{ algorithmId: 'pump-anomaly-v1' }],
       '/api/audit-records': [{ action: 'create_release' }],
@@ -234,6 +238,35 @@ describe('management data clients', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/collection-tasks');
     expect(fetchMock).toHaveBeenCalledWith('/api/algorithms');
     expect(fetchMock).toHaveBeenCalledWith('/api/audit-records');
+  });
+});
+
+describe('fetchEdgeProtocolConnections', () => {
+  it('loads protocol connections for the selected edge from the API', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          edgeId: 'edge-dev',
+          connectionId: 'modbus-line-a',
+          protocolType: 'ModbusTcp',
+          protocol: 'Modbus TCP',
+          endpoint: '10.12.0.20:502',
+          status: '启用',
+          policy: '1000ms timeout / 3 retry',
+        },
+      ],
+    });
+
+    const result = await fetchEdgeProtocolConnections(
+      'edge-dev',
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/edges/edge-dev/protocol-connections',
+    );
+    expect(result[0].protocolType).toBe('ModbusTcp');
   });
 });
 
@@ -346,6 +379,46 @@ describe('saveEdgeCollectionTask', () => {
       },
     );
     expect(result.status).toBe('暂停');
+  });
+});
+
+describe('saveEdgeProtocolConnection', () => {
+  it('sends an editable protocol connection draft to the selected edge API', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        edgeId: 'edge-dev',
+        connectionId: 'modbus-line-a',
+        protocolType: 'OpcUa',
+        protocol: 'OPC UA',
+        endpoint: 'opc.tcp://10.12.0.80:4840',
+        status: '启用',
+        policy: '1000ms timeout / 3 retry',
+      }),
+    });
+
+    const result = await saveEdgeProtocolConnection(
+      'edge-dev',
+      'modbus-line-a',
+      {
+        endpoint: 'opc.tcp://10.12.0.80:4840',
+        protocolType: 'OpcUa',
+      },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/edges/edge-dev/protocol-connections/modbus-line-a',
+      {
+        body: JSON.stringify({
+          endpoint: 'opc.tcp://10.12.0.80:4840',
+          protocolType: 'OpcUa',
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'PUT',
+      },
+    );
+    expect(result.protocol).toBe('OPC UA');
   });
 });
 
