@@ -6,6 +6,7 @@ pub mod discovery;
 pub mod edgelink_client;
 pub mod local_db;
 pub mod metrics;
+pub mod mqtt_uplink;
 pub mod protocol;
 pub mod reporting;
 pub mod runtime;
@@ -13,7 +14,7 @@ pub mod storage;
 pub mod sync;
 
 pub use capability::RuntimeCapabilityConfig;
-pub use config::{AppliedEdgeConfig, ConfiguredSimulatedRuntime};
+pub use config::{AppliedEdgeConfig, ConfiguredMqttCollectionReport, ConfiguredSimulatedRuntime};
 pub use discovery::SimulatedSerialDiscovery;
 pub use edgelink_client::{
     connect_edgelink_once, connect_edgelink_once_with_capabilities, connect_edgelink_tls_once,
@@ -24,6 +25,10 @@ pub use edgelink_client::{
 };
 pub use local_db::RocksEdgeRuntimeStore;
 pub use metrics::SimulatedRuntimeMetricsCollector;
+pub use mqtt_uplink::{
+    build_mqtt_publish_messages, publish_mqtt_samples, MqttPublishMessage, MqttPublisher,
+    RecordingMqttPublisher,
+};
 pub use protocol::{ProtocolAdapter, SimulatedProtocolAdapter};
 pub use reporting::{report_runtime_status_once, HttpRuntimeStatusReporter, RuntimeStatusReporter};
 pub use runtime::{CollectionReport, EdgeRuntime};

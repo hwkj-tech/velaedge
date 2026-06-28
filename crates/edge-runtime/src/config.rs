@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 use chrono::Utc;
 use edge_core::{DataQuality, DeviceShadow, EdgeConfigPackage, TelemetrySample, TelemetryValue};
 
-use crate::CollectionReport;
+use crate::{publish_mqtt_samples, CollectionReport, MqttPublisher};
 
 #[derive(Clone, Debug)]
 pub struct AppliedEdgeConfig {
@@ -36,6 +36,12 @@ pub struct ConfiguredSimulatedRuntime {
     shadows: BTreeMap<String, DeviceShadow>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConfiguredMqttCollectionReport {
+    pub collection: CollectionReport,
+    pub mqtt_messages_published: usize,
+}
+
 impl ConfiguredSimulatedRuntime {
     pub fn new(applied: AppliedEdgeConfig) -> Self {
         let mut shadows = BTreeMap::new();
@@ -49,6 +55,32 @@ impl ConfiguredSimulatedRuntime {
     }
 
     pub async fn collect_once(&mut self) -> Result<CollectionReport> {
+        let samples = self.collect_samples_once().await;
+        Ok(CollectionReport {
+            samples_collected: samples.len(),
+        })
+    }
+
+    pub async fn collect_once_and_publish_mqtt<P>(
+        &mut self,
+        publisher: &mut P,
+    ) -> Result<ConfiguredMqttCollectionReport>
+    where
+        P: MqttPublisher,
+    {
+        let samples = self.collect_samples_once().await;
+        let mqtt_messages_published =
+            publish_mqtt_samples(self.applied.package(), &samples, publisher).await?;
+        Ok(ConfiguredMqttCollectionReport {
+            collection: CollectionReport {
+                samples_collected: samples.len(),
+            },
+            mqtt_messages_published,
+        })
+    }
+
+    async fn collect_samples_once(&mut self) -> Vec<TelemetrySample> {
+        let mut samples = Vec::new();
         let mut samples_collected = 0;
         for mapping in &self.applied.package().point_mappings {
             let sample = TelemetrySample::new(
@@ -59,11 +91,13 @@ impl ConfiguredSimulatedRuntime {
                 Utc::now(),
             );
             if let Some(shadow) = self.shadows.get_mut(&mapping.device_id) {
-                shadow.update(sample);
+                shadow.update(sample.clone());
                 samples_collected += 1;
+                samples.push(sample);
             }
         }
-        Ok(CollectionReport { samples_collected })
+        debug_assert_eq!(samples_collected, samples.len());
+        samples
     }
 
     pub fn reported_version(&self) -> &str {
