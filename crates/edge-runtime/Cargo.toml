@@ -17,6 +17,7 @@ rumqttc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+tokio-serial.workspace = true
 tokio-rustls.workspace = true
 rustls-pemfile.workspace = true
 tracing.workspace = true

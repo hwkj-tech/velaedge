@@ -6,10 +6,12 @@ pub mod discovery;
 pub mod edgelink_client;
 pub mod local_db;
 pub mod metrics;
+pub mod modbus_rtu;
 pub mod mqtt_uplink;
 pub mod protocol;
 pub mod reporting;
 pub mod runtime;
+pub mod serial;
 pub mod storage;
 pub mod sync;
 
@@ -26,6 +28,7 @@ pub use edgelink_client::{
 };
 pub use local_db::RocksEdgeRuntimeStore;
 pub use metrics::SimulatedRuntimeMetricsCollector;
+pub use modbus_rtu::{append_modbus_rtu_crc, ModbusRtuAdapter};
 pub use mqtt_uplink::{
     build_mqtt_publish_messages, parse_mqtt_broker_target, publish_mqtt_samples, MqttBrokerTarget,
     MqttPublishMessage, MqttPublisher, RecordingMqttPublisher, RumqttcMqttPublisher,
@@ -33,6 +36,7 @@ pub use mqtt_uplink::{
 pub use protocol::{ProtocolAdapter, SimulatedProtocolAdapter};
 pub use reporting::{report_runtime_status_once, HttpRuntimeStatusReporter, RuntimeStatusReporter};
 pub use runtime::{CollectionReport, EdgeRuntime};
+pub use serial::{require_serial_endpoint, ScriptedSerialBus, SerialBus, TokioSerialBus};
 pub use storage::{JsonlLocalStore, LocalStore};
 pub use sync::{
     sync_and_report_mqtt_uplink_once, sync_and_report_once,
