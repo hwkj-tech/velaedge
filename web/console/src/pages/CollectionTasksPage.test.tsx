@@ -26,7 +26,7 @@ describe('CollectionTasksPage', () => {
       target: { value: '2500' },
     });
     fireEvent.click(screen.getByLabelText('启用任务'));
-    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
       expect(onSaveTask).toHaveBeenCalledWith('edge-dev', 'pump-main', {
@@ -36,7 +36,7 @@ describe('CollectionTasksPage', () => {
         enabled: false,
       });
     });
-    expect(screen.getByText('草稿已保存')).toBeInTheDocument();
+    expect(screen.getByText('已保存')).toBeInTheDocument();
   });
 
   it('switches the active edge before editing collection tasks', async () => {

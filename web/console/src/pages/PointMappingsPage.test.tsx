@@ -25,7 +25,7 @@ describe('PointMappingsPage', () => {
     fireEvent.change(screen.getByLabelText('采集周期(ms)'), {
       target: { value: '2000' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
       expect(onSavePoint).toHaveBeenCalledWith(
@@ -39,7 +39,7 @@ describe('PointMappingsPage', () => {
         },
       );
     });
-    expect(screen.getByText('草稿已保存')).toBeInTheDocument();
+    expect(screen.getByText('已保存')).toBeInTheDocument();
   });
 
   it('switches the editor to the selected point row before saving', async () => {
@@ -53,7 +53,7 @@ describe('PointMappingsPage', () => {
     fireEvent.change(screen.getByLabelText('地址值'), {
       target: { value: '00002' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
       expect(onSavePoint).toHaveBeenCalledWith(

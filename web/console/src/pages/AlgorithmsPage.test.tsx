@@ -34,7 +34,7 @@ describe('AlgorithmsPage', () => {
     fireEvent.change(screen.getByLabelText('输出变量'), {
       target: { value: 'pump.pressure_score' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
       expect(onSaveAlgorithm).toHaveBeenCalledWith(
@@ -48,7 +48,7 @@ describe('AlgorithmsPage', () => {
         },
       );
     });
-    expect(screen.getByText('草稿已保存')).toBeInTheDocument();
+    expect(screen.getByText('已保存')).toBeInTheDocument();
   });
 
   it('switches the active edge before editing algorithms', async () => {

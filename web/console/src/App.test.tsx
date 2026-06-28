@@ -496,7 +496,7 @@ describe('App cloud console write actions', () => {
     fireEvent.change(screen.getByLabelText('采集周期(ms)'), {
       target: { value: '2000' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
       expect(saveEdgePointMapping).toHaveBeenCalledWith(
@@ -511,7 +511,7 @@ describe('App cloud console write actions', () => {
       );
     });
     expect(await screen.findByText('holding_register:40002')).toBeInTheDocument();
-    expect(screen.getByText('草稿已保存')).toBeInTheDocument();
+    expect(screen.getByText('已保存')).toBeInTheDocument();
   });
 
   it('saves collection task drafts through the selected edge API', async () => {
@@ -543,7 +543,7 @@ describe('App cloud console write actions', () => {
       target: { value: '2500' },
     });
     fireEvent.click(screen.getByLabelText('启用任务'));
-    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     const expectedRequest: SaveCollectionTaskRequest = {
       deviceId: 'pump-1',
@@ -559,7 +559,7 @@ describe('App cloud console write actions', () => {
       );
     });
     expect((await screen.findAllByText('pressure')).length).toBeGreaterThan(0);
-    expect(screen.getByText('草稿已保存')).toBeInTheDocument();
+    expect(screen.getByText('已保存')).toBeInTheDocument();
   });
 
   it('saves protocol connection drafts through the selected edge API', async () => {
@@ -586,7 +586,7 @@ describe('App cloud console write actions', () => {
     fireEvent.change(screen.getByLabelText('端点'), {
       target: { value: 'opc.tcp://10.12.0.80:4840' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     const expectedRequest: SaveProtocolConnectionRequest = {
       endpoint: 'opc.tcp://10.12.0.80:4840',
@@ -600,7 +600,7 @@ describe('App cloud console write actions', () => {
       );
     });
     expect(await screen.findByText('opc.tcp://10.12.0.80:4840')).toBeInTheDocument();
-    expect(screen.getByText('草稿已保存')).toBeInTheDocument();
+    expect(screen.getByText('已保存')).toBeInTheDocument();
   });
 
   it('creates protocol connection drafts through the selected edge API', async () => {
@@ -636,6 +636,7 @@ describe('App cloud console write actions', () => {
     expect(screen.getByRole('button', { name: '新建连接' })).toBeInTheDocument();
     expect(screen.getByText('编辑连接 modbus-line-a')).toBeInTheDocument();
     expect(screen.getByLabelText('配置边端')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '保存草稿' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /点位配置/ }));
     expect(await screen.findByText('holding_register:40001')).toBeInTheDocument();
@@ -770,7 +771,7 @@ describe('App cloud console write actions', () => {
     fireEvent.change(screen.getByLabelText('输出变量'), {
       target: { value: 'pump.pressure_score' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     const expectedRequest: SaveAlgorithmRequest = {
       version: '1.1.0',
@@ -786,7 +787,7 @@ describe('App cloud console write actions', () => {
       );
     });
     expect(await screen.findByText('pump.pressure_score')).toBeInTheDocument();
-    expect(screen.getByText('草稿已保存')).toBeInTheDocument();
+    expect(screen.getByText('已保存')).toBeInTheDocument();
   });
 
   it('publishes the latest draft and refreshes release apply results', async () => {

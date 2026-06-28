@@ -31,7 +31,7 @@ describe('ProtocolConnectionsPage', () => {
     fireEvent.change(screen.getByLabelText('端点'), {
       target: { value: 'opc.tcp://10.12.0.80:4840' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
       expect(onSaveConnection).toHaveBeenCalledWith(
@@ -43,7 +43,7 @@ describe('ProtocolConnectionsPage', () => {
         },
       );
     });
-    expect(screen.getByText('草稿已保存')).toBeInTheDocument();
+    expect(screen.getByText('已保存')).toBeInTheDocument();
   });
 
   it('switches the active edge before editing protocol connections', async () => {

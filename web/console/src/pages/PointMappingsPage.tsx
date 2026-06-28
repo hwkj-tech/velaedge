@@ -304,7 +304,7 @@ export function PointMappingsPage({
                 onClick={handleSave}
                 type="button"
               >
-                {saveState === 'saving' ? '保存中' : '保存草稿'}
+                {saveState === 'saving' ? '保存中' : '保存'}
               </button>
             </>
           }
@@ -525,7 +525,7 @@ function saveStatusText(saveState: 'idle' | 'saving' | 'saved' | 'error') {
     case 'saving':
       return '保存中';
     case 'saved':
-      return '草稿已保存';
+      return '已保存';
     case 'error':
       return '保存失败';
     case 'idle':
