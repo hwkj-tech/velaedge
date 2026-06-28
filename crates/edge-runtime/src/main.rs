@@ -9,6 +9,7 @@ use edge_core::{
     TelemetrySample, TelemetryValue,
 };
 use edge_runtime::{
+    publish_edgelink_runtime_status_with_mqtt_uplink_once,
     publish_edgelink_runtime_status_with_store_and_capabilities_once,
     sync_and_report_mqtt_uplink_once, sync_and_report_once, EdgeRuntime, HttpEdgeConfigSyncClient,
     HttpRuntimeStatusReporter, JsonlLocalStore, RocksEdgeRuntimeStore, RuntimeCapabilityConfig,
@@ -52,23 +53,38 @@ async fn main() -> Result<()> {
         let snapshot = runtime_metrics_snapshot(&args.edge_id, &args.runtime_id, &args.storage);
         let runtime_store = RocksEdgeRuntimeStore::open(&args.runtime_db)?;
         let capabilities = RuntimeCapabilityConfig::serial_mqtt_defaults().capabilities();
-        let report = publish_edgelink_runtime_status_with_store_and_capabilities_once(
-            &cloud_gateway_addr,
-            &args.edge_id,
-            &args.runtime_id,
-            env!("CARGO_PKG_VERSION"),
-            snapshot,
-            Vec::new(),
-            &runtime_store,
-            capabilities,
-        )
-        .await?;
+        let report = if args.mqtt_uplink {
+            publish_edgelink_runtime_status_with_mqtt_uplink_once(
+                &cloud_gateway_addr,
+                &args.edge_id,
+                &args.runtime_id,
+                env!("CARGO_PKG_VERSION"),
+                snapshot,
+                Vec::new(),
+                &runtime_store,
+                capabilities,
+            )
+            .await?
+        } else {
+            publish_edgelink_runtime_status_with_store_and_capabilities_once(
+                &cloud_gateway_addr,
+                &args.edge_id,
+                &args.runtime_id,
+                env!("CARGO_PKG_VERSION"),
+                snapshot,
+                Vec::new(),
+                &runtime_store,
+                capabilities,
+            )
+            .await?
+        };
 
         info!(
             edge_id = %report.edge_id,
             runtime_id = %report.runtime_id,
             gateway_addr = %report.gateway_addr,
             acked_message_count = report.acked_message_count,
+            mqtt_messages_published = report.mqtt_messages_published,
             runtime_db = %args.runtime_db.display(),
             "edgelink runtime status report completed"
         );

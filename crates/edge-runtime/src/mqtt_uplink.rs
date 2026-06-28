@@ -134,7 +134,7 @@ pub async fn publish_mqtt_samples<P>(
     publisher: &mut P,
 ) -> Result<usize>
 where
-    P: MqttPublisher,
+    P: MqttPublisher + ?Sized,
 {
     let messages = build_mqtt_publish_messages(package, samples)?;
     let messages_published = messages.len();

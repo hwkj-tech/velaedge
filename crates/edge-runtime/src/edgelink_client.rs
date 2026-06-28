@@ -17,7 +17,10 @@ use tokio_rustls::{
     TlsConnector,
 };
 
-use crate::{AppliedEdgeConfig, ConfiguredSimulatedRuntime, RocksEdgeRuntimeStore};
+use crate::{
+    AppliedEdgeConfig, ConfiguredMqttCollectionReport, ConfiguredSimulatedRuntime, MqttPublisher,
+    RocksEdgeRuntimeStore, RumqttcMqttPublisher,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EdgeLinkConnectReport {
@@ -34,6 +37,7 @@ pub struct EdgeLinkPublishReport {
     pub gateway_addr: String,
     pub acked_message_count: usize,
     pub applied_config_version: Option<String>,
+    pub mqtt_messages_published: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -164,6 +168,7 @@ pub async fn publish_edgelink_runtime_status_once(
         events,
         None,
         Vec::new(),
+        EdgeLinkMqttMode::Disabled,
     )
     .await
 }
@@ -209,6 +214,57 @@ pub async fn publish_edgelink_runtime_status_with_store_and_capabilities_once(
         events,
         Some(store),
         capabilities,
+        EdgeLinkMqttMode::Disabled,
+    )
+    .await
+}
+
+pub async fn publish_edgelink_runtime_status_with_mqtt_publisher_once<P>(
+    gateway_addr: &str,
+    edge_id: &str,
+    runtime_id: &str,
+    runtime_version: &str,
+    snapshot: EdgeRuntimeMetricsSnapshot,
+    events: Vec<EdgeRuntimeEvent>,
+    publisher: &mut P,
+) -> Result<EdgeLinkPublishReport>
+where
+    P: MqttPublisher + Send,
+{
+    publish_edgelink_runtime_status_inner(
+        gateway_addr,
+        edge_id,
+        runtime_id,
+        runtime_version,
+        snapshot,
+        events,
+        None,
+        Vec::new(),
+        EdgeLinkMqttMode::Provided(publisher),
+    )
+    .await
+}
+
+pub async fn publish_edgelink_runtime_status_with_mqtt_uplink_once(
+    gateway_addr: &str,
+    edge_id: &str,
+    runtime_id: &str,
+    runtime_version: &str,
+    snapshot: EdgeRuntimeMetricsSnapshot,
+    events: Vec<EdgeRuntimeEvent>,
+    store: &RocksEdgeRuntimeStore,
+    capabilities: Vec<String>,
+) -> Result<EdgeLinkPublishReport> {
+    publish_edgelink_runtime_status_inner(
+        gateway_addr,
+        edge_id,
+        runtime_id,
+        runtime_version,
+        snapshot,
+        events,
+        Some(store),
+        capabilities,
+        EdgeLinkMqttMode::ConfiguredUplink,
     )
     .await
 }
@@ -222,6 +278,7 @@ async fn publish_edgelink_runtime_status_inner(
     events: Vec<EdgeRuntimeEvent>,
     store: Option<&RocksEdgeRuntimeStore>,
     capabilities: Vec<String>,
+    mqtt_mode: EdgeLinkMqttMode<'_>,
 ) -> Result<EdgeLinkPublishReport> {
     if snapshot.edge_id != edge_id {
         bail!("runtime metrics edge_id does not match EdgeLink edge_id");
@@ -250,7 +307,7 @@ async fn publish_edgelink_runtime_status_inner(
     .await?;
 
     let config_apply =
-        apply_optional_config_deploy(&mut stream, edge_id, runtime_id, store).await?;
+        apply_optional_config_deploy(&mut stream, edge_id, runtime_id, store, mqtt_mode).await?;
     let mut acked_message_count = 0;
     let metrics =
         EdgeLinkMessage::runtime_metrics(edge_id, runtime_id, config_apply.next_sequence, snapshot);
@@ -274,6 +331,7 @@ async fn publish_edgelink_runtime_status_inner(
         gateway_addr: gateway_addr.to_string(),
         acked_message_count,
         applied_config_version: config_apply.applied_config_version,
+        mqtt_messages_published: config_apply.mqtt_messages_published,
     })
 }
 
@@ -281,6 +339,13 @@ async fn publish_edgelink_runtime_status_inner(
 struct EdgeLinkOptionalConfigApply {
     applied_config_version: Option<String>,
     next_sequence: u64,
+    mqtt_messages_published: usize,
+}
+
+enum EdgeLinkMqttMode<'a> {
+    Disabled,
+    Provided(&'a mut dyn MqttPublisher),
+    ConfiguredUplink,
 }
 
 async fn connect_edgelink_over_stream<S>(
@@ -329,6 +394,7 @@ async fn apply_optional_config_deploy<S>(
     edge_id: &str,
     runtime_id: &str,
     store: Option<&RocksEdgeRuntimeStore>,
+    mqtt_mode: EdgeLinkMqttMode<'_>,
 ) -> Result<EdgeLinkOptionalConfigApply>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -338,6 +404,7 @@ where
             return Ok(EdgeLinkOptionalConfigApply {
                 applied_config_version: None,
                 next_sequence: 2,
+                mqtt_messages_published: 0,
             });
         }
         Ok(result) => result.context("failed to read optional EdgeLink config deploy")?,
@@ -386,8 +453,7 @@ where
         }
     };
     let mut runtime = ConfiguredSimulatedRuntime::new(applied.clone());
-    runtime
-        .collect_once()
+    let collection = collect_after_config_deploy(&mut runtime, applied, mqtt_mode)
         .await
         .context("failed to run collection after EdgeLink config deploy")?;
     let applied_version = runtime.reported_version().to_string();
@@ -411,6 +477,38 @@ where
     Ok(EdgeLinkOptionalConfigApply {
         applied_config_version: Some(applied_version),
         next_sequence: report_sequence + 1,
+        mqtt_messages_published: collection.mqtt_messages_published,
+    })
+}
+
+async fn collect_after_config_deploy(
+    runtime: &mut ConfiguredSimulatedRuntime,
+    applied: AppliedEdgeConfig,
+    mqtt_mode: EdgeLinkMqttMode<'_>,
+) -> Result<ConfiguredMqttCollectionReport> {
+    match mqtt_mode {
+        EdgeLinkMqttMode::Provided(publisher) => {
+            runtime.collect_once_and_publish_mqtt(publisher).await
+        }
+        EdgeLinkMqttMode::ConfiguredUplink => {
+            if let Some(uplink) = applied.package().mqtt_uplinks.first() {
+                let mut publisher = RumqttcMqttPublisher::connect_from_uplink(uplink)?;
+                runtime.collect_once_and_publish_mqtt(&mut publisher).await
+            } else {
+                collect_without_mqtt(runtime).await
+            }
+        }
+        EdgeLinkMqttMode::Disabled => collect_without_mqtt(runtime).await,
+    }
+}
+
+async fn collect_without_mqtt(
+    runtime: &mut ConfiguredSimulatedRuntime,
+) -> Result<ConfiguredMqttCollectionReport> {
+    let collection = runtime.collect_once().await?;
+    Ok(ConfiguredMqttCollectionReport {
+        collection,
+        mqtt_messages_published: 0,
     })
 }
 

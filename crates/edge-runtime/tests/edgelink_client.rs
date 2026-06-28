@@ -1,14 +1,16 @@
 use chrono::Utc;
 use edge_core::{
     decode_edgelink_frame, encode_edgelink_frame, CloudSyncMetrics, CollectionRuntimeMetrics,
-    EdgeConfigPackage, EdgeHealth, EdgeLinkMessage, EdgeLinkMessageKind, EdgeLinkPayload,
-    EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, LocalStoreMetrics, ProtocolRuntimeMetrics,
-    RuntimeEventCategory, RuntimeEventSeverity, SystemRuntimeMetrics,
+    DeviceInstance, EdgeConfigPackage, EdgeHealth, EdgeLinkMessage, EdgeLinkMessageKind,
+    EdgeLinkPayload, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, LocalStoreMetrics,
+    MqttUplinkConfig, PointAddress, ProtocolConnection, ProtocolRuntimeMetrics,
+    RuntimeEventCategory, RuntimeEventSeverity, SystemRuntimeMetrics, TelemetryPointMapping,
+    TelemetryType,
 };
 use edge_runtime::{
     connect_edgelink_once, connect_edgelink_once_with_capabilities,
-    publish_edgelink_runtime_status_once, publish_edgelink_runtime_status_with_store_once,
-    RocksEdgeRuntimeStore,
+    publish_edgelink_runtime_status_once, publish_edgelink_runtime_status_with_mqtt_publisher_once,
+    publish_edgelink_runtime_status_with_store_once, RecordingMqttPublisher, RocksEdgeRuntimeStore,
 };
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -302,6 +304,57 @@ async fn runtime_client_persists_config_deploy_to_rocksdb_before_reporting() {
     assert_eq!(active.version, "2026.06.27-030");
 }
 
+#[tokio::test]
+async fn runtime_client_publishes_mqtt_after_edgelink_config_deploy() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let gateway_addr = listener.local_addr().expect("listener should expose addr");
+
+    let gateway = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("runtime should connect");
+
+        let hello = read_one_message(&mut stream).await;
+        write_ack_for(&mut stream, &hello).await;
+
+        let deploy =
+            EdgeLinkMessage::config_deploy("edge-dev", "runtime-dev", 2, mqtt_deploy_package());
+        let deploy_frame = encode_edgelink_frame(&deploy).expect("deploy should encode");
+        stream
+            .write_all(&deploy_frame)
+            .await
+            .expect("deploy should be written");
+
+        let report = read_one_message(&mut stream).await;
+        write_ack_for(&mut stream, &report).await;
+
+        let metrics = read_one_message(&mut stream).await;
+        write_ack_for(&mut stream, &metrics).await;
+    });
+
+    let mut mqtt = RecordingMqttPublisher::default();
+    let report = publish_edgelink_runtime_status_with_mqtt_publisher_once(
+        &gateway_addr.to_string(),
+        "edge-dev",
+        "runtime-dev",
+        "0.1.0",
+        runtime_metrics("edge-dev", "runtime-dev"),
+        Vec::new(),
+        &mut mqtt,
+    )
+    .await
+    .expect("runtime status should publish");
+
+    assert_eq!(
+        report.applied_config_version.as_deref(),
+        Some("2026.06.27-040")
+    );
+    assert_eq!(report.mqtt_messages_published, 1);
+    assert_eq!(mqtt.messages().len(), 1);
+    assert_eq!(mqtt.messages()[0].topic, "velamq/edge-dev/pump-1/pressure");
+    gateway.await.expect("gateway task should finish");
+}
+
 async fn read_one_message(stream: &mut TcpStream) -> EdgeLinkMessage {
     let mut header = [0_u8; 4];
     stream
@@ -378,4 +431,22 @@ fn runtime_metrics(edge_id: &str, runtime_id: &str) -> EdgeRuntimeMetricsSnapsho
             reported_version: "2026.06.27-001".to_string(),
         },
     }
+}
+
+fn mqtt_deploy_package() -> EdgeConfigPackage {
+    EdgeConfigPackage::new("edge-dev", "2026.06.27-040")
+        .with_device(DeviceInstance::new("pump-1", "pump"))
+        .with_protocol_connection(ProtocolConnection::simulated("sim-main"))
+        .with_mqtt_uplink(
+            MqttUplinkConfig::velamq("velamq-main", "mqtt://velamq.local:1883", "edge-dev")
+                .with_topic_template("velamq/{edge_id}/{device_id}/{telemetry_id}"),
+        )
+        .with_point_mapping(TelemetryPointMapping::new(
+            "pressure",
+            "pump-1",
+            "pressure",
+            "sim-main",
+            PointAddress::simulated("pressure"),
+            TelemetryType::Float,
+        ))
 }

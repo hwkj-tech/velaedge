@@ -66,7 +66,7 @@ impl ConfiguredSimulatedRuntime {
         publisher: &mut P,
     ) -> Result<ConfiguredMqttCollectionReport>
     where
-        P: MqttPublisher,
+        P: MqttPublisher + ?Sized,
     {
         let samples = self.collect_samples_once().await;
         let mqtt_messages_published =
