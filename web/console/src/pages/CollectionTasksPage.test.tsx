@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { CollectionTasksPage } from './CollectionTasksPage';
@@ -111,9 +111,29 @@ describe('CollectionTasksPage', () => {
     expect(await screen.findByText('调度策略已生成')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '新建任务' }));
-    await waitFor(() => {
-      expect(onCreateTask).toHaveBeenCalledWith('edge-dev');
+    const dialog = screen.getByRole('dialog', { name: '新建采集任务' });
+    fireEvent.change(within(dialog).getByLabelText('新建 Task ID'), {
+      target: { value: 'thermal-task' },
     });
-    expect(await screen.findByText('已创建任务草稿 task-draft-2')).toBeInTheDocument();
+    fireEvent.change(within(dialog).getByLabelText('新建任务设备 ID'), {
+      target: { value: 'pump-1' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('新建任务采集点位'), {
+      target: { value: 'pressure' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('新建任务采集周期(ms)'), {
+      target: { value: '2000' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+    await waitFor(() => {
+      expect(onCreateTask).toHaveBeenCalledWith('edge-dev', {
+        deviceId: 'pump-1',
+        enabled: true,
+        intervalMs: 2000,
+        pointIds: ['pressure'],
+        taskId: 'thermal-task',
+      });
+    });
+    expect(await screen.findByText('已创建任务 task-draft-2')).toBeInTheDocument();
   });
 });

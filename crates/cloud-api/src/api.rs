@@ -190,6 +190,7 @@ async fn edge_point_mappings(
 async fn create_edge_point_mapping(
     State(state): State<AppState>,
     Path(edge_id): Path<String>,
+    request: Option<Json<CreatePointMappingRequest>>,
 ) -> Result<(StatusCode, Json<PointMappingResponse>), (StatusCode, Json<ErrorResponse>)> {
     let (package, response) = {
         let mut store = state.store.lock().expect("store mutex poisoned");
@@ -197,26 +198,31 @@ async fn create_edge_point_mapping(
             .latest_config_package_for_edge(&edge_id)
             .cloned()
             .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
-        let point_id = next_point_id(&package);
-        let device_id = package
-            .devices
-            .first()
-            .map(|device| device.device_id.clone())
-            .unwrap_or_else(|| "device-draft-1".to_string());
-        let connection_id = package
-            .protocol_connections
-            .first()
-            .map(|connection| connection.connection_id.clone())
-            .unwrap_or_else(|| "simulated-main".to_string());
-        let mapping = TelemetryPointMapping::new(
-            point_id.clone(),
-            device_id,
-            format!("pump.{point_id}"),
-            connection_id,
-            PointAddress::simulated(point_id.clone()),
-            TelemetryType::Float,
-        )
-        .with_unit("-");
+        let mapping = match request {
+            Some(Json(request)) => build_point_mapping_from_create_request(&package, request)?,
+            None => {
+                let point_id = next_point_id(&package);
+                let device_id = package
+                    .devices
+                    .first()
+                    .map(|device| device.device_id.clone())
+                    .unwrap_or_else(|| "device-draft-1".to_string());
+                let connection_id = package
+                    .protocol_connections
+                    .first()
+                    .map(|connection| connection.connection_id.clone())
+                    .unwrap_or_else(|| "simulated-main".to_string());
+                TelemetryPointMapping::new(
+                    point_id.clone(),
+                    device_id,
+                    format!("pump.{point_id}"),
+                    connection_id,
+                    PointAddress::simulated(point_id.clone()),
+                    TelemetryType::Float,
+                )
+                .with_unit("-")
+            }
+        };
 
         package.version = next_version(&package.version);
         package.point_mappings.push(mapping);
@@ -713,6 +719,7 @@ async fn edge_collection_tasks(
 async fn create_edge_collection_task(
     State(state): State<AppState>,
     Path(edge_id): Path<String>,
+    request: Option<Json<CreateCollectionTaskRequest>>,
 ) -> Result<(StatusCode, Json<CollectionTaskResponse>), (StatusCode, Json<ErrorResponse>)> {
     let (package, response) = {
         let mut store = state.store.lock().expect("store mutex poisoned");
@@ -720,23 +727,28 @@ async fn create_edge_collection_task(
             .latest_config_package_for_edge(&edge_id)
             .cloned()
             .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
-        let device_id = package
-            .devices
-            .first()
-            .map(|device| device.device_id.clone())
-            .unwrap_or_else(|| "device-draft-1".to_string());
-        let point_ids = package
-            .point_mappings
-            .iter()
-            .map(|mapping| mapping.point_id.clone())
-            .collect::<Vec<_>>();
-        if point_ids.is_empty() {
-            return Err(error(
-                StatusCode::BAD_REQUEST,
-                "collection task requires at least one point mapping",
-            ));
-        }
-        let task = CollectionTask::interval(next_task_id(&package), device_id, point_ids, 1000);
+        let task = match request {
+            Some(Json(request)) => build_collection_task_from_create_request(&package, request)?,
+            None => {
+                let device_id = package
+                    .devices
+                    .first()
+                    .map(|device| device.device_id.clone())
+                    .unwrap_or_else(|| "device-draft-1".to_string());
+                let point_ids = package
+                    .point_mappings
+                    .iter()
+                    .map(|mapping| mapping.point_id.clone())
+                    .collect::<Vec<_>>();
+                if point_ids.is_empty() {
+                    return Err(error(
+                        StatusCode::BAD_REQUEST,
+                        "collection task requires at least one point mapping",
+                    ));
+                }
+                CollectionTask::interval(next_task_id(&package), device_id, point_ids, 1000)
+            }
+        };
 
         package.version = next_version(&package.version);
         package.collection_tasks.push(task);
@@ -795,6 +807,7 @@ async fn edge_algorithms(
 async fn create_edge_algorithm(
     State(state): State<AppState>,
     Path(edge_id): Path<String>,
+    request: Option<Json<CreateAlgorithmRequest>>,
 ) -> Result<(StatusCode, Json<AlgorithmResponse>), (StatusCode, Json<ErrorResponse>)> {
     let (package, response) = {
         let mut store = state.store.lock().expect("store mutex poisoned");
@@ -802,18 +815,25 @@ async fn create_edge_algorithm(
             .latest_config_package_for_edge(&edge_id)
             .cloned()
             .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
-        let input = package
-            .point_mappings
-            .first()
-            .map(|mapping| mapping.point_id.clone())
-            .ok_or_else(|| error(StatusCode::BAD_REQUEST, "algorithm requires an input point"))?;
-        let algorithm_id = next_algorithm_id(&package);
-        let algorithm = AlgorithmSpec {
-            id: algorithm_id.clone(),
-            version: "0.1.0".to_string(),
-            runtime: AlgorithmRuntime::Rule,
-            inputs: vec![input],
-            outputs: vec![format!("{algorithm_id}.output")],
+        let algorithm = match request {
+            Some(Json(request)) => build_algorithm_from_create_request(&package, request)?,
+            None => {
+                let input = package
+                    .point_mappings
+                    .first()
+                    .map(|mapping| mapping.point_id.clone())
+                    .ok_or_else(|| {
+                        error(StatusCode::BAD_REQUEST, "algorithm requires an input point")
+                    })?;
+                let algorithm_id = next_algorithm_id(&package);
+                AlgorithmSpec {
+                    id: algorithm_id.clone(),
+                    version: "0.1.0".to_string(),
+                    runtime: AlgorithmRuntime::Rule,
+                    inputs: vec![input],
+                    outputs: vec![format!("{algorithm_id}.output")],
+                }
+            }
         };
 
         package.version = next_version(&package.version);
@@ -1718,11 +1738,35 @@ pub struct SavePointMappingRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CreatePointMappingRequest {
+    pub point_id: Option<String>,
+    pub device_id: Option<String>,
+    pub semantic_id: Option<String>,
+    pub connection_id: Option<String>,
+    pub address_kind: Option<String>,
+    pub address_value: Option<String>,
+    pub value_type: Option<String>,
+    pub unit: Option<String>,
+    pub interval_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SaveCollectionTaskRequest {
     pub device_id: String,
     pub point_ids: Vec<String>,
     pub interval_ms: u64,
     pub enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateCollectionTaskRequest {
+    pub task_id: Option<String>,
+    pub device_id: String,
+    pub point_ids: Vec<String>,
+    pub interval_ms: u64,
+    pub enabled: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -1743,6 +1787,16 @@ pub struct CreateProtocolConnectionRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SaveAlgorithmRequest {
     pub version: String,
+    pub runtime: AlgorithmRuntime,
+    pub input_ids: Vec<String>,
+    pub output_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAlgorithmRequest {
+    pub algorithm_id: Option<String>,
+    pub version: Option<String>,
     pub runtime: AlgorithmRuntime,
     pub input_ids: Vec<String>,
     pub output_ids: Vec<String>,
@@ -1848,6 +1902,187 @@ fn build_device_model_from_request(
     }
 
     Ok(DeviceSpec::new(device_type, version).with_telemetry(telemetry))
+}
+
+fn build_point_mapping_from_create_request(
+    package: &EdgeConfigPackage,
+    request: CreatePointMappingRequest,
+) -> Result<TelemetryPointMapping, (StatusCode, Json<ErrorResponse>)> {
+    let point_id = non_empty_optional(request.point_id).unwrap_or_else(|| next_point_id(package));
+    if package
+        .point_mappings
+        .iter()
+        .any(|mapping| mapping.point_id == point_id)
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("point mapping `{point_id}` already exists"),
+        ));
+    }
+
+    let device_id = non_empty_optional(request.device_id)
+        .or_else(|| {
+            package
+                .devices
+                .first()
+                .map(|device| device.device_id.clone())
+        })
+        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "point mapping requires a device"))?;
+    if !package
+        .devices
+        .iter()
+        .any(|device| device.device_id == device_id)
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("point mapping device `{device_id}` missing"),
+        ));
+    }
+
+    let connection_id = non_empty_optional(request.connection_id)
+        .or_else(|| {
+            package
+                .protocol_connections
+                .first()
+                .map(|connection| connection.connection_id.clone())
+        })
+        .ok_or_else(|| {
+            error(
+                StatusCode::BAD_REQUEST,
+                "point mapping requires a protocol connection",
+            )
+        })?;
+    if !package
+        .protocol_connections
+        .iter()
+        .any(|connection| connection.connection_id == connection_id)
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("point mapping connection `{connection_id}` missing"),
+        ));
+    }
+
+    let semantic_id = non_empty_optional(request.semantic_id).unwrap_or_else(|| point_id.clone());
+    let address = PointAddress {
+        kind: non_empty_optional(request.address_kind).unwrap_or_else(|| "simulated".to_string()),
+        value: non_empty_optional(request.address_value).unwrap_or_else(|| point_id.clone()),
+    };
+    let value_type = request
+        .value_type
+        .as_deref()
+        .map(parse_telemetry_type)
+        .transpose()?
+        .unwrap_or(TelemetryType::Float);
+
+    Ok(TelemetryPointMapping::new(
+        point_id,
+        device_id,
+        semantic_id,
+        connection_id,
+        address,
+        value_type,
+    )
+    .with_unit(non_empty_optional(request.unit).unwrap_or_else(|| "-".to_string()))
+    .with_interval_ms(request.interval_ms.unwrap_or(1000).max(100)))
+}
+
+fn build_collection_task_from_create_request(
+    package: &EdgeConfigPackage,
+    request: CreateCollectionTaskRequest,
+) -> Result<CollectionTask, (StatusCode, Json<ErrorResponse>)> {
+    if !package
+        .devices
+        .iter()
+        .any(|device| device.device_id == request.device_id)
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "collection task device missing",
+        ));
+    }
+    if request.point_ids.is_empty() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "collection task must include at least one point",
+        ));
+    }
+    if let Some(missing_point_id) = request.point_ids.iter().find(|point_id| {
+        !package
+            .point_mappings
+            .iter()
+            .any(|mapping| mapping.point_id == **point_id)
+    }) {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("collection task point `{missing_point_id}` missing"),
+        ));
+    }
+
+    let task_id = non_empty_optional(request.task_id).unwrap_or_else(|| next_task_id(package));
+    if package
+        .collection_tasks
+        .iter()
+        .any(|task| task.task_id == task_id)
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("collection task `{task_id}` already exists"),
+        ));
+    }
+
+    let mut task = CollectionTask::interval(
+        task_id,
+        request.device_id,
+        request.point_ids,
+        request.interval_ms.max(100),
+    );
+    task.enabled = request.enabled.unwrap_or(true);
+    Ok(task)
+}
+
+fn build_algorithm_from_create_request(
+    package: &EdgeConfigPackage,
+    request: CreateAlgorithmRequest,
+) -> Result<AlgorithmSpec, (StatusCode, Json<ErrorResponse>)> {
+    if request.input_ids.is_empty() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "algorithm must include at least one input",
+        ));
+    }
+    if let Some(missing_point_id) = request.input_ids.iter().find(|point_id| {
+        !package
+            .point_mappings
+            .iter()
+            .any(|mapping| mapping.point_id == **point_id)
+    }) {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("algorithm input point `{missing_point_id}` missing"),
+        ));
+    }
+
+    let algorithm_id =
+        non_empty_optional(request.algorithm_id).unwrap_or_else(|| next_algorithm_id(package));
+    if package
+        .algorithms
+        .iter()
+        .any(|algorithm| algorithm.id == algorithm_id)
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("algorithm `{algorithm_id}` already exists"),
+        ));
+    }
+
+    Ok(AlgorithmSpec {
+        id: algorithm_id,
+        version: non_empty_optional(request.version).unwrap_or_else(|| "0.1.0".to_string()),
+        runtime: request.runtime,
+        inputs: request.input_ids,
+        outputs: request.output_ids,
+    })
 }
 
 fn non_empty_field(

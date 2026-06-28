@@ -666,13 +666,47 @@ describe('draft creation clients', () => {
     );
 
     await expect(
-      createPointMappingDraft('edge-dev', fetchMock as unknown as typeof fetch),
+      createPointMappingDraft(
+        'edge-dev',
+        {
+          addressKind: 'input_register',
+          addressValue: '30001',
+          connectionId: 'modbus-line-a',
+          deviceId: 'pump-1',
+          intervalMs: 2000,
+          pointId: 'temperature',
+          semanticId: 'pump.temperature',
+          unit: 'C',
+          valueType: 'float32',
+        },
+        fetchMock as unknown as typeof fetch,
+      ),
     ).resolves.toMatchObject({ pointId: 'point-draft-3' });
     await expect(
-      createCollectionTaskDraft('edge-dev', fetchMock as unknown as typeof fetch),
+      createCollectionTaskDraft(
+        'edge-dev',
+        {
+          deviceId: 'pump-1',
+          enabled: true,
+          intervalMs: 1000,
+          pointIds: ['pressure'],
+          taskId: 'thermal-task',
+        },
+        fetchMock as unknown as typeof fetch,
+      ),
     ).resolves.toMatchObject({ taskId: 'task-draft-2' });
     await expect(
-      createAlgorithmDraft('edge-dev', fetchMock as unknown as typeof fetch),
+      createAlgorithmDraft(
+        'edge-dev',
+        {
+          algorithmId: 'thermal-rule',
+          inputIds: ['pressure'],
+          outputIds: ['thermal.alert'],
+          runtime: 'Rule',
+          version: '1.0.0',
+        },
+        fetchMock as unknown as typeof fetch,
+      ),
     ).resolves.toMatchObject({ algorithmId: 'algorithm-draft-2' });
     await expect(
       createDeviceModelDraft(
@@ -694,12 +728,40 @@ describe('draft creation clients', () => {
     ).resolves.toMatchObject({ deviceType: 'device-model-draft-2' });
 
     expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/point-mappings', {
+      body: JSON.stringify({
+        addressKind: 'input_register',
+        addressValue: '30001',
+        connectionId: 'modbus-line-a',
+        deviceId: 'pump-1',
+        intervalMs: 2000,
+        pointId: 'temperature',
+        semanticId: 'pump.temperature',
+        unit: 'C',
+        valueType: 'float32',
+      }),
+      headers: { 'content-type': 'application/json' },
       method: 'POST',
     });
     expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/collection-tasks', {
+      body: JSON.stringify({
+        deviceId: 'pump-1',
+        enabled: true,
+        intervalMs: 1000,
+        pointIds: ['pressure'],
+        taskId: 'thermal-task',
+      }),
+      headers: { 'content-type': 'application/json' },
       method: 'POST',
     });
     expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/algorithms', {
+      body: JSON.stringify({
+        algorithmId: 'thermal-rule',
+        inputIds: ['pressure'],
+        outputIds: ['thermal.alert'],
+        runtime: 'Rule',
+        version: '1.0.0',
+      }),
+      headers: { 'content-type': 'application/json' },
       method: 'POST',
     });
     expect(fetchMock).toHaveBeenCalledWith('/api/device-models', {

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { FileInput, Plus, ShieldCheck } from 'lucide-react';
+import { FileInput, Plus, ShieldCheck, X } from 'lucide-react';
 
 import type {
+  CreatePointMappingRequest,
   EdgeNodeResponse,
   ManagementActionResponse,
   PointMappingResponse,
@@ -78,7 +79,10 @@ export function PointMappingsPage({
 }: {
   edges?: EdgeNodeResponse[];
   mode?: 'configure' | 'list';
-  onCreatePoint?: (edgeId: string) => Promise<PointMappingResponse> | PointMappingResponse;
+  onCreatePoint?: (
+    edgeId: string,
+    request: CreatePointMappingRequest,
+  ) => Promise<PointMappingResponse> | PointMappingResponse;
   onImportPoints?: (
     edgeId: string,
   ) => Promise<ManagementActionResponse> | ManagementActionResponse;
@@ -106,6 +110,18 @@ export function PointMappingsPage({
     'idle',
   );
   const [toolbarMessage, setToolbarMessage] = useState('');
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createForm, setCreateForm] = useState<CreatePointMappingRequest>({
+    addressKind: 'holding_register',
+    addressValue: '40001',
+    connectionId: fallbackPoints[0].connection,
+    deviceId: fallbackPoints[0].deviceId,
+    intervalMs: 1000,
+    pointId: '',
+    semanticId: '',
+    unit: '-',
+    valueType: 'float32',
+  });
   const [actionState, setActionState] = useState<
     'idle' | 'importing' | 'validating' | 'creating'
   >('idle');
@@ -184,12 +200,16 @@ export function PointMappingsPage({
     setToolbarMessage('');
 
     try {
-      const created = await onCreatePoint?.(selectedEdgeId);
+      const created = await onCreatePoint?.(selectedEdgeId, {
+        ...createForm,
+        intervalMs: Number(createForm.intervalMs) || 1000,
+      });
       setToolbarMessage(
-        created ? `已创建点位草稿 ${created.pointId}` : '已创建点位草稿',
+        created ? `已创建点位 ${created.pointId}` : '已创建点位',
       );
+      setCreateDialogOpen(false);
     } catch {
-      setToolbarMessage('创建点位草稿失败');
+      setToolbarMessage('创建点位失败');
     } finally {
       setActionState('idle');
     }
@@ -255,18 +275,195 @@ export function PointMappingsPage({
               <button
                 className="primary-button"
                 disabled={actionState === 'creating'}
-                onClick={() => {
-                  void handleCreatePoint();
-                }}
+                onClick={() => setCreateDialogOpen(true)}
                 type="button"
               >
                 <Plus size={15} aria-hidden="true" />
-                {actionState === 'creating' ? '创建中' : '新建点位'}
+                新建点位
               </button>
             </>
           ) : null}
         </div>
       </section>
+
+      {createDialogOpen ? (
+        <div className="modal-backdrop">
+          <form
+            aria-labelledby="point-create-dialog-title"
+            className="modal-panel"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleCreatePoint();
+            }}
+            role="dialog"
+          >
+            <div className="modal-header">
+              <h3 id="point-create-dialog-title">新建点位</h3>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={() => setCreateDialogOpen(false)}
+                type="button"
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="form-grid">
+              <label>
+                <span>Point ID</span>
+                <input
+                  aria-label="新建 Point ID"
+                  required
+                  value={createForm.pointId ?? ''}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      pointId: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>设备 ID</span>
+                <input
+                  aria-label="新建设备 ID"
+                  required
+                  value={createForm.deviceId ?? ''}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      deviceId: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>语义遥测</span>
+                <input
+                  aria-label="新建语义遥测"
+                  required
+                  value={createForm.semanticId ?? ''}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      semanticId: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>连接实例</span>
+                <input
+                  aria-label="新建连接实例"
+                  required
+                  value={createForm.connectionId ?? ''}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      connectionId: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>地址类型</span>
+                <select
+                  aria-label="新建地址类型"
+                  value={createForm.addressKind ?? 'holding_register'}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      addressKind: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="holding_register">holding_register</option>
+                  <option value="input_register">input_register</option>
+                  <option value="coil">coil</option>
+                  <option value="simulated">simulated</option>
+                </select>
+              </label>
+              <label>
+                <span>地址值</span>
+                <input
+                  aria-label="新建地址值"
+                  required
+                  value={createForm.addressValue ?? ''}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      addressValue: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>数据类型</span>
+                <select
+                  aria-label="新建数据类型"
+                  value={createForm.valueType ?? 'float32'}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      valueType: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="float32">float32</option>
+                  <option value="int64">int64</option>
+                  <option value="bool">bool</option>
+                  <option value="string">string</option>
+                </select>
+              </label>
+              <label>
+                <span>采集周期(ms)</span>
+                <input
+                  aria-label="新建采集周期(ms)"
+                  min="100"
+                  step="100"
+                  type="number"
+                  value={createForm.intervalMs ?? 1000}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      intervalMs: Number(event.target.value),
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>单位</span>
+                <input
+                  aria-label="新建单位"
+                  value={createForm.unit ?? ''}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      unit: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                onClick={() => setCreateDialogOpen(false)}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="primary-button"
+                disabled={actionState === 'creating'}
+                type="submit"
+              >
+                {actionState === 'creating' ? '保存中' : '保存'}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
 
       <div className={isConfigureMode ? 'point-config-layout' : 'point-config-layout list-only'}>
         <section className="panel point-table-panel">

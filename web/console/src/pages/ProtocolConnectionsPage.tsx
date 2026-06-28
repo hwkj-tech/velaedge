@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, ShieldCheck } from 'lucide-react';
+import { Plus, ShieldCheck, X } from 'lucide-react';
 
 import type {
   EdgeNodeResponse,
@@ -87,6 +87,11 @@ export function ProtocolConnectionsPage({
     'idle',
   );
   const [createState, setCreateState] = useState<'idle' | 'creating'>('idle');
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createForm, setCreateForm] = useState<CreateProtocolConnectionRequest>({
+    endpoint: '/dev/ttyUSB0',
+    protocolType: 'ModbusRtu',
+  });
   const [validateState, setValidateState] = useState<'idle' | 'validating'>('idle');
   const [toolbarMessage, setToolbarMessage] = useState('');
   const isConfigureMode = mode === 'configure';
@@ -137,17 +142,18 @@ export function ProtocolConnectionsPage({
 
     try {
       const created = await onCreateConnection?.(selectedEdgeId, {
-        endpoint: null,
-        protocolType: 'ModbusTcp',
+        endpoint: createForm.endpoint?.trim() || null,
+        protocolType: createForm.protocolType,
       });
       if (created) {
         setSelectedConnectionId(created.connectionId);
-        setToolbarMessage(`已创建连接草稿 ${created.connectionId}`);
+        setToolbarMessage(`已创建连接 ${created.connectionId}`);
       } else {
-        setToolbarMessage('已创建连接草稿');
+        setToolbarMessage('已创建连接');
       }
+      setCreateDialogOpen(false);
     } catch {
-      setToolbarMessage('创建连接草稿失败');
+      setToolbarMessage('创建连接失败');
     } finally {
       setCreateState('idle');
     }
@@ -223,18 +229,92 @@ export function ProtocolConnectionsPage({
               <button
                 className="primary-button"
                 disabled={createState === 'creating'}
-                onClick={() => {
-                  void handleCreate();
-                }}
+                onClick={() => setCreateDialogOpen(true)}
                 type="button"
               >
                 <Plus size={15} aria-hidden="true" />
-                {createState === 'creating' ? '创建中' : '新建连接'}
+                新建连接
               </button>
             </>
           ) : null}
         </div>
       </section>
+
+      {createDialogOpen ? (
+        <div className="modal-backdrop">
+          <form
+            aria-labelledby="protocol-create-dialog-title"
+            className="modal-panel"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleCreate();
+            }}
+            role="dialog"
+          >
+            <div className="modal-header">
+              <h3 id="protocol-create-dialog-title">新建协议连接</h3>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={() => setCreateDialogOpen(false)}
+                type="button"
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="form-grid">
+              <label>
+                <span>协议类型</span>
+                <select
+                  aria-label="新建协议类型"
+                  value={createForm.protocolType ?? 'ModbusRtu'}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      protocolType: event.target.value,
+                    }))
+                  }
+                >
+                  {protocolOptions.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>端点</span>
+                <input
+                  aria-label="新建端点"
+                  value={createForm.endpoint ?? ''}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      endpoint: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                onClick={() => setCreateDialogOpen(false)}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="primary-button"
+                disabled={createState === 'creating'}
+                type="submit"
+              >
+                {createState === 'creating' ? '保存中' : '保存'}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
 
       <div className={isConfigureMode ? 'point-config-layout' : 'point-config-layout list-only'}>
         <section className="panel point-table-panel">

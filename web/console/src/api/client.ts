@@ -3,8 +3,11 @@ import type {
   AlgorithmResponse,
   AuditRecordResponse,
   CollectionTaskResponse,
+  CreateAlgorithmRequest,
+  CreateCollectionTaskRequest,
   CreateDeviceModelRequest,
   CreateEdgeNodeRequest,
+  CreatePointMappingRequest,
   EdgeNodeActionResponse,
   DeviceModelResponse,
   DiscoveryReportResponse,
@@ -135,12 +138,15 @@ export async function fetchEdgeProtocolConnections(
 
 export async function createPointMappingDraft(
   edgeId: string,
+  request: CreatePointMappingRequest = {},
   fetcher: typeof fetch = fetch,
 ): Promise<PointMappingResponse> {
   return requestJson<PointMappingResponse>(
     `/api/edges/${encodeURIComponent(edgeId)}/point-mappings`,
     fetcher,
     {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
       method: 'POST',
     },
   );
@@ -164,12 +170,15 @@ export async function fetchEdgeCollectionTasks(
 
 export async function createCollectionTaskDraft(
   edgeId: string,
+  request: CreateCollectionTaskRequest,
   fetcher: typeof fetch = fetch,
 ): Promise<CollectionTaskResponse> {
   return requestJson<CollectionTaskResponse>(
     `/api/edges/${encodeURIComponent(edgeId)}/collection-tasks`,
     fetcher,
     {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
       method: 'POST',
     },
   );
@@ -193,12 +202,15 @@ export async function fetchEdgeAlgorithms(
 
 export async function createAlgorithmDraft(
   edgeId: string,
+  request: CreateAlgorithmRequest,
   fetcher: typeof fetch = fetch,
 ): Promise<AlgorithmResponse> {
   return requestJson<AlgorithmResponse>(
     `/api/edges/${encodeURIComponent(edgeId)}/algorithms`,
     fetcher,
     {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
       method: 'POST',
     },
   );

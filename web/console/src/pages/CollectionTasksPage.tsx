@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Plus, TimerReset } from 'lucide-react';
+import { Plus, TimerReset, X } from 'lucide-react';
 
 import type {
   CollectionTaskResponse,
+  CreateCollectionTaskRequest,
   EdgeNodeResponse,
   ManagementActionResponse,
   SaveCollectionTaskRequest,
@@ -51,6 +52,7 @@ export function CollectionTasksPage({
   mode?: 'configure' | 'list';
   onCreateTask?: (
     edgeId: string,
+    request: CreateCollectionTaskRequest,
   ) => Promise<CollectionTaskResponse> | CollectionTaskResponse;
   onGenerateSchedule?: (
     edgeId: string,
@@ -74,6 +76,14 @@ export function CollectionTasksPage({
     'idle',
   );
   const [toolbarMessage, setToolbarMessage] = useState('');
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createForm, setCreateForm] = useState({
+    deviceId: fallbackTasks[0].deviceId,
+    enabled: true,
+    intervalMs: '1000',
+    pointIds: fallbackTasks[0].pointIds.join(', '),
+    taskId: '',
+  });
   const [actionState, setActionState] = useState<
     'idle' | 'scheduling' | 'creating'
   >('idle');
@@ -131,12 +141,19 @@ export function CollectionTasksPage({
     setToolbarMessage('');
 
     try {
-      const created = await onCreateTask?.(selectedEdgeId);
+      const created = await onCreateTask?.(selectedEdgeId, {
+        deviceId: createForm.deviceId.trim(),
+        enabled: createForm.enabled,
+        intervalMs: Math.max(Number.parseInt(createForm.intervalMs, 10) || 1000, 100),
+        pointIds: splitCsv(createForm.pointIds),
+        taskId: createForm.taskId.trim(),
+      });
       setToolbarMessage(
-        created ? `已创建任务草稿 ${created.taskId}` : '已创建任务草稿',
+        created ? `已创建任务 ${created.taskId}` : '已创建任务',
       );
+      setCreateDialogOpen(false);
     } catch {
-      setToolbarMessage('创建任务草稿失败');
+      setToolbarMessage('创建任务失败');
     } finally {
       setActionState('idle');
     }
@@ -191,18 +208,132 @@ export function CollectionTasksPage({
               <button
                 className="primary-button"
                 disabled={actionState === 'creating'}
-                onClick={() => {
-                  void handleCreateTask();
-                }}
+                onClick={() => setCreateDialogOpen(true)}
                 type="button"
               >
                 <Plus size={15} aria-hidden="true" />
-                {actionState === 'creating' ? '创建中' : '新建任务'}
+                新建任务
               </button>
             </>
           ) : null}
         </div>
       </section>
+
+      {createDialogOpen ? (
+        <div className="modal-backdrop">
+          <form
+            aria-labelledby="task-create-dialog-title"
+            className="modal-panel"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleCreateTask();
+            }}
+            role="dialog"
+          >
+            <div className="modal-header">
+              <h3 id="task-create-dialog-title">新建采集任务</h3>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={() => setCreateDialogOpen(false)}
+                type="button"
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="form-grid">
+              <label>
+                <span>Task ID</span>
+                <input
+                  aria-label="新建 Task ID"
+                  required
+                  value={createForm.taskId}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      taskId: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>设备 ID</span>
+                <input
+                  aria-label="新建任务设备 ID"
+                  required
+                  value={createForm.deviceId}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      deviceId: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>采集点位</span>
+                <input
+                  aria-label="新建任务采集点位"
+                  required
+                  value={createForm.pointIds}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      pointIds: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>采集周期(ms)</span>
+                <input
+                  aria-label="新建任务采集周期(ms)"
+                  min="100"
+                  step="100"
+                  type="number"
+                  value={createForm.intervalMs}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      intervalMs: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>启用任务</span>
+                <input
+                  aria-label="新建任务启用"
+                  checked={createForm.enabled}
+                  type="checkbox"
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      enabled: event.target.checked,
+                    }))
+                  }
+                />
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                onClick={() => setCreateDialogOpen(false)}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="primary-button"
+                disabled={actionState === 'creating'}
+                type="submit"
+              >
+                {actionState === 'creating' ? '保存中' : '保存'}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
 
       <div className={isConfigureMode ? 'point-config-layout' : 'point-config-layout list-only'}>
         <section className="panel point-table-panel">
@@ -387,11 +518,15 @@ function formToSaveRequest(form: EditorForm): SaveCollectionTaskRequest {
     deviceId: form.deviceId.trim(),
     enabled: form.enabled,
     intervalMs: Math.max(Number.parseInt(form.intervalMs, 10) || 1000, 100),
-    pointIds: form.pointIds
-      .split(',')
-      .map((pointId) => pointId.trim())
-      .filter(Boolean),
+    pointIds: splitCsv(form.pointIds),
   };
+}
+
+function splitCsv(value: string) {
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function parseIntervalMs(interval: string): number {

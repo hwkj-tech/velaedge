@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { PointMappingsPage } from './PointMappingsPage';
@@ -151,9 +151,42 @@ describe('PointMappingsPage', () => {
     expect(await screen.findByText('点位草稿校验 已通过')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '新建点位' }));
-    await waitFor(() => {
-      expect(onCreatePoint).toHaveBeenCalledWith('edge-dev');
+    const dialog = screen.getByRole('dialog', { name: '新建点位' });
+    fireEvent.change(within(dialog).getByLabelText('新建 Point ID'), {
+      target: { value: 'temperature' },
     });
-    expect(await screen.findByText('已创建点位草稿 point-draft-3')).toBeInTheDocument();
+    fireEvent.change(within(dialog).getByLabelText('新建设备 ID'), {
+      target: { value: 'pump-1' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('新建语义遥测'), {
+      target: { value: 'pump.temperature' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('新建连接实例'), {
+      target: { value: 'modbus-line-a' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('新建地址类型'), {
+      target: { value: 'input_register' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('新建地址值'), {
+      target: { value: '30001' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('新建单位'), {
+      target: { value: 'C' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+    await waitFor(() => {
+      expect(onCreatePoint).toHaveBeenCalledWith('edge-dev', {
+        addressKind: 'input_register',
+        addressValue: '30001',
+        connectionId: 'modbus-line-a',
+        deviceId: 'pump-1',
+        intervalMs: 1000,
+        pointId: 'temperature',
+        semanticId: 'pump.temperature',
+        unit: 'C',
+        valueType: 'float32',
+      });
+    });
+    expect(await screen.findByText('已创建点位 point-draft-3')).toBeInTheDocument();
   });
 });

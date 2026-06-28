@@ -568,6 +568,138 @@ async fn draft_create_endpoints_add_config_resources_for_selected_edge() {
 }
 
 #[tokio::test]
+async fn draft_create_endpoints_accept_user_defined_config_resources() {
+    let router = app(AppState::default());
+
+    let point_response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/point-mappings")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "pointId": "temperature",
+                        "deviceId": "pump-1",
+                        "semanticId": "pump.temperature",
+                        "connectionId": "modbus-line-a",
+                        "addressKind": "input_register",
+                        "addressValue": "30001",
+                        "valueType": "float32",
+                        "unit": "C",
+                        "intervalMs": 2000
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(point_response.status(), StatusCode::CREATED);
+    let body = to_bytes(point_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let point: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(point["pointId"], "temperature");
+    assert_eq!(point["deviceId"], "pump-1");
+    assert_eq!(point["semanticTelemetry"], "pump.temperature");
+    assert_eq!(point["connection"], "modbus-line-a");
+    assert_eq!(point["address"], "input_register:30001");
+    assert_eq!(point["valueType"], "float32");
+    assert_eq!(point["unit"], "C");
+    assert_eq!(point["interval"], "2000ms");
+
+    let task_response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/collection-tasks")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "taskId": "thermal-task",
+                        "deviceId": "pump-1",
+                        "pointIds": ["temperature"],
+                        "intervalMs": 3000,
+                        "enabled": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(task_response.status(), StatusCode::CREATED);
+    let body = to_bytes(task_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let task: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(task["taskId"], "thermal-task");
+    assert_eq!(task["deviceId"], "pump-1");
+    assert_eq!(task["pointIds"], json!(["temperature"]));
+    assert_eq!(task["intervalMs"], 3000);
+    assert_eq!(task["enabled"], false);
+    assert_eq!(task["status"], "暂停");
+
+    let algorithm_response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/algorithms")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "algorithmId": "thermal-rule",
+                        "version": "1.0.0",
+                        "runtime": "Rule",
+                        "inputIds": ["temperature"],
+                        "outputIds": ["thermal.alert"]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(algorithm_response.status(), StatusCode::CREATED);
+    let body = to_bytes(algorithm_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let algorithm: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(algorithm["algorithmId"], "thermal-rule");
+    assert_eq!(algorithm["version"], "1.0.0");
+    assert_eq!(algorithm["runtime"], "Rule");
+    assert_eq!(algorithm["inputIds"], json!(["temperature"]));
+    assert_eq!(algorithm["outputIds"], json!(["thermal.alert"]));
+
+    let config_response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/desired-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(config_response.status(), StatusCode::OK);
+    let body = to_bytes(config_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(config["package"]["point_mappings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|point| point["point_id"] == "temperature"));
+    assert!(config["package"]["collection_tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|task| task["task_id"] == "thermal-task"));
+    assert!(config["package"]["algorithms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|algorithm| algorithm["id"] == "thermal-rule"));
+}
+
+#[tokio::test]
 async fn management_action_endpoints_return_computed_results() {
     let router = app(AppState::default());
 

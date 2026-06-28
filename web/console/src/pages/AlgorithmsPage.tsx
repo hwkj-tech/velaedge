@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Plus, ShieldCheck } from 'lucide-react';
+import { Plus, ShieldCheck, X } from 'lucide-react';
 
 import type {
   AlgorithmResponse,
+  CreateAlgorithmRequest,
   EdgeNodeResponse,
   ManagementActionResponse,
   SaveAlgorithmRequest,
@@ -64,6 +65,7 @@ export function AlgorithmsPage({
   ) => Promise<ManagementActionResponse> | ManagementActionResponse;
   onCreateAlgorithm?: (
     edgeId: string,
+    request: CreateAlgorithmRequest,
   ) => Promise<AlgorithmResponse> | AlgorithmResponse;
   onSaveAlgorithm?: (
     edgeId: string,
@@ -85,6 +87,14 @@ export function AlgorithmsPage({
     'idle',
   );
   const [toolbarMessage, setToolbarMessage] = useState('');
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createForm, setCreateForm] = useState({
+    algorithmId: '',
+    inputIds: fallbackAlgorithms[0].inputIds.join(', '),
+    outputIds: 'algorithm.output',
+    runtime: 'Rule',
+    version: '1.0.0',
+  });
   const [actionState, setActionState] = useState<
     'idle' | 'assessing' | 'creating'
   >('idle');
@@ -150,12 +160,19 @@ export function AlgorithmsPage({
     setToolbarMessage('');
 
     try {
-      const created = await onCreateAlgorithm?.(selectedEdgeId);
+      const created = await onCreateAlgorithm?.(selectedEdgeId, {
+        algorithmId: createForm.algorithmId.trim(),
+        inputIds: splitCsv(createForm.inputIds),
+        outputIds: splitCsv(createForm.outputIds),
+        runtime: createForm.runtime,
+        version: createForm.version.trim(),
+      });
       setToolbarMessage(
-        created ? `已创建算法草稿 ${created.algorithmId}` : '已创建算法草稿',
+        created ? `已创建算法 ${created.algorithmId}` : '已创建算法',
       );
+      setCreateDialogOpen(false);
     } catch {
-      setToolbarMessage('创建算法草稿失败');
+      setToolbarMessage('创建算法失败');
     } finally {
       setActionState('idle');
     }
@@ -210,18 +227,135 @@ export function AlgorithmsPage({
               <button
                 className="primary-button"
                 disabled={actionState === 'creating'}
-                onClick={() => {
-                  void handleCreateAlgorithm();
-                }}
+                onClick={() => setCreateDialogOpen(true)}
                 type="button"
               >
                 <Plus size={15} aria-hidden="true" />
-                {actionState === 'creating' ? '创建中' : '新建算法'}
+                新建算法
               </button>
             </>
           ) : null}
         </div>
       </section>
+
+      {createDialogOpen ? (
+        <div className="modal-backdrop">
+          <form
+            aria-labelledby="algorithm-create-dialog-title"
+            className="modal-panel"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleCreateAlgorithm();
+            }}
+            role="dialog"
+          >
+            <div className="modal-header">
+              <h3 id="algorithm-create-dialog-title">新建算法</h3>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={() => setCreateDialogOpen(false)}
+                type="button"
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="form-grid">
+              <label>
+                <span>Algorithm ID</span>
+                <input
+                  aria-label="新建 Algorithm ID"
+                  required
+                  value={createForm.algorithmId}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      algorithmId: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>算法版本</span>
+                <input
+                  aria-label="新建算法版本"
+                  required
+                  value={createForm.version}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      version: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>算法运行时</span>
+                <select
+                  aria-label="新建算法运行时"
+                  value={createForm.runtime}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      runtime: event.target.value,
+                    }))
+                  }
+                >
+                  {runtimeOptions.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>输入点位</span>
+                <input
+                  aria-label="新建算法输入点位"
+                  required
+                  value={createForm.inputIds}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      inputIds: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>输出变量</span>
+                <input
+                  aria-label="新建算法输出变量"
+                  required
+                  value={createForm.outputIds}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      outputIds: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                onClick={() => setCreateDialogOpen(false)}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="primary-button"
+                disabled={actionState === 'creating'}
+                type="submit"
+              >
+                {actionState === 'creating' ? '保存中' : '保存'}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
 
       <div className={isConfigureMode ? 'point-config-layout' : 'point-config-layout list-only'}>
         <section className="panel point-table-panel">

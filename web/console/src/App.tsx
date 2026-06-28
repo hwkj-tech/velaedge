@@ -37,7 +37,10 @@ import type {
   AgentActionResponse,
   AuditRecordResponse,
   CollectionTaskResponse,
+  CreateAlgorithmRequest,
+  CreateCollectionTaskRequest,
   CreateDeviceModelRequest,
+  CreatePointMappingRequest,
   DiscoveryReportResponse,
   DeviceModelResponse,
   EdgeNodeActionResponse,
@@ -164,8 +167,11 @@ export default function App() {
     setSelectedPointEdgeId(edgeId);
   };
 
-  const handleCreatePoint = async (edgeId = defaultConfigEdgeId) => {
-    const created = await createPointMappingDraft(edgeId);
+  const handleCreatePoint = async (
+    edgeId = defaultConfigEdgeId,
+    request: CreatePointMappingRequest = {},
+  ) => {
+    const created = await createPointMappingDraft(edgeId, request);
     const [nextPointMappings, nextReleaseList] = await Promise.all([
       fetchEdgePointMappings(edgeId),
       fetchReleaseList(),
@@ -212,8 +218,11 @@ export default function App() {
     setSelectedCollectionEdgeId(edgeId);
   };
 
-  const handleCreateCollectionTask = async (edgeId: string) => {
-    const created = await createCollectionTaskDraft(edgeId);
+  const handleCreateCollectionTask = async (
+    edgeId: string,
+    request: CreateCollectionTaskRequest,
+  ) => {
+    const created = await createCollectionTaskDraft(edgeId, request);
     const [nextCollectionTasks, nextReleaseList] = await Promise.all([
       fetchEdgeCollectionTasks(edgeId),
       fetchReleaseList(),
@@ -290,8 +299,11 @@ export default function App() {
     setSelectedAlgorithmEdgeId(edgeId);
   };
 
-  const handleCreateAlgorithm = async (edgeId: string) => {
-    const created = await createAlgorithmDraft(edgeId);
+  const handleCreateAlgorithm = async (
+    edgeId: string,
+    request: CreateAlgorithmRequest,
+  ) => {
+    const created = await createAlgorithmDraft(edgeId, request);
     const [nextAlgorithms, nextReleaseList] = await Promise.all([
       fetchEdgeAlgorithms(edgeId),
       fetchReleaseList(),
@@ -562,10 +574,19 @@ function renderPage(
   onAgentSafetyCheck: () => Promise<AgentActionResponse>,
   onAssessAlgorithmRisk: (edgeId: string) => Promise<ManagementActionResponse>,
   onConfigureEdge: (edgeId: string) => Promise<void>,
-  onCreateAlgorithm: (edgeId: string) => Promise<AlgorithmResponse>,
-  onCreateCollectionTask: (edgeId: string) => Promise<CollectionTaskResponse>,
+  onCreateAlgorithm: (
+    edgeId: string,
+    request: CreateAlgorithmRequest,
+  ) => Promise<AlgorithmResponse>,
+  onCreateCollectionTask: (
+    edgeId: string,
+    request: CreateCollectionTaskRequest,
+  ) => Promise<CollectionTaskResponse>,
   onCreateDeviceModel: (request: CreateDeviceModelRequest) => Promise<DeviceModelResponse>,
-  onCreatePoint: (edgeId?: string) => Promise<PointMappingResponse>,
+  onCreatePoint: (
+    edgeId?: string,
+    request?: CreatePointMappingRequest,
+  ) => Promise<PointMappingResponse>,
   onEnableMaintenance: (edgeId: string) => Promise<EdgeNodeActionResponse>,
   onGenerateAgentSuggestions: () => Promise<AgentActionResponse>,
   onRunDiscovery: (

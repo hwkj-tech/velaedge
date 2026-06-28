@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AlgorithmsPage } from './AlgorithmsPage';
@@ -123,9 +123,29 @@ describe('AlgorithmsPage', () => {
     expect(await screen.findByText('算法风险评估 已通过')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '新建算法' }));
-    await waitFor(() => {
-      expect(onCreateAlgorithm).toHaveBeenCalledWith('edge-dev');
+    const dialog = screen.getByRole('dialog', { name: '新建算法' });
+    fireEvent.change(within(dialog).getByLabelText('新建 Algorithm ID'), {
+      target: { value: 'thermal-rule' },
     });
-    expect(await screen.findByText('已创建算法草稿 algorithm-draft-2')).toBeInTheDocument();
+    fireEvent.change(within(dialog).getByLabelText('新建算法版本'), {
+      target: { value: '1.0.0' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('新建算法输入点位'), {
+      target: { value: 'pressure' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('新建算法输出变量'), {
+      target: { value: 'thermal.alert' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+    await waitFor(() => {
+      expect(onCreateAlgorithm).toHaveBeenCalledWith('edge-dev', {
+        algorithmId: 'thermal-rule',
+        inputIds: ['pressure'],
+        outputIds: ['thermal.alert'],
+        runtime: 'Rule',
+        version: '1.0.0',
+      });
+    });
+    expect(await screen.findByText('已创建算法 algorithm-draft-2')).toBeInTheDocument();
   });
 });

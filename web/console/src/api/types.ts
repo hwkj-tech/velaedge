@@ -30,6 +30,18 @@ export interface SavePointMappingRequest {
   unit: string;
 }
 
+export interface CreatePointMappingRequest {
+  pointId?: string;
+  deviceId?: string;
+  semanticId?: string;
+  connectionId?: string;
+  addressKind?: string;
+  addressValue?: string;
+  valueType?: string;
+  unit?: string;
+  intervalMs?: number;
+}
+
 export interface ApplyResultResponse {
   edgeId: string;
   desiredVersion: string;
@@ -157,6 +169,14 @@ export interface SaveCollectionTaskRequest {
   enabled: boolean;
 }
 
+export interface CreateCollectionTaskRequest {
+  taskId?: string;
+  deviceId: string;
+  pointIds: string[];
+  intervalMs: number;
+  enabled?: boolean;
+}
+
 export interface AlgorithmResponse {
   edgeId: string;
   algorithmId: string;
@@ -173,6 +193,14 @@ export interface AlgorithmResponse {
 
 export interface SaveAlgorithmRequest {
   version: string;
+  runtime: string;
+  inputIds: string[];
+  outputIds: string[];
+}
+
+export interface CreateAlgorithmRequest {
+  algorithmId?: string;
+  version?: string;
   runtime: string;
   inputIds: string[];
   outputIds: string[];

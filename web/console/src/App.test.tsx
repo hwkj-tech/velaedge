@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -615,17 +615,25 @@ describe('App cloud console write actions', () => {
     expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '新建连接' }));
+    const dialog = screen.getByRole('dialog', { name: '新建协议连接' });
+    fireEvent.change(within(dialog).getByLabelText('新建协议类型'), {
+      target: { value: 'ModbusRtu' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('新建端点'), {
+      target: { value: '/dev/ttyUSB1' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
       expect(createEdgeProtocolConnection).toHaveBeenCalledWith('edge-dev', {
-        endpoint: null,
-        protocolType: 'ModbusTcp',
+        endpoint: '/dev/ttyUSB1',
+        protocolType: 'ModbusRtu',
       });
     });
     expect(
       await screen.findByRole('button', { name: '选择连接 connection-draft-2' }),
     ).toBeInTheDocument();
-    expect(screen.getByText('已创建连接草稿 connection-draft-2')).toBeInTheDocument();
+    expect(screen.getByText('已创建连接 connection-draft-2')).toBeInTheDocument();
   });
 
   it('opens configuration sections as editable management lists from the sidebar', async () => {
@@ -848,8 +856,35 @@ describe('App cloud console write actions', () => {
     fireEvent.click(screen.getByRole('button', { name: /点位配置/ }));
     expect(await screen.findByText('holding_register:40001')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '新建点位' }));
+    const pointDialog = screen.getByRole('dialog', { name: '新建点位' });
+    fireEvent.change(within(pointDialog).getByLabelText('新建 Point ID'), {
+      target: { value: 'temperature' },
+    });
+    fireEvent.change(within(pointDialog).getByLabelText('新建设备 ID'), {
+      target: { value: 'pump-1' },
+    });
+    fireEvent.change(within(pointDialog).getByLabelText('新建语义遥测'), {
+      target: { value: 'pump.temperature' },
+    });
+    fireEvent.change(within(pointDialog).getByLabelText('新建连接实例'), {
+      target: { value: 'modbus-line-a' },
+    });
+    fireEvent.change(within(pointDialog).getByLabelText('新建地址值'), {
+      target: { value: '30001' },
+    });
+    fireEvent.click(within(pointDialog).getByRole('button', { name: '保存' }));
     await waitFor(() => {
-      expect(createPointMappingDraft).toHaveBeenCalledWith('edge-dev');
+      expect(createPointMappingDraft).toHaveBeenCalledWith('edge-dev', {
+        addressKind: 'holding_register',
+        addressValue: '30001',
+        connectionId: 'modbus-line-a',
+        deviceId: 'pump-1',
+        intervalMs: 1000,
+        pointId: 'temperature',
+        semanticId: 'pump.temperature',
+        unit: '-',
+        valueType: 'float32',
+      });
     });
     expect(await screen.findByText('point-draft-2')).toBeInTheDocument();
 
@@ -858,8 +893,25 @@ describe('App cloud console write actions', () => {
       await screen.findByRole('button', { name: '选择任务 pump-main' }),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '新建任务' }));
+    const taskDialog = screen.getByRole('dialog', { name: '新建采集任务' });
+    fireEvent.change(within(taskDialog).getByLabelText('新建 Task ID'), {
+      target: { value: 'thermal-task' },
+    });
+    fireEvent.change(within(taskDialog).getByLabelText('新建任务设备 ID'), {
+      target: { value: 'pump-1' },
+    });
+    fireEvent.change(within(taskDialog).getByLabelText('新建任务采集点位'), {
+      target: { value: 'pressure' },
+    });
+    fireEvent.click(within(taskDialog).getByRole('button', { name: '保存' }));
     await waitFor(() => {
-      expect(createCollectionTaskDraft).toHaveBeenCalledWith('edge-dev');
+      expect(createCollectionTaskDraft).toHaveBeenCalledWith('edge-dev', {
+        deviceId: 'pump-1',
+        enabled: true,
+        intervalMs: 1000,
+        pointIds: ['pressure'],
+        taskId: 'thermal-task',
+      });
     });
     expect(await screen.findByText('task-draft-2')).toBeInTheDocument();
 
@@ -868,8 +920,25 @@ describe('App cloud console write actions', () => {
       await screen.findByRole('button', { name: '选择算法 pump-anomaly-v1' }),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '新建算法' }));
+    const algorithmDialog = screen.getByRole('dialog', { name: '新建算法' });
+    fireEvent.change(within(algorithmDialog).getByLabelText('新建 Algorithm ID'), {
+      target: { value: 'thermal-rule' },
+    });
+    fireEvent.change(within(algorithmDialog).getByLabelText('新建算法输入点位'), {
+      target: { value: 'pressure' },
+    });
+    fireEvent.change(within(algorithmDialog).getByLabelText('新建算法输出变量'), {
+      target: { value: 'thermal.alert' },
+    });
+    fireEvent.click(within(algorithmDialog).getByRole('button', { name: '保存' }));
     await waitFor(() => {
-      expect(createAlgorithmDraft).toHaveBeenCalledWith('edge-dev');
+      expect(createAlgorithmDraft).toHaveBeenCalledWith('edge-dev', {
+        algorithmId: 'thermal-rule',
+        inputIds: ['pressure'],
+        outputIds: ['thermal.alert'],
+        runtime: 'Rule',
+        version: '1.0.0',
+      });
     });
     expect(await screen.findByText('algorithm-draft-2')).toBeInTheDocument();
   });

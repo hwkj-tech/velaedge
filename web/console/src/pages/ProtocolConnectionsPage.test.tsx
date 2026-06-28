@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ProtocolConnectionsPage } from './ProtocolConnectionsPage';
@@ -31,7 +31,12 @@ describe('ProtocolConnectionsPage', () => {
     fireEvent.change(screen.getByLabelText('端点'), {
       target: { value: 'opc.tcp://10.12.0.80:4840' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    fireEvent.click(
+      within(screen.getByRole('complementary', { name: '编辑连接 modbus-line-a' })).getByRole(
+        'button',
+        { name: '保存' },
+      ),
+    );
 
     await waitFor(() => {
       expect(onSaveConnection).toHaveBeenCalledWith(
@@ -117,14 +122,16 @@ describe('ProtocolConnectionsPage', () => {
     expect(await screen.findByText('连接校验 已通过')).toBeInTheDocument();
   });
 
-  it('shows visible feedback for creating connection drafts', async () => {
+  it('opens a dialog before creating protocol connections', () => {
     render(<ProtocolConnectionsPage selectedEdgeId="edge-dev" />);
 
     fireEvent.click(screen.getByRole('button', { name: '新建连接' }));
-    expect(await screen.findByText('已创建连接草稿')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: '新建协议连接' })).toBeInTheDocument();
+    expect(screen.getByLabelText('新建协议类型')).toBeInTheDocument();
+    expect(screen.getByLabelText('新建端点')).toBeInTheDocument();
   });
 
-  it('creates and selects a new protocol connection draft', async () => {
+  it('creates and selects a new protocol connection from dialog fields', async () => {
     const onCreateConnection = vi.fn().mockResolvedValue({
       edgeId: 'edge-dev',
       connectionId: 'connection-draft-2',
@@ -163,14 +170,26 @@ describe('ProtocolConnectionsPage', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: '新建连接' }));
+    fireEvent.change(screen.getByLabelText('新建协议类型'), {
+      target: { value: 'ModbusRtu' },
+    });
+    fireEvent.change(screen.getByLabelText('新建端点'), {
+      target: { value: '/dev/ttyUSB1' },
+    });
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: '新建协议连接' })).getByRole(
+        'button',
+        { name: '保存' },
+      ),
+    );
 
     await waitFor(() => {
       expect(onCreateConnection).toHaveBeenCalledWith('edge-dev', {
-        endpoint: null,
-        protocolType: 'ModbusTcp',
+        endpoint: '/dev/ttyUSB1',
+        protocolType: 'ModbusRtu',
       });
     });
-    expect(screen.getByText('已创建连接草稿 connection-draft-2')).toBeInTheDocument();
+    expect(screen.getByText('已创建连接 connection-draft-2')).toBeInTheDocument();
     expect(screen.getByText('编辑连接 connection-draft-2')).toBeInTheDocument();
   });
 });
