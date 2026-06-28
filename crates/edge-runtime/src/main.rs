@@ -10,10 +10,11 @@ use edge_core::{
 };
 use edge_runtime::{
     publish_edgelink_runtime_status_with_mqtt_uplink_once,
-    publish_edgelink_runtime_status_with_store_and_capabilities_once,
-    sync_and_report_mqtt_uplink_once, sync_and_report_once, EdgeRuntime, HttpEdgeConfigSyncClient,
+    publish_edgelink_runtime_status_with_store_and_capabilities_once, report_runtime_status_once,
+    sync_and_report_mqtt_uplink_once, sync_and_report_once, CollectionSchedule,
+    ConfiguredEdgeRuntime, EdgeConfigSyncClient, EdgeRuntime, HttpEdgeConfigSyncClient,
     HttpRuntimeStatusReporter, JsonlLocalStore, RocksEdgeRuntimeStore, RuntimeCapabilityConfig,
-    SimulatedProtocolAdapter,
+    SimulatedProtocolAdapter, TokioSerialBusFactory,
 };
 use tracing::info;
 
@@ -37,6 +38,10 @@ struct Args {
     cloud_gateway_addr: Option<String>,
     #[arg(long)]
     mqtt_uplink: bool,
+    #[arg(long, default_value_t = 0)]
+    scheduled_ticks: u32,
+    #[arg(long, default_value_t = 1000)]
+    scheduler_tick_ms: u64,
 }
 
 #[tokio::main]
@@ -95,6 +100,30 @@ async fn main() -> Result<()> {
     if let Some(cloud_api_url) = args.cloud_api_url {
         let mut config_client = HttpEdgeConfigSyncClient::new(&cloud_api_url)?;
         let mut runtime_reporter = HttpRuntimeStatusReporter::new(&cloud_api_url)?;
+        if args.scheduled_ticks > 0 {
+            let report = run_scheduled_cloud_ticks(
+                &args.edge_id,
+                &args.runtime_id,
+                &mut config_client,
+                &mut runtime_reporter,
+                args.scheduled_ticks,
+                args.scheduler_tick_ms,
+            )
+            .await?;
+
+            info!(
+                edge_id = %args.edge_id,
+                runtime_id = %args.runtime_id,
+                applied_version = %report.applied_version,
+                tasks_run = report.tasks_run,
+                samples_collected = report.samples_collected,
+                cloud_api_url = %cloud_api_url,
+                "scheduled cloud config collection completed"
+            );
+
+            return Ok(());
+        }
+
         if args.mqtt_uplink {
             let report = sync_and_report_mqtt_uplink_once(
                 &args.edge_id,
@@ -158,6 +187,69 @@ async fn main() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ScheduledCloudRunReport {
+    applied_version: String,
+    tasks_run: usize,
+    samples_collected: usize,
+}
+
+async fn run_scheduled_cloud_ticks<C, R>(
+    edge_id: &str,
+    runtime_id: &str,
+    config_client: &mut C,
+    runtime_reporter: &mut R,
+    scheduled_ticks: u32,
+    scheduler_tick_ms: u64,
+) -> Result<ScheduledCloudRunReport>
+where
+    C: EdgeConfigSyncClient + Send,
+    R: edge_runtime::RuntimeStatusReporter + Send,
+{
+    let desired = config_client.fetch_desired_config(edge_id).await?;
+    if desired.package.edge_id != edge_id {
+        anyhow::bail!(
+            "desired package targets edge {}, but runtime is {}",
+            desired.package.edge_id,
+            edge_id
+        );
+    }
+    if desired.package.version != desired.desired_version {
+        anyhow::bail!(
+            "desired version {} does not match package version {}",
+            desired.desired_version,
+            desired.package.version
+        );
+    }
+
+    let applied = edge_runtime::AppliedEdgeConfig::apply(desired.package.clone())?;
+    let mut schedule = CollectionSchedule::from_package(&desired.package)?;
+    let mut runtime = ConfiguredEdgeRuntime::new(desired.package, TokioSerialBusFactory)?;
+    let mut tasks_run = 0;
+    let mut samples_collected = 0;
+
+    for tick in 0..scheduled_ticks {
+        let now_ms = u64::from(tick).saturating_mul(scheduler_tick_ms);
+        let report = runtime
+            .collect_due_tasks_once(&mut schedule, now_ms)
+            .await?;
+        tasks_run += report.tasks_run;
+        samples_collected += report.samples_collected;
+    }
+
+    let applied_version = runtime.reported_version().to_string();
+    config_client
+        .report_applied_version(edge_id, &applied_version)
+        .await?;
+    report_runtime_status_once(runtime_id, applied, runtime_reporter).await?;
+
+    Ok(ScheduledCloudRunReport {
+        applied_version,
+        tasks_run,
+        samples_collected,
+    })
 }
 
 fn runtime_metrics_snapshot(

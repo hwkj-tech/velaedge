@@ -69,6 +69,48 @@ fn edge_runtime_cli_can_run_cloud_config_sync_and_runtime_reporting_once() {
     assert!(requests[2].contains("\"config_version\":\"2026.06.26-005\""));
 }
 
+#[test]
+fn edge_runtime_cli_can_run_scheduled_collection_ticks_from_cloud_config() {
+    let desired = json!({
+        "edgeId": "edge-dev",
+        "desiredVersion": "2026.06.26-005",
+        "package": package(),
+    })
+    .to_string();
+    let (base_url, received) =
+        spawn_http_recorder(vec![desired, "{}".to_string(), "{}".to_string()]);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_edge-runtime"))
+        .args([
+            "--edge-id",
+            "edge-dev",
+            "--runtime-id",
+            "runtime-cli",
+            "--cloud-api-url",
+            &base_url,
+            "--scheduled-ticks",
+            "2",
+            "--scheduler-tick-ms",
+            "1000",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "edge-runtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let requests = received
+        .recv_timeout(Duration::from_secs(2))
+        .expect("requests should be recorded");
+
+    assert!(requests[0].starts_with("GET /api/edges/edge-dev/desired-config HTTP/1.1"));
+    assert!(requests[1].starts_with("POST /api/edges/edge-dev/reported-config HTTP/1.1"));
+    assert!(requests[2].starts_with("POST /api/edges/edge-dev/runtime-metrics HTTP/1.1"));
+}
+
 fn spawn_http_recorder(responses: Vec<String>) -> (String, mpsc::Receiver<Vec<String>>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
