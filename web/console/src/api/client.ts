@@ -22,6 +22,7 @@ import type {
   ManagementActionResponse,
   SaveAlgorithmRequest,
   SaveCollectionTaskRequest,
+  SaveDeviceModelRequest,
   SaveMqttUplinkRequest,
   SavePointMappingRequest,
   SaveProtocolConnectionRequest,
@@ -115,6 +116,22 @@ export async function createDeviceModelDraft(
     headers: { 'content-type': 'application/json' },
     method: 'POST',
   });
+}
+
+export async function saveDeviceModel(
+  deviceType: string,
+  request: SaveDeviceModelRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<DeviceModelResponse> {
+  return requestJson<DeviceModelResponse>(
+    `/api/device-models/${encodeURIComponent(deviceType)}`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    },
+  );
 }
 
 export async function fetchProtocolConnections(

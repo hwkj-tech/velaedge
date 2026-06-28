@@ -113,6 +113,11 @@ export interface CreateDeviceModelRequest {
   telemetry: CreateTelemetryModelRequest[];
 }
 
+export interface SaveDeviceModelRequest {
+  version: string;
+  telemetry: CreateTelemetryModelRequest[];
+}
+
 export interface ManagementActionResponse {
   action: string;
   details: string[];

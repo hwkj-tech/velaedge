@@ -34,6 +34,7 @@ import {
   rotateEdgeCredentials,
   saveEdgeCollectionTask,
   saveEdgeAlgorithm,
+  saveDeviceModel,
   saveEdgePointMapping,
   saveEdgeProtocolConnection,
   savePointMapping,
@@ -780,6 +781,42 @@ describe('draft creation clients', () => {
       }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
+    });
+  });
+});
+
+describe('device model save client', () => {
+  it('saves edited device model definitions through the API', async () => {
+    const request = {
+      version: 'v2',
+      telemetry: [
+        {
+          description: '泵体温度',
+          range: '0-120',
+          telemetryId: 'temperature',
+          unit: 'C',
+          valueType: 'float32',
+        },
+      ],
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        commandCount: 0,
+        deviceType: 'pump',
+        eventCount: 0,
+        telemetry: [],
+        version: 'v2',
+      }),
+    });
+
+    await expect(
+      saveDeviceModel('pump', request, fetchMock as unknown as typeof fetch),
+    ).resolves.toMatchObject({ deviceType: 'pump', version: 'v2' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/device-models/pump', {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
     });
   });
 });

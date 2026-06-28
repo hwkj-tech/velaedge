@@ -25,6 +25,7 @@ import {
   runDiscovery,
   saveMqttUplink,
   createEdgeProtocolConnection,
+  saveDeviceModel,
   rotateEdgeCredentials,
   enableEdgeMaintenanceMode,
   saveEdgeAlgorithm,
@@ -55,6 +56,7 @@ import type {
   RuntimeStatusResponse,
   SaveAlgorithmRequest,
   SaveCollectionTaskRequest,
+  SaveDeviceModelRequest,
   CreateProtocolConnectionRequest,
   SavePointMappingRequest,
   SaveProtocolConnectionRequest,
@@ -345,6 +347,15 @@ export default function App() {
     return created;
   };
 
+  const handleSaveDeviceModel = async (
+    deviceType: string,
+    request: SaveDeviceModelRequest,
+  ) => {
+    const saved = await saveDeviceModel(deviceType, request);
+    setDeviceModels(await fetchDeviceModels());
+    return saved;
+  };
+
   const handleAgentSafetyCheck = async (): Promise<AgentActionResponse> =>
     runAgentSafetyCheck();
 
@@ -479,6 +490,7 @@ export default function App() {
         handleCreateAlgorithm,
         handleCreateCollectionTask,
         handleCreateDeviceModel,
+        handleSaveDeviceModel,
         handleCreatePoint,
         handleEnableMaintenance,
         handleGenerateAgentSuggestions,
@@ -583,6 +595,10 @@ function renderPage(
     request: CreateCollectionTaskRequest,
   ) => Promise<CollectionTaskResponse>,
   onCreateDeviceModel: (request: CreateDeviceModelRequest) => Promise<DeviceModelResponse>,
+  onSaveDeviceModel: (
+    deviceType: string,
+    request: SaveDeviceModelRequest,
+  ) => Promise<DeviceModelResponse>,
   onCreatePoint: (
     edgeId?: string,
     request?: CreatePointMappingRequest,
@@ -676,6 +692,7 @@ function renderPage(
         <DeviceModelsPage
           deviceModels={deviceModels}
           onCreateDeviceModel={onCreateDeviceModel}
+          onSaveDeviceModel={onSaveDeviceModel}
         />
       );
     case 'protocolConnections':

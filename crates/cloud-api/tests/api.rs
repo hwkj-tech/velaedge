@@ -468,6 +468,84 @@ async fn device_model_create_accepts_user_defined_model_fields() {
 }
 
 #[tokio::test]
+async fn device_model_save_updates_model_and_latest_edge_config() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::put("/api/device-models/pump")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "version": "v2",
+                        "telemetry": [
+                            {
+                                "telemetryId": "temperature",
+                                "valueType": "float32",
+                                "unit": "C",
+                                "range": "0-120",
+                                "description": "泵体温度"
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let model: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(model["deviceType"], "pump");
+    assert_eq!(model["version"], "v2");
+    assert_eq!(model["telemetry"][0]["telemetryId"], "temperature");
+    assert_eq!(model["telemetry"][0]["unit"], "C");
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::get("/api/device-models")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let models: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let pump = models
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|model| model["deviceType"] == "pump")
+        .unwrap();
+    assert_eq!(pump["version"], "v2");
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/desired-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let model = config["package"]["device_models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|model| model["device_type"] == "pump")
+        .unwrap();
+    assert_eq!(model["version"], "v2");
+    assert_eq!(model["telemetry"][0]["id"], "temperature");
+}
+
+#[tokio::test]
 async fn edge_algorithms_endpoint_returns_selected_edge_algorithms() {
     let response = app(AppState::default())
         .oneshot(

@@ -33,6 +33,7 @@ pub fn app(state: AppState) -> Router {
             "/api/device-models",
             get(device_models).post(create_device_model),
         )
+        .route("/api/device-models/{device_type}", put(save_device_model))
         .route("/api/protocol-connections", get(protocol_connections))
         .route(
             "/api/edges/{edge_id}/protocol-connections",
@@ -533,13 +534,26 @@ async fn enable_edge_maintenance_mode(
 
 async fn device_models(State(state): State<AppState>) -> Json<Vec<DeviceModelResponse>> {
     let store = state.store.lock().expect("store mutex poisoned");
-    let mut rows = Vec::new();
+    let mut latest_by_type = BTreeMap::<String, (String, DeviceSpec)>::new();
 
     for package in store.config_packages() {
         for model in &package.device_models {
-            rows.push(device_model_response(model));
+            let should_replace = latest_by_type
+                .get(&model.device_type)
+                .map(|(version, _)| package.version > *version)
+                .unwrap_or(true);
+            if should_replace {
+                latest_by_type.insert(
+                    model.device_type.clone(),
+                    (package.version.clone(), model.clone()),
+                );
+            }
         }
     }
+    let mut rows = latest_by_type
+        .into_values()
+        .map(|(_, model)| device_model_response(&model))
+        .collect::<Vec<_>>();
     rows.sort_by(|left, right| left.device_type.cmp(&right.device_type));
 
     Json(rows)
@@ -584,6 +598,66 @@ async fn create_device_model(
         .map_err(persistence_error)?;
 
     Ok((StatusCode::CREATED, Json(response)))
+}
+
+async fn save_device_model(
+    State(state): State<AppState>,
+    Path(device_type): Path<String>,
+    Json(request): Json<SaveDeviceModelRequest>,
+) -> Result<Json<DeviceModelResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let model = build_device_model(device_type.clone(), request.version, request.telemetry)?;
+    let (packages, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        if store.device_model(&device_type).is_none()
+            && !store.config_packages().any(|package| {
+                package
+                    .device_models
+                    .iter()
+                    .any(|candidate| candidate.device_type == device_type)
+            })
+        {
+            return Err(error(StatusCode::NOT_FOUND, "missing device model"));
+        }
+
+        store.upsert_device_model(model.clone());
+        let edge_ids = store
+            .edge_nodes()
+            .map(|edge| edge.edge_id.clone())
+            .collect::<Vec<_>>();
+        let mut packages = Vec::new();
+        for edge_id in edge_ids {
+            let Some(mut package) = store.latest_config_package_for_edge(&edge_id).cloned() else {
+                continue;
+            };
+            let Some(model_index) = package
+                .device_models
+                .iter()
+                .position(|candidate| candidate.device_type == device_type)
+            else {
+                continue;
+            };
+            package.version = next_version(&package.version);
+            package.device_models[model_index] = model.clone();
+            store.upsert_config_package(package.clone());
+            store.push_audit(AuditAction::UpdateConfig, edge_id);
+            packages.push(package);
+        }
+        let response = device_model_response(&model);
+        (packages, response)
+    };
+
+    state
+        .persist_device_model(model)
+        .await
+        .map_err(persistence_error)?;
+    for package in packages {
+        state
+            .persist_config_package(package)
+            .await
+            .map_err(persistence_error)?;
+    }
+
+    Ok(Json(response))
 }
 
 async fn protocol_connections(
@@ -1534,6 +1608,13 @@ pub struct CreateDeviceModelRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SaveDeviceModelRequest {
+    pub version: String,
+    pub telemetry: Vec<CreateTelemetryModelRequest>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateTelemetryModelRequest {
     pub telemetry_id: String,
     pub value_type: String,
@@ -1875,17 +1956,25 @@ fn device_model_response(model: &DeviceSpec) -> DeviceModelResponse {
 fn build_device_model_from_request(
     request: CreateDeviceModelRequest,
 ) -> Result<DeviceSpec, (StatusCode, Json<ErrorResponse>)> {
-    let device_type = non_empty_field(request.device_type, "deviceType")?;
-    let version = non_empty_field(request.version, "version")?;
-    if request.telemetry.is_empty() {
+    build_device_model(request.device_type, request.version, request.telemetry)
+}
+
+fn build_device_model(
+    device_type: String,
+    version: String,
+    telemetry_request: Vec<CreateTelemetryModelRequest>,
+) -> Result<DeviceSpec, (StatusCode, Json<ErrorResponse>)> {
+    let device_type = non_empty_field(device_type, "deviceType")?;
+    let version = non_empty_field(version, "version")?;
+    if telemetry_request.is_empty() {
         return Err(error(
             StatusCode::BAD_REQUEST,
             "device model requires at least one telemetry point",
         ));
     }
 
-    let mut telemetry = Vec::with_capacity(request.telemetry.len());
-    for point in request.telemetry {
+    let mut telemetry = Vec::with_capacity(telemetry_request.len());
+    for point in telemetry_request {
         let telemetry_id = non_empty_field(point.telemetry_id, "telemetryId")?;
         let value_type = parse_telemetry_type(&point.value_type)?;
         let mut telemetry_point = TelemetryPoint::new(telemetry_id, value_type);

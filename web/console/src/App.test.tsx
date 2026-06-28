@@ -982,29 +982,30 @@ describe('App cloud console write actions', () => {
     fireEvent.click(screen.getByRole('button', { name: /设备模型/ }));
     expect(await screen.findByText('pump@v1 遥测定义')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '新建设备模型' }));
-    expect(screen.getByRole('dialog', { name: '新建设备模型' })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('设备类型'), {
+    const dialog = screen.getByRole('dialog', { name: '新建设备模型' });
+    expect(dialog).toBeInTheDocument();
+    fireEvent.change(within(dialog).getByLabelText('设备类型'), {
       target: { value: 'meter' },
     });
-    fireEvent.change(screen.getByLabelText('模型版本'), {
+    fireEvent.change(within(dialog).getByLabelText('模型版本'), {
       target: { value: 'v2' },
     });
-    fireEvent.change(screen.getByLabelText('遥测 ID'), {
+    fireEvent.change(within(dialog).getByLabelText('遥测 ID'), {
       target: { value: 'voltage_a' },
     });
-    fireEvent.change(screen.getByLabelText('数据类型'), {
+    fireEvent.change(within(dialog).getByLabelText('数据类型'), {
       target: { value: 'float32' },
     });
-    fireEvent.change(screen.getByLabelText('单位'), {
+    fireEvent.change(within(dialog).getByLabelText('单位'), {
       target: { value: 'V' },
     });
-    fireEvent.change(screen.getByLabelText('范围'), {
+    fireEvent.change(within(dialog).getByLabelText('范围'), {
       target: { value: '0-500' },
     });
-    fireEvent.change(screen.getByLabelText('说明'), {
+    fireEvent.change(within(dialog).getByLabelText('说明'), {
       target: { value: 'A 相电压' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '保存设备模型' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存设备模型' }));
     await waitFor(() => {
       expect(createDeviceModelDraft).toHaveBeenCalledWith({
         deviceType: 'meter',
