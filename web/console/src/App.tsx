@@ -376,9 +376,7 @@ export default function App() {
 
   const handleNavigate = (page: PageKey) => {
     setActivePage(page);
-    if (!configurationPages.has(page) || page === activePage) {
-      setEdgeConfigurationMode('list');
-    }
+    setEdgeConfigurationMode(configurationPages.has(page) ? 'configure' : 'list');
     if (page !== 'runtimeStatus') {
       setFocusedRuntimeEdgeId(undefined);
     }
