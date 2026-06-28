@@ -5,8 +5,9 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    report_runtime_status_once, AppliedEdgeConfig, ConfiguredSimulatedRuntime, MqttPublisher,
-    RumqttcMqttPublisher, RuntimeStatusReporter,
+    report_runtime_status_once, AppliedEdgeConfig, ConfiguredEdgeRuntime,
+    ConfiguredSimulatedRuntime, MqttPublisher, RumqttcMqttPublisher, RuntimeStatusReporter,
+    TokioSerialBusFactory,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -166,7 +167,7 @@ where
 {
     let desired = client.fetch_desired_config(edge_id).await?;
     let applied = apply_desired_config(edge_id, desired)?;
-    let mut runtime = ConfiguredSimulatedRuntime::new(applied.clone());
+    let mut runtime = ConfiguredEdgeRuntime::new(applied.package().clone(), TokioSerialBusFactory)?;
     let collection = if let Some(uplink) = applied.package().mqtt_uplinks.first() {
         let mut publisher = RumqttcMqttPublisher::connect_from_uplink(uplink)?;
         runtime

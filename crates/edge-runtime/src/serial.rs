@@ -1,15 +1,30 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use edge_core::SerialConnectionSettings;
+use edge_core::{ProtocolConnection, SerialConnectionSettings};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_serial::{DataBits, Parity, SerialPortBuilderExt, SerialStream, StopBits};
 
 #[async_trait]
 pub trait SerialBus: Send {
     async fn transact(&mut self, request: &[u8]) -> Result<Vec<u8>>;
+}
+
+#[async_trait]
+impl<T> SerialBus for Box<T>
+where
+    T: SerialBus + ?Sized,
+{
+    async fn transact(&mut self, request: &[u8]) -> Result<Vec<u8>> {
+        (**self).transact(request).await
+    }
+}
+
+pub trait SerialBusFactory: Send {
+    fn open(&mut self, connection: &ProtocolConnection) -> Result<Box<dyn SerialBus>>;
 }
 
 #[derive(Clone, Debug)]
@@ -42,6 +57,34 @@ impl ScriptedSerialBus {
     }
 }
 
+pub struct ScriptedSerialBusFactory {
+    buses: BTreeMap<String, ScriptedSerialBus>,
+}
+
+impl ScriptedSerialBusFactory {
+    pub fn new(buses: Vec<(String, ScriptedSerialBus)>) -> Self {
+        Self {
+            buses: buses.into_iter().collect(),
+        }
+    }
+}
+
+impl SerialBusFactory for ScriptedSerialBusFactory {
+    fn open(&mut self, connection: &ProtocolConnection) -> Result<Box<dyn SerialBus>> {
+        let bus = self
+            .buses
+            .get(&connection.connection_id)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing scripted serial bus for connection {}",
+                    connection.connection_id
+                )
+            })?;
+        Ok(Box::new(bus))
+    }
+}
+
 #[async_trait]
 impl SerialBus for ScriptedSerialBus {
     async fn transact(&mut self, request: &[u8]) -> Result<Vec<u8>> {
@@ -61,6 +104,20 @@ pub struct TokioSerialBus {
     port: SerialStream,
     read_idle_timeout: Duration,
     max_response_bytes: usize,
+}
+
+#[derive(Default)]
+pub struct TokioSerialBusFactory;
+
+impl SerialBusFactory for TokioSerialBusFactory {
+    fn open(&mut self, connection: &ProtocolConnection) -> Result<Box<dyn SerialBus>> {
+        let serial = connection
+            .serial
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("serial protocol connection requires settings"))?;
+        require_serial_endpoint(connection.endpoint.as_deref())?;
+        Ok(Box::new(TokioSerialBus::open(serial)?))
+    }
 }
 
 impl TokioSerialBus {

@@ -18,8 +18,9 @@ use tokio_rustls::{
 };
 
 use crate::{
-    AppliedEdgeConfig, ConfiguredMqttCollectionReport, ConfiguredSimulatedRuntime, MqttPublisher,
-    RocksEdgeRuntimeStore, RumqttcMqttPublisher,
+    AppliedEdgeConfig, ConfiguredEdgeRuntime, ConfiguredMqttCollectionReport,
+    ConfiguredSimulatedRuntime, MqttPublisher, RocksEdgeRuntimeStore, RumqttcMqttPublisher,
+    TokioSerialBusFactory,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -493,7 +494,11 @@ async fn collect_after_config_deploy(
         EdgeLinkMqttMode::ConfiguredUplink => {
             if let Some(uplink) = applied.package().mqtt_uplinks.first() {
                 let mut publisher = RumqttcMqttPublisher::connect_from_uplink(uplink)?;
-                runtime.collect_once_and_publish_mqtt(&mut publisher).await
+                let mut configured_runtime =
+                    ConfiguredEdgeRuntime::new(applied.package().clone(), TokioSerialBusFactory)?;
+                configured_runtime
+                    .collect_once_and_publish_mqtt(&mut publisher)
+                    .await
             } else {
                 collect_without_mqtt(runtime).await
             }
