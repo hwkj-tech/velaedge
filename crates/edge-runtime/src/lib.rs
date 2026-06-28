@@ -19,7 +19,10 @@ pub mod sync;
 
 pub use capability::RuntimeCapabilityConfig;
 pub use config::{AppliedEdgeConfig, ConfiguredMqttCollectionReport, ConfiguredSimulatedRuntime};
-pub use configured_runtime::{ConfiguredEdgeRuntime, ScheduledCollectionReport};
+pub use configured_runtime::{
+    ConfiguredEdgeRuntime, ResilientScheduledCollectionReport, ScheduledCollectionFailure,
+    ScheduledCollectionReport,
+};
 pub use discovery::SimulatedSerialDiscovery;
 pub use edgelink_client::{
     connect_edgelink_once, connect_edgelink_once_with_capabilities, connect_edgelink_tls_once,
@@ -30,7 +33,7 @@ pub use edgelink_client::{
     EdgeLinkConnectReport, EdgeLinkPublishReport,
 };
 pub use local_db::RocksEdgeRuntimeStore;
-pub use metrics::SimulatedRuntimeMetricsCollector;
+pub use metrics::{CollectionRunStats, SimulatedRuntimeMetricsCollector};
 pub use modbus_rtu::{append_modbus_rtu_crc, ModbusRtuAdapter};
 pub use mqtt_uplink::{
     build_mqtt_publish_messages, parse_mqtt_broker_target, publish_mqtt_samples, MqttBrokerTarget,

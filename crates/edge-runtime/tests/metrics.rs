@@ -1,6 +1,6 @@
 use edge_core::{
-    CollectionTask, DeviceInstance, EdgeConfigPackage, EdgeHealth, PointAddress,
-    ProtocolConnection, TelemetryPointMapping, TelemetryType,
+    CollectionRuntimeMetrics, CollectionTask, DeviceInstance, EdgeConfigPackage, EdgeHealth,
+    PointAddress, ProtocolConnection, TelemetryPointMapping, TelemetryType,
 };
 use edge_runtime::{AppliedEdgeConfig, SimulatedRuntimeMetricsCollector};
 
@@ -40,4 +40,22 @@ fn simulated_metrics_collector_reports_runtime_health_from_applied_config() {
     assert!(snapshot.protocols[0].connected);
     assert!(snapshot.cloud_sync.connected);
     assert_eq!(snapshot.cloud_sync.reported_version, "2026.06.26-002");
+}
+
+#[test]
+fn metrics_collector_uses_real_collection_metrics_when_provided() {
+    let applied = AppliedEdgeConfig::apply(package()).unwrap();
+    let collector = SimulatedRuntimeMetricsCollector::new("runtime-a", applied)
+        .with_collection_metrics(CollectionRuntimeMetrics {
+            active_task_count: 1,
+            success_rate: 0.5,
+            average_latency_ms: 37,
+            bad_point_count: 2,
+        });
+
+    let snapshot = collector.snapshot();
+
+    assert_eq!(snapshot.collection.success_rate, 0.5);
+    assert_eq!(snapshot.collection.average_latency_ms, 37);
+    assert_eq!(snapshot.collection.bad_point_count, 2);
 }

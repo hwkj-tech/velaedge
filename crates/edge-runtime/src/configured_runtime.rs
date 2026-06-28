@@ -18,6 +18,21 @@ pub struct ScheduledCollectionReport {
     pub samples_collected: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScheduledCollectionFailure {
+    pub task_id: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResilientScheduledCollectionReport {
+    pub tasks_run: usize,
+    pub tasks_succeeded: usize,
+    pub tasks_failed: usize,
+    pub samples_collected: usize,
+    pub failures: Vec<ScheduledCollectionFailure>,
+}
+
 pub struct ConfiguredEdgeRuntime<F> {
     package: EdgeConfigPackage,
     serial_bus_factory: F,
@@ -99,6 +114,43 @@ where
         Ok(ScheduledCollectionReport {
             tasks_run: due_task_ids.len(),
             samples_collected,
+        })
+    }
+
+    pub async fn collect_due_tasks_resilient_once(
+        &mut self,
+        schedule: &mut CollectionSchedule,
+        now_ms: u64,
+    ) -> Result<ResilientScheduledCollectionReport> {
+        let due_task_ids = schedule
+            .due_task_ids(now_ms)
+            .into_iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let mut tasks_succeeded = 0;
+        let mut samples_collected = 0;
+        let mut failures = Vec::new();
+
+        for task_id in &due_task_ids {
+            match self.collect_task_once(task_id).await {
+                Ok(report) => {
+                    tasks_succeeded += 1;
+                    samples_collected += report.samples_collected;
+                }
+                Err(error) => failures.push(ScheduledCollectionFailure {
+                    task_id: task_id.clone(),
+                    reason: error.to_string(),
+                }),
+            }
+            schedule.mark_ran(task_id, now_ms)?;
+        }
+
+        Ok(ResilientScheduledCollectionReport {
+            tasks_run: due_task_ids.len(),
+            tasks_succeeded,
+            tasks_failed: failures.len(),
+            samples_collected,
+            failures,
         })
     }
 

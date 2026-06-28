@@ -3,8 +3,8 @@ use edge_core::{
     SerialConnectionSettings, TelemetryPointMapping, TelemetryType, TelemetryValue,
 };
 use edge_runtime::{
-    append_modbus_rtu_crc, CollectionSchedule, ConfiguredEdgeRuntime, ScriptedSerialBus,
-    ScriptedSerialBusFactory,
+    append_modbus_rtu_crc, CollectionRunStats, CollectionSchedule, ConfiguredEdgeRuntime,
+    ScriptedSerialBus, ScriptedSerialBusFactory,
 };
 
 fn package() -> EdgeConfigPackage {
@@ -41,6 +41,48 @@ fn package() -> EdgeConfigPackage {
             "meter-1",
             vec!["current".to_string()],
             5000,
+        ))
+}
+
+fn two_connection_package() -> EdgeConfigPackage {
+    EdgeConfigPackage::new("edge-dev", "2026.06.28-resilient")
+        .with_device(DeviceInstance::new("meter-1", "power-meter"))
+        .with_device(DeviceInstance::new("meter-2", "power-meter"))
+        .with_protocol_connection(ProtocolConnection::modbus_rtu_serial(
+            "rs485-bad",
+            SerialConnectionSettings::new("/dev/ttyUSB0", 9600),
+        ))
+        .with_protocol_connection(ProtocolConnection::modbus_rtu_serial(
+            "rs485-good",
+            SerialConnectionSettings::new("/dev/ttyUSB1", 9600),
+        ))
+        .with_point_mapping(TelemetryPointMapping::new(
+            "voltage",
+            "meter-1",
+            "voltage",
+            "rs485-bad",
+            PointAddress::modbus_holding_register(40001),
+            TelemetryType::Integer,
+        ))
+        .with_point_mapping(TelemetryPointMapping::new(
+            "current",
+            "meter-2",
+            "current",
+            "rs485-good",
+            PointAddress::modbus_holding_register(40001),
+            TelemetryType::Integer,
+        ))
+        .with_collection_task(CollectionTask::interval(
+            "bad-task",
+            "meter-1",
+            vec!["voltage".to_string()],
+            1000,
+        ))
+        .with_collection_task(CollectionTask::interval(
+            "good-task",
+            "meter-2",
+            vec!["current".to_string()],
+            1000,
         ))
 }
 
@@ -112,6 +154,50 @@ async fn configured_runtime_runs_due_tasks_and_advances_schedule() {
     assert_eq!(second.tasks_run, 1);
     assert_eq!(second.samples_collected, 1);
     assert_eq!(schedule.due_task_ids(1001), Vec::<&str>::new());
+}
+
+#[tokio::test]
+async fn configured_runtime_continues_due_tasks_after_one_task_fails() {
+    let package = two_connection_package();
+    let bad_bus = ScriptedSerialBus::new(Vec::new());
+    let good_bus = ScriptedSerialBus::new(vec![response(1, &[9])]);
+    let factory = ScriptedSerialBusFactory::new(vec![
+        ("rs485-bad".to_string(), bad_bus),
+        ("rs485-good".to_string(), good_bus),
+    ]);
+    let mut schedule = CollectionSchedule::from_package(&package).unwrap();
+    let mut runtime = ConfiguredEdgeRuntime::new(package, factory).unwrap();
+
+    let report = runtime
+        .collect_due_tasks_resilient_once(&mut schedule, 0)
+        .await
+        .unwrap();
+
+    assert_eq!(report.tasks_run, 2);
+    assert_eq!(report.tasks_succeeded, 1);
+    assert_eq!(report.tasks_failed, 1);
+    assert_eq!(report.samples_collected, 1);
+    assert_eq!(report.failures.len(), 1);
+    assert_eq!(report.failures[0].task_id, "bad-task");
+    assert_eq!(
+        runtime.shadow("meter-2").unwrap().latest_value("current"),
+        Some(&TelemetryValue::Integer(9))
+    );
+    assert!(schedule.due_task_ids(999).is_empty());
+}
+
+#[test]
+fn collection_run_stats_converts_resilient_reports_to_runtime_metrics() {
+    let mut stats = CollectionRunStats::new(2);
+    stats.record_tick(2, 1, 1, 17);
+    stats.record_tick(1, 1, 0, 23);
+
+    let metrics = stats.metrics();
+
+    assert_eq!(metrics.active_task_count, 2);
+    assert_eq!(metrics.success_rate, 2.0 / 3.0);
+    assert_eq!(metrics.average_latency_ms, 20);
+    assert_eq!(metrics.bad_point_count, 1);
 }
 
 fn response(slave_id: u8, registers: &[u16]) -> Vec<u8> {

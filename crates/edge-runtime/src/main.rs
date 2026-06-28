@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use anyhow::Result;
 use chrono::Utc;
@@ -10,11 +11,12 @@ use edge_core::{
 };
 use edge_runtime::{
     publish_edgelink_runtime_status_with_mqtt_uplink_once,
-    publish_edgelink_runtime_status_with_store_and_capabilities_once, report_runtime_status_once,
-    sync_and_report_mqtt_uplink_once, sync_and_report_once, CollectionSchedule,
+    publish_edgelink_runtime_status_with_store_and_capabilities_once,
+    sync_and_report_mqtt_uplink_once, sync_and_report_once, CollectionRunStats, CollectionSchedule,
     ConfiguredEdgeRuntime, EdgeConfigSyncClient, EdgeRuntime, HttpEdgeConfigSyncClient,
     HttpRuntimeStatusReporter, JsonlLocalStore, RocksEdgeRuntimeStore, RuntimeCapabilityConfig,
-    SimulatedProtocolAdapter, TokioSerialBusFactory,
+    RuntimeStatusReporter, SimulatedProtocolAdapter, SimulatedRuntimeMetricsCollector,
+    TokioSerialBusFactory,
 };
 use tracing::info;
 
@@ -206,7 +208,7 @@ async fn run_scheduled_cloud_ticks<C, R>(
 ) -> Result<ScheduledCloudRunReport>
 where
     C: EdgeConfigSyncClient + Send,
-    R: edge_runtime::RuntimeStatusReporter + Send,
+    R: RuntimeStatusReporter + Send,
 {
     let desired = config_client.fetch_desired_config(edge_id).await?;
     if desired.package.edge_id != edge_id {
@@ -227,14 +229,30 @@ where
     let applied = edge_runtime::AppliedEdgeConfig::apply(desired.package.clone())?;
     let mut schedule = CollectionSchedule::from_package(&desired.package)?;
     let mut runtime = ConfiguredEdgeRuntime::new(desired.package, TokioSerialBusFactory)?;
+    let mut stats = CollectionRunStats::new(
+        applied
+            .package()
+            .collection_tasks
+            .iter()
+            .filter(|task| task.enabled)
+            .count(),
+    );
     let mut tasks_run = 0;
     let mut samples_collected = 0;
 
     for tick in 0..scheduled_ticks {
         let now_ms = u64::from(tick).saturating_mul(scheduler_tick_ms);
+        let started = Instant::now();
         let report = runtime
-            .collect_due_tasks_once(&mut schedule, now_ms)
+            .collect_due_tasks_resilient_once(&mut schedule, now_ms)
             .await?;
+        let latency_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        stats.record_tick(
+            report.tasks_run,
+            report.tasks_succeeded,
+            report.tasks_failed,
+            latency_ms,
+        );
         tasks_run += report.tasks_run;
         samples_collected += report.samples_collected;
     }
@@ -243,7 +261,10 @@ where
     config_client
         .report_applied_version(edge_id, &applied_version)
         .await?;
-    report_runtime_status_once(runtime_id, applied, runtime_reporter).await?;
+    let snapshot = SimulatedRuntimeMetricsCollector::new(runtime_id, applied)
+        .with_collection_metrics(stats.metrics())
+        .snapshot();
+    runtime_reporter.report_metrics(snapshot).await?;
 
     Ok(ScheduledCloudRunReport {
         applied_version,

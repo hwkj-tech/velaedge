@@ -7,9 +7,64 @@ use edge_core::{
 
 use crate::AppliedEdgeConfig;
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollectionRunStats {
+    active_task_count: usize,
+    attempted_tasks: usize,
+    succeeded_tasks: usize,
+    failed_tasks: usize,
+    total_latency_ms: u64,
+    latency_samples: usize,
+}
+
+impl CollectionRunStats {
+    pub fn new(active_task_count: usize) -> Self {
+        Self {
+            active_task_count,
+            attempted_tasks: 0,
+            succeeded_tasks: 0,
+            failed_tasks: 0,
+            total_latency_ms: 0,
+            latency_samples: 0,
+        }
+    }
+
+    pub fn record_tick(
+        &mut self,
+        tasks_run: usize,
+        tasks_succeeded: usize,
+        tasks_failed: usize,
+        latency_ms: u64,
+    ) {
+        self.attempted_tasks += tasks_run;
+        self.succeeded_tasks += tasks_succeeded;
+        self.failed_tasks += tasks_failed;
+        self.total_latency_ms = self.total_latency_ms.saturating_add(latency_ms);
+        self.latency_samples += 1;
+    }
+
+    pub fn metrics(&self) -> CollectionRuntimeMetrics {
+        CollectionRuntimeMetrics {
+            active_task_count: self.active_task_count,
+            success_rate: if self.attempted_tasks == 0 {
+                1.0
+            } else {
+                self.succeeded_tasks as f64 / self.attempted_tasks as f64
+            },
+            average_latency_ms: if self.latency_samples == 0 {
+                0
+            } else {
+                self.total_latency_ms / self.latency_samples as u64
+            },
+            bad_point_count: self.failed_tasks,
+        }
+    }
+}
+
 pub struct SimulatedRuntimeMetricsCollector {
     runtime_id: String,
     applied: AppliedEdgeConfig,
+    collection_metrics: Option<CollectionRuntimeMetrics>,
 }
 
 impl SimulatedRuntimeMetricsCollector {
@@ -17,7 +72,13 @@ impl SimulatedRuntimeMetricsCollector {
         Self {
             runtime_id: runtime_id.into(),
             applied,
+            collection_metrics: None,
         }
+    }
+
+    pub fn with_collection_metrics(mut self, metrics: CollectionRuntimeMetrics) -> Self {
+        self.collection_metrics = Some(metrics);
+        self
     }
 
     pub fn snapshot(&self) -> EdgeRuntimeMetricsSnapshot {
@@ -35,16 +96,19 @@ impl SimulatedRuntimeMetricsCollector {
                 disk_percent: 61.0,
                 process_uptime_seconds: 3600,
             },
-            collection: CollectionRuntimeMetrics {
-                active_task_count: package
-                    .collection_tasks
-                    .iter()
-                    .filter(|task| task.enabled)
-                    .count(),
-                success_rate: 0.995,
-                average_latency_ms: 24,
-                bad_point_count: 0,
-            },
+            collection: self
+                .collection_metrics
+                .clone()
+                .unwrap_or(CollectionRuntimeMetrics {
+                    active_task_count: package
+                        .collection_tasks
+                        .iter()
+                        .filter(|task| task.enabled)
+                        .count(),
+                    success_rate: 0.995,
+                    average_latency_ms: 24,
+                    bad_point_count: 0,
+                }),
             protocols: package
                 .protocol_connections
                 .iter()
