@@ -12,13 +12,14 @@ pub mod mqtt_uplink;
 pub mod protocol;
 pub mod reporting;
 pub mod runtime;
+pub mod scheduler;
 pub mod serial;
 pub mod storage;
 pub mod sync;
 
 pub use capability::RuntimeCapabilityConfig;
 pub use config::{AppliedEdgeConfig, ConfiguredMqttCollectionReport, ConfiguredSimulatedRuntime};
-pub use configured_runtime::ConfiguredEdgeRuntime;
+pub use configured_runtime::{ConfiguredEdgeRuntime, ScheduledCollectionReport};
 pub use discovery::SimulatedSerialDiscovery;
 pub use edgelink_client::{
     connect_edgelink_once, connect_edgelink_once_with_capabilities, connect_edgelink_tls_once,
@@ -38,6 +39,7 @@ pub use mqtt_uplink::{
 pub use protocol::{ProtocolAdapter, SimulatedProtocolAdapter};
 pub use reporting::{report_runtime_status_once, HttpRuntimeStatusReporter, RuntimeStatusReporter};
 pub use runtime::{CollectionReport, EdgeRuntime};
+pub use scheduler::CollectionSchedule;
 pub use serial::{
     require_serial_endpoint, ScriptedSerialBus, ScriptedSerialBusFactory, SerialBus,
     SerialBusFactory, TokioSerialBus, TokioSerialBusFactory,

@@ -2,14 +2,21 @@ use std::collections::BTreeMap;
 
 use anyhow::{bail, Result};
 use edge_core::{
-    DataQuality, DeviceShadow, EdgeConfigPackage, ProtocolConnection, ProtocolType,
+    CollectionTask, DataQuality, DeviceShadow, EdgeConfigPackage, ProtocolConnection, ProtocolType,
     TelemetryPointMapping, TelemetrySample, TelemetryValue,
 };
 
+use crate::CollectionSchedule;
 use crate::{
     publish_mqtt_samples, CollectionReport, ConfiguredMqttCollectionReport, ModbusRtuAdapter,
     MqttPublisher, ProtocolAdapter, SerialBusFactory,
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScheduledCollectionReport {
+    pub tasks_run: usize,
+    pub samples_collected: usize,
+}
 
 pub struct ConfiguredEdgeRuntime<F> {
     package: EdgeConfigPackage,
@@ -51,6 +58,50 @@ where
         })
     }
 
+    pub async fn collect_task_once(&mut self, task_id: &str) -> Result<CollectionReport> {
+        let task = self
+            .package
+            .collection_tasks
+            .iter()
+            .find(|task| task.task_id == task_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("collection task not found: {task_id}"))?;
+        if !task.enabled {
+            return Ok(CollectionReport {
+                samples_collected: 0,
+            });
+        }
+
+        let samples = self.collect_samples_for_task(&task).await?;
+        Ok(CollectionReport {
+            samples_collected: samples.len(),
+        })
+    }
+
+    pub async fn collect_due_tasks_once(
+        &mut self,
+        schedule: &mut CollectionSchedule,
+        now_ms: u64,
+    ) -> Result<ScheduledCollectionReport> {
+        let due_task_ids = schedule
+            .due_task_ids(now_ms)
+            .into_iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let mut samples_collected = 0;
+
+        for task_id in &due_task_ids {
+            let report = self.collect_task_once(task_id).await?;
+            samples_collected += report.samples_collected;
+            schedule.mark_ran(task_id, now_ms)?;
+        }
+
+        Ok(ScheduledCollectionReport {
+            tasks_run: due_task_ids.len(),
+            samples_collected,
+        })
+    }
+
     pub async fn collect_once_and_publish_mqtt<P>(
         &mut self,
         publisher: &mut P,
@@ -78,10 +129,34 @@ where
     }
 
     async fn collect_samples_once(&mut self) -> Result<Vec<TelemetrySample>> {
+        let mappings = self.package.point_mappings.clone();
+        self.collect_mappings(mappings).await
+    }
+
+    async fn collect_samples_for_task(
+        &mut self,
+        task: &CollectionTask,
+    ) -> Result<Vec<TelemetrySample>> {
+        let mappings = self
+            .package
+            .point_mappings
+            .iter()
+            .filter(|mapping| {
+                mapping.device_id == task.device_id && task.point_ids.contains(&mapping.point_id)
+            })
+            .cloned()
+            .collect();
+        self.collect_mappings(mappings).await
+    }
+
+    async fn collect_mappings(
+        &mut self,
+        selected_mappings: Vec<TelemetryPointMapping>,
+    ) -> Result<Vec<TelemetrySample>> {
         let mut samples = Vec::new();
         let connections = self.package.protocol_connections.clone();
         for connection in connections {
-            let mappings = self.mappings_for_connection(&connection);
+            let mappings = mappings_for_connection(&selected_mappings, &connection);
             if mappings.is_empty() {
                 continue;
             }
@@ -105,18 +180,17 @@ where
 
         Ok(samples)
     }
+}
 
-    fn mappings_for_connection(
-        &self,
-        connection: &ProtocolConnection,
-    ) -> Vec<TelemetryPointMapping> {
-        self.package
-            .point_mappings
-            .iter()
-            .filter(|mapping| mapping.protocol_connection_id == connection.connection_id)
-            .cloned()
-            .collect()
-    }
+fn mappings_for_connection(
+    mappings: &[TelemetryPointMapping],
+    connection: &ProtocolConnection,
+) -> Vec<TelemetryPointMapping> {
+    mappings
+        .iter()
+        .filter(|mapping| mapping.protocol_connection_id == connection.connection_id)
+        .cloned()
+        .collect()
 }
 
 fn collect_simulated_samples(mappings: &[TelemetryPointMapping]) -> Vec<TelemetrySample> {
