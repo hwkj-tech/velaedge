@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
 
-import type { DeviceModelResponse } from '../api/types';
+import type { CreateDeviceModelRequest, DeviceModelResponse } from '../api/types';
 
 const fallbackDeviceModels: DeviceModelResponse[] = [
   {
@@ -35,23 +35,55 @@ export function DeviceModelsPage({
   onCreateDeviceModel,
 }: {
   deviceModels?: DeviceModelResponse[];
-  onCreateDeviceModel?: () => Promise<DeviceModelResponse> | DeviceModelResponse;
+  onCreateDeviceModel?: (
+    request: CreateDeviceModelRequest,
+  ) => Promise<DeviceModelResponse> | DeviceModelResponse;
 }) {
   const activeModel = deviceModels[0] ?? fallbackDeviceModels[0];
   const [toolbarMessage, setToolbarMessage] = useState('');
   const [actionState, setActionState] = useState<'idle' | 'creating'>('idle');
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [form, setForm] = useState<CreateDeviceModelRequest>({
+    deviceType: '',
+    version: 'v1',
+    telemetry: [
+      {
+        description: '',
+        range: '',
+        telemetryId: '',
+        unit: '',
+        valueType: 'float32',
+      },
+    ],
+  });
+
+  const updateTelemetry = (
+    field: keyof CreateDeviceModelRequest['telemetry'][number],
+    value: string,
+  ) => {
+    setForm((current) => ({
+      ...current,
+      telemetry: [
+        {
+          ...current.telemetry[0],
+          [field]: value,
+        },
+      ],
+    }));
+  };
 
   const handleCreateDeviceModel = async () => {
     setActionState('creating');
     setToolbarMessage('');
 
     try {
-      const created = await onCreateDeviceModel?.();
+      const created = await onCreateDeviceModel?.(form);
       setToolbarMessage(
         created
-          ? `已创建设备模型草稿 ${created.deviceType}`
-          : '已创建设备模型草稿',
+          ? `已创建设备模型 ${created.deviceType}@${created.version}`
+          : '已创建设备模型',
       );
+      setDialogOpen(false);
     } catch {
       setToolbarMessage('创建设备模型失败');
     } finally {
@@ -76,17 +108,126 @@ export function DeviceModelsPage({
           ) : null}
           <button
             className="primary-button"
-            disabled={actionState === 'creating'}
-            onClick={() => {
-              void handleCreateDeviceModel();
-            }}
+            onClick={() => setDialogOpen(true)}
             type="button"
           >
             <Plus size={15} aria-hidden="true" />
-            {actionState === 'creating' ? '创建中' : '新建设备模型'}
+            新建设备模型
           </button>
         </div>
       </section>
+
+      {dialogOpen ? (
+        <div className="modal-backdrop">
+          <form
+            aria-labelledby="device-model-dialog-title"
+            className="modal-panel"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleCreateDeviceModel();
+            }}
+            role="dialog"
+          >
+            <div className="modal-header">
+              <h3 id="device-model-dialog-title">新建设备模型</h3>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={() => setDialogOpen(false)}
+                type="button"
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="form-grid">
+              <label>
+                <span>设备类型</span>
+                <input
+                  required
+                  value={form.deviceType}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      deviceType: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>模型版本</span>
+                <input
+                  required
+                  value={form.version}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      version: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>遥测 ID</span>
+                <input
+                  required
+                  value={form.telemetry[0].telemetryId}
+                  onChange={(event) => updateTelemetry('telemetryId', event.target.value)}
+                />
+              </label>
+              <label>
+                <span>数据类型</span>
+                <select
+                  value={form.telemetry[0].valueType}
+                  onChange={(event) => updateTelemetry('valueType', event.target.value)}
+                >
+                  <option value="float32">float32</option>
+                  <option value="int64">int64</option>
+                  <option value="bool">bool</option>
+                  <option value="string">string</option>
+                </select>
+              </label>
+              <label>
+                <span>单位</span>
+                <input
+                  value={form.telemetry[0].unit}
+                  onChange={(event) => updateTelemetry('unit', event.target.value)}
+                />
+              </label>
+              <label>
+                <span>范围</span>
+                <input
+                  placeholder="0-100"
+                  value={form.telemetry[0].range}
+                  onChange={(event) => updateTelemetry('range', event.target.value)}
+                />
+              </label>
+              <label className="form-wide">
+                <span>说明</span>
+                <input
+                  value={form.telemetry[0].description}
+                  onChange={(event) => updateTelemetry('description', event.target.value)}
+                />
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                onClick={() => setDialogOpen(false)}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="primary-button"
+                disabled={actionState === 'creating'}
+                type="submit"
+              >
+                {actionState === 'creating' ? '保存中' : '保存设备模型'}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
 
       <section className="panel">
         <div className="panel-header">

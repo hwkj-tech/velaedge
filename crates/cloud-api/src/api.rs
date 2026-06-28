@@ -9,8 +9,8 @@ use cloud_control::{AuditAction, EdgeNode, ReleaseService, ReleaseStatus};
 use edge_core::{
     AlgorithmRuntime, AlgorithmSpec, CollectionTask, DeviceSpec, DiscoveredPoint, DiscoveryReport,
     EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, MqttUplinkConfig,
-    PointAddress, PointMappingSuggestion, ProtocolConnection, ProtocolType, TelemetryPoint,
-    TelemetryPointMapping, TelemetryType,
+    NumberRange, PointAddress, PointMappingSuggestion, ProtocolConnection, ProtocolType,
+    TelemetryPoint, TelemetryPointMapping, TelemetryType,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -541,6 +541,7 @@ async fn device_models(State(state): State<AppState>) -> Json<Vec<DeviceModelRes
 
 async fn create_device_model(
     State(state): State<AppState>,
+    request: Option<Json<CreateDeviceModelRequest>>,
 ) -> Result<(StatusCode, Json<DeviceModelResponse>), (StatusCode, Json<ErrorResponse>)> {
     let (package, model, response) = {
         let mut store = state.store.lock().expect("store mutex poisoned");
@@ -550,10 +551,12 @@ async fn create_device_model(
             .latest_config_package_for_edge(&edge_id)
             .cloned()
             .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
-        let model =
-            DeviceSpec::new(next_device_model_type(&package), "v1")
+        let model = match request {
+            Some(Json(request)) => build_device_model_from_request(request)?,
+            None => DeviceSpec::new(next_device_model_type(&package), "v1")
                 .with_telemetry(vec![TelemetryPoint::new("status", TelemetryType::Boolean)
-                    .with_description("设备状态")]);
+                    .with_description("设备状态")]),
+        };
 
         package.version = next_version(&package.version);
         package.device_models.push(model.clone());
@@ -1501,6 +1504,24 @@ pub struct DeviceModelResponse {
     pub event_count: usize,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateDeviceModelRequest {
+    pub device_type: String,
+    pub version: String,
+    pub telemetry: Vec<CreateTelemetryModelRequest>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateTelemetryModelRequest {
+    pub telemetry_id: String,
+    pub value_type: String,
+    pub unit: Option<String>,
+    pub range: Option<String>,
+    pub description: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagementActionResponse {
@@ -1795,6 +1816,59 @@ fn device_model_response(model: &DeviceSpec) -> DeviceModelResponse {
         command_count: model.commands.len(),
         event_count: model.events.len(),
     }
+}
+
+fn build_device_model_from_request(
+    request: CreateDeviceModelRequest,
+) -> Result<DeviceSpec, (StatusCode, Json<ErrorResponse>)> {
+    let device_type = non_empty_field(request.device_type, "deviceType")?;
+    let version = non_empty_field(request.version, "version")?;
+    if request.telemetry.is_empty() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "device model requires at least one telemetry point",
+        ));
+    }
+
+    let mut telemetry = Vec::with_capacity(request.telemetry.len());
+    for point in request.telemetry {
+        let telemetry_id = non_empty_field(point.telemetry_id, "telemetryId")?;
+        let value_type = parse_telemetry_type(&point.value_type)?;
+        let mut telemetry_point = TelemetryPoint::new(telemetry_id, value_type);
+        if let Some(unit) = non_empty_optional(point.unit) {
+            telemetry_point = telemetry_point.with_unit(unit);
+        }
+        if let Some(range) = non_empty_optional(point.range) {
+            telemetry_point = telemetry_point.with_range(parse_number_range(&range)?);
+        }
+        if let Some(description) = non_empty_optional(point.description) {
+            telemetry_point = telemetry_point.with_description(description);
+        }
+        telemetry.push(telemetry_point);
+    }
+
+    Ok(DeviceSpec::new(device_type, version).with_telemetry(telemetry))
+}
+
+fn non_empty_field(
+    value: String,
+    field: &str,
+) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("{field} cannot be empty"),
+        ))
+    } else {
+        Ok(value)
+    }
+}
+
+fn non_empty_optional(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && value != "-")
 }
 
 fn edge_node_response(
@@ -2217,6 +2291,39 @@ fn format_telemetry_type(value_type: TelemetryType) -> String {
         TelemetryType::Text => "string",
     }
     .to_string()
+}
+
+fn parse_telemetry_type(
+    value_type: &str,
+) -> Result<TelemetryType, (StatusCode, Json<ErrorResponse>)> {
+    match value_type.trim() {
+        "bool" | "boolean" => Ok(TelemetryType::Boolean),
+        "int64" | "int" | "integer" => Ok(TelemetryType::Integer),
+        "float32" | "float" | "double" => Ok(TelemetryType::Float),
+        "string" | "text" => Ok(TelemetryType::Text),
+        value => Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("unsupported telemetry valueType: {value}"),
+        )),
+    }
+}
+
+fn parse_number_range(range: &str) -> Result<NumberRange, (StatusCode, Json<ErrorResponse>)> {
+    let Some((min, max)) = range.split_once('-') else {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "range must use min-max format",
+        ));
+    };
+    let min = min
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| error(StatusCode::BAD_REQUEST, "range min must be a number"))?;
+    let max = max
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| error(StatusCode::BAD_REQUEST, "range max must be a number"))?;
+    Ok(NumberRange::new(min, max))
 }
 
 fn format_algorithm_runtime(runtime: AlgorithmRuntime) -> String {

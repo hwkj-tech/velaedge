@@ -3,6 +3,7 @@ import type {
   AlgorithmResponse,
   AuditRecordResponse,
   CollectionTaskResponse,
+  CreateDeviceModelRequest,
   CreateEdgeNodeRequest,
   EdgeNodeActionResponse,
   DeviceModelResponse,
@@ -103,9 +104,12 @@ export async function fetchDeviceModels(
 }
 
 export async function createDeviceModelDraft(
+  request: CreateDeviceModelRequest,
   fetcher: typeof fetch = fetch,
 ): Promise<DeviceModelResponse> {
   return requestJson<DeviceModelResponse>('/api/device-models', fetcher, {
+    body: JSON.stringify(request),
+    headers: { 'content-type': 'application/json' },
     method: 'POST',
   });
 }

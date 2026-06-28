@@ -37,6 +37,7 @@ import type {
   AgentActionResponse,
   AuditRecordResponse,
   CollectionTaskResponse,
+  CreateDeviceModelRequest,
   DiscoveryReportResponse,
   DeviceModelResponse,
   EdgeNodeActionResponse,
@@ -326,8 +327,8 @@ export default function App() {
     edgeId: string,
   ): Promise<ManagementActionResponse> => runReleaseDiff(edgeId);
 
-  const handleCreateDeviceModel = async () => {
-    const created = await createDeviceModelDraft();
+  const handleCreateDeviceModel = async (request: CreateDeviceModelRequest) => {
+    const created = await createDeviceModelDraft(request);
     setDeviceModels(await fetchDeviceModels());
     return created;
   };
@@ -565,7 +566,7 @@ function renderPage(
   onConfigureEdge: (edgeId: string) => Promise<void>,
   onCreateAlgorithm: (edgeId: string) => Promise<AlgorithmResponse>,
   onCreateCollectionTask: (edgeId: string) => Promise<CollectionTaskResponse>,
-  onCreateDeviceModel: () => Promise<DeviceModelResponse>,
+  onCreateDeviceModel: (request: CreateDeviceModelRequest) => Promise<DeviceModelResponse>,
   onCreatePoint: (edgeId?: string) => Promise<PointMappingResponse>,
   onEnableMaintenance: (edgeId: string) => Promise<EdgeNodeActionResponse>,
   onGenerateAgentSuggestions: () => Promise<AgentActionResponse>,

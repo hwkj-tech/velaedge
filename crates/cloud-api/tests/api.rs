@@ -411,6 +411,63 @@ async fn device_model_create_adds_model_draft_to_console_list() {
 }
 
 #[tokio::test]
+async fn device_model_create_accepts_user_defined_model_fields() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/device-models")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "deviceType": "meter",
+                        "version": "v2",
+                        "telemetry": [
+                            {
+                                "telemetryId": "voltage_a",
+                                "valueType": "float32",
+                                "unit": "V",
+                                "range": "0-500",
+                                "description": "A 相电压"
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let model: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(model["deviceType"], "meter");
+    assert_eq!(model["version"], "v2");
+    assert_eq!(model["telemetry"][0]["telemetryId"], "voltage_a");
+    assert_eq!(model["telemetry"][0]["valueType"], "float32");
+    assert_eq!(model["telemetry"][0]["unit"], "V");
+    assert_eq!(model["telemetry"][0]["range"], "0-500");
+    assert_eq!(model["telemetry"][0]["description"], "A 相电压");
+
+    let response = router
+        .oneshot(
+            Request::get("/api/device-models")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let models: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(models
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|model| model["deviceType"] == "meter"));
+}
+
+#[tokio::test]
 async fn edge_algorithms_endpoint_returns_selected_edge_algorithms() {
     let response = app(AppState::default())
         .oneshot(

@@ -675,7 +675,22 @@ describe('draft creation clients', () => {
       createAlgorithmDraft('edge-dev', fetchMock as unknown as typeof fetch),
     ).resolves.toMatchObject({ algorithmId: 'algorithm-draft-2' });
     await expect(
-      createDeviceModelDraft(fetchMock as unknown as typeof fetch),
+      createDeviceModelDraft(
+        {
+          deviceType: 'meter',
+          version: 'v2',
+          telemetry: [
+            {
+              description: 'A 相电压',
+              range: '0-500',
+              telemetryId: 'voltage_a',
+              unit: 'V',
+              valueType: 'float32',
+            },
+          ],
+        },
+        fetchMock as unknown as typeof fetch,
+      ),
     ).resolves.toMatchObject({ deviceType: 'device-model-draft-2' });
 
     expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/point-mappings', {
@@ -688,6 +703,20 @@ describe('draft creation clients', () => {
       method: 'POST',
     });
     expect(fetchMock).toHaveBeenCalledWith('/api/device-models', {
+      body: JSON.stringify({
+        deviceType: 'meter',
+        version: 'v2',
+        telemetry: [
+          {
+            description: 'A 相电压',
+            range: '0-500',
+            telemetryId: 'voltage_a',
+            unit: 'V',
+            valueType: 'float32',
+          },
+        ],
+      }),
+      headers: { 'content-type': 'application/json' },
       method: 'POST',
     });
   });

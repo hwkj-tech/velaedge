@@ -206,19 +206,19 @@ const deviceModels: DeviceModelResponse[] = [
 
 const createdDeviceModel: DeviceModelResponse = {
   commandCount: 0,
-  deviceType: 'device-model-draft-2',
+  deviceType: 'meter',
   eventCount: 0,
   telemetry: [
     {
-      description: '设备状态',
-      name: 'status',
-      range: '-',
-      telemetryId: 'status',
-      unit: '-',
-      valueType: 'bool',
+      description: 'A 相电压',
+      name: 'voltage_a',
+      range: '0-500',
+      telemetryId: 'voltage_a',
+      unit: 'V',
+      valueType: 'float32',
     },
   ],
-  version: 'v1',
+  version: 'v2',
 };
 
 const protocolConnections: ProtocolConnectionResponse[] = [
@@ -912,12 +912,45 @@ describe('App cloud console write actions', () => {
     fireEvent.click(screen.getByRole('button', { name: /设备模型/ }));
     expect(await screen.findByText('pump@v1 遥测定义')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '新建设备模型' }));
-    await waitFor(() => {
-      expect(createDeviceModelDraft).toHaveBeenCalledOnce();
+    expect(screen.getByRole('dialog', { name: '新建设备模型' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('设备类型'), {
+      target: { value: 'meter' },
     });
-    expect(
-      await screen.findByText('已创建设备模型草稿 device-model-draft-2'),
-    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('模型版本'), {
+      target: { value: 'v2' },
+    });
+    fireEvent.change(screen.getByLabelText('遥测 ID'), {
+      target: { value: 'voltage_a' },
+    });
+    fireEvent.change(screen.getByLabelText('数据类型'), {
+      target: { value: 'float32' },
+    });
+    fireEvent.change(screen.getByLabelText('单位'), {
+      target: { value: 'V' },
+    });
+    fireEvent.change(screen.getByLabelText('范围'), {
+      target: { value: '0-500' },
+    });
+    fireEvent.change(screen.getByLabelText('说明'), {
+      target: { value: 'A 相电压' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存设备模型' }));
+    await waitFor(() => {
+      expect(createDeviceModelDraft).toHaveBeenCalledWith({
+        deviceType: 'meter',
+        version: 'v2',
+        telemetry: [
+          {
+            description: 'A 相电压',
+            range: '0-500',
+            telemetryId: 'voltage_a',
+            unit: 'V',
+            valueType: 'float32',
+          },
+        ],
+      });
+    });
+    expect(await screen.findByText('已创建设备模型 meter@v2')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Agent 助手/ }));
     expect(await screen.findByText('Agent 辅助管理')).toBeInTheDocument();

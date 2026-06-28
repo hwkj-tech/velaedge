@@ -87,6 +87,20 @@ export interface DeviceModelResponse {
   eventCount: number;
 }
 
+export interface CreateTelemetryModelRequest {
+  telemetryId: string;
+  valueType: string;
+  unit: string;
+  range: string;
+  description: string;
+}
+
+export interface CreateDeviceModelRequest {
+  deviceType: string;
+  version: string;
+  telemetry: CreateTelemetryModelRequest[];
+}
+
 export interface ManagementActionResponse {
   action: string;
   details: string[];
