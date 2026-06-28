@@ -807,24 +807,20 @@ describe('App cloud console write actions', () => {
     });
   });
 
-  it('runs dashboard quick actions through real API clients', async () => {
+  it('renders dashboard as monitoring only without write actions', async () => {
     render(<App />);
-    expect(await screen.findByText('运行总览')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Dashboard' }),
+    ).toBeInTheDocument();
 
     expect(screen.queryByRole('button', { name: '注册边端' })).not.toBeInTheDocument();
-    expect(screen.getByText('边端连接后自动发现')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: '创建点位' }));
-    await waitFor(() => {
-      expect(createPointMappingDraft).toHaveBeenCalledWith('edge-dev');
-    });
-    expect(await screen.findByText('已创建点位草稿 point-draft-2')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: '发布配置' }));
-    await waitFor(() => {
-      expect(publishLatestRelease).toHaveBeenCalledWith('edge-dev');
-    });
-    expect(await screen.findByText('已创建发布，等待 runtime 回报')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '创建点位' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '发布配置' })).not.toBeInTheDocument();
+    expect(screen.getByText('边端运行监控')).toBeInTheDocument();
+    expect(screen.getByText('最近事件')).toBeInTheDocument();
+    expect(screen.getByText('24ms')).toBeInTheDocument();
+    expect(createPointMappingDraft).not.toHaveBeenCalled();
+    expect(publishLatestRelease).not.toHaveBeenCalled();
   });
 
   it('creates point, task, and algorithm drafts from edge configuration pages', async () => {

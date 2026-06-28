@@ -95,11 +95,30 @@ describe('ProtocolConnectionsPage', () => {
     expect(screen.queryByLabelText('配置边端')).not.toBeInTheDocument();
   });
 
-  it('shows visible feedback for toolbar actions', async () => {
-    render(<ProtocolConnectionsPage selectedEdgeId="edge-dev" />);
+  it('runs protocol validation through the backend handler', async () => {
+    const onValidateConnection = vi.fn().mockResolvedValue({
+      action: 'validate_config',
+      details: ['协议连接 1 个'],
+      message: '草稿校验已完成',
+      status: '已通过',
+    });
+
+    render(
+      <ProtocolConnectionsPage
+        selectedEdgeId="edge-dev"
+        onValidateConnection={onValidateConnection}
+      />,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: '校验连接' }));
-    expect(screen.getByText('连接校验已完成')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(onValidateConnection).toHaveBeenCalledWith('edge-dev');
+    });
+    expect(await screen.findByText('连接校验 已通过')).toBeInTheDocument();
+  });
+
+  it('shows visible feedback for creating connection drafts', async () => {
+    render(<ProtocolConnectionsPage selectedEdgeId="edge-dev" />);
 
     fireEvent.click(screen.getByRole('button', { name: '新建连接' }));
     expect(await screen.findByText('已创建连接草稿')).toBeInTheDocument();

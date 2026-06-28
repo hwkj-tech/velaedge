@@ -41,7 +41,7 @@ interface NavItem {
 }
 
 export const navItems: NavItem[] = [
-  { key: 'dashboard', label: '工作台', icon: LayoutDashboard },
+  { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { key: 'edges', label: '边端管理', icon: RadioTower },
   { key: 'deviceModels', label: '设备模型', icon: Cpu },
   { key: 'protocolConnections', label: '协议连接', icon: GitBranch },
@@ -67,7 +67,7 @@ export function AppShell({
   children: ReactNode;
   onNavigate: (page: PageKey) => void;
 }) {
-  const activeTitle = pageTitleByKey.get(activePage) ?? '工作台';
+  const activeTitle = pageTitleByKey.get(activePage) ?? 'Dashboard';
 
   return (
     <div className="app-shell">

@@ -7,12 +7,12 @@ describe('AppShell', () => {
   it('renders cloud console navigation and active content', () => {
     render(
       <AppShell activePage="dashboard" onNavigate={vi.fn()}>
-        <h2>运行总览</h2>
+        <h2>Dashboard</h2>
       </AppShell>,
     );
 
     expect(screen.getByText('EdgeOps Cloud')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /工作台/ })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /Dashboard/ })).toHaveAttribute(
       'aria-current',
       'page',
     );
@@ -20,6 +20,6 @@ describe('AppShell', () => {
     expect(screen.getByRole('button', { name: /点位配置/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /算法配置/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /配置发布/ })).toBeInTheDocument();
-    expect(screen.getByText('运行总览')).toBeInTheDocument();
+    expect(screen.getAllByText('Dashboard').length).toBeGreaterThan(0);
   });
 });

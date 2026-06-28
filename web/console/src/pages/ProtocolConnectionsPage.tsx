@@ -3,6 +3,7 @@ import { Plus, ShieldCheck } from 'lucide-react';
 
 import type {
   EdgeNodeResponse,
+  ManagementActionResponse,
   ProtocolConnectionResponse,
   CreateProtocolConnectionRequest,
   SaveProtocolConnectionRequest,
@@ -53,6 +54,7 @@ export function ProtocolConnectionsPage({
   onCreateConnection,
   onSaveConnection,
   onSelectEdge,
+  onValidateConnection,
   selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
 }: {
   connections?: ProtocolConnectionResponse[];
@@ -68,6 +70,9 @@ export function ProtocolConnectionsPage({
     request: SaveProtocolConnectionRequest,
   ) => Promise<void> | void;
   onSelectEdge?: (edgeId: string) => Promise<void> | void;
+  onValidateConnection?: (
+    edgeId: string,
+  ) => Promise<ManagementActionResponse> | ManagementActionResponse;
   selectedEdgeId?: string;
 }) {
   const [selectedConnectionId, setSelectedConnectionId] = useState(
@@ -82,6 +87,7 @@ export function ProtocolConnectionsPage({
     'idle',
   );
   const [createState, setCreateState] = useState<'idle' | 'creating'>('idle');
+  const [validateState, setValidateState] = useState<'idle' | 'validating'>('idle');
   const [toolbarMessage, setToolbarMessage] = useState('');
   const isConfigureMode = mode === 'configure';
   const activeEdge =
@@ -147,6 +153,27 @@ export function ProtocolConnectionsPage({
     }
   };
 
+  const handleValidateConnection = async () => {
+    setValidateState('validating');
+    setToolbarMessage('');
+
+    try {
+      if (!onValidateConnection) {
+        setToolbarMessage('连接校验未接入后端');
+        return;
+      }
+
+      const result = await onValidateConnection(selectedEdgeId);
+      setToolbarMessage(
+        result.status ? `连接校验 ${result.status}` : '连接校验无结果',
+      );
+    } catch {
+      setToolbarMessage('连接校验失败');
+    } finally {
+      setValidateState('idle');
+    }
+  };
+
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -184,11 +211,14 @@ export function ProtocolConnectionsPage({
             <>
               <button
                 className="secondary-button"
-                onClick={() => setToolbarMessage('连接校验已完成')}
+                disabled={validateState === 'validating'}
+                onClick={() => {
+                  void handleValidateConnection();
+                }}
                 type="button"
               >
                 <ShieldCheck size={15} aria-hidden="true" />
-                校验连接
+                {validateState === 'validating' ? '校验中' : '校验连接'}
               </button>
               <button
                 className="primary-button"

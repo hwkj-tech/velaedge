@@ -1,154 +1,123 @@
-import { useState } from 'react';
-import { Send, Wrench } from 'lucide-react';
-
-import type { PointMappingResponse, SummaryResponse } from '../api/types';
-
-const edgeHealth = [
-  ['edge-shanghai-01', '上海一厂', '在线', 'v2026.06.26-001', 'v2026.06.26-001', '18 秒前'],
-  ['edge-suzhou-02', '苏州测试线', '在线', 'v2026.06.26-001', 'v2026.06.26-001', '24 秒前'],
-  ['edge-lab-03', '研发实验室', '离线', 'v2026.06.26-002', 'v2026.06.25-004', '11 分钟前'],
-];
-
-const events = [
-  ['配置校验完成', '点位 pressure、temperature 已通过边端能力检查'],
-  ['边端上报延迟', 'edge-lab-03 最近一次心跳超过 10 分钟'],
-  ['算法告警', 'pump-anomaly-v1 对 pump-1 产生高风险告警'],
-];
+import type {
+  AuditRecordResponse,
+  EdgeNodeResponse,
+  EdgeRuntimeMetricsSnapshot,
+  RuntimeStatusResponse,
+  SummaryResponse,
+} from '../api/types';
 
 export function DashboardPage({
+  auditRecords = [],
+  edgeNodes = [],
   loadState,
-  onCreatePoint,
-  onPublish,
+  runtimeStatus,
   summary,
 }: {
+  auditRecords?: AuditRecordResponse[];
+  edgeNodes?: EdgeNodeResponse[];
   loadState: 'loading' | 'ready' | 'error';
-  onCreatePoint?: () => Promise<PointMappingResponse> | PointMappingResponse;
-  onPublish?: () => Promise<void> | void;
+  runtimeStatus?: RuntimeStatusResponse;
   summary: SummaryResponse;
 }) {
-  const onlineRate = summary.edge_count > 0 ? '66.7%' : '--';
-  const [toolbarMessage, setToolbarMessage] = useState('');
-  const [actionState, setActionState] = useState<
-    'idle' | 'creating-point' | 'publishing'
-  >('idle');
-
-  const handleCreatePoint = async () => {
-    setActionState('creating-point');
-    setToolbarMessage('');
-
-    try {
-      const created = await onCreatePoint?.();
-      setToolbarMessage(
-        created ? `已创建点位草稿 ${created.pointId}` : '已创建点位配置草稿',
-      );
-    } catch {
-      setToolbarMessage('创建点位失败');
-    } finally {
-      setActionState('idle');
-    }
-  };
-
-  const handlePublish = async () => {
-    setActionState('publishing');
-    setToolbarMessage('');
-
-    try {
-      await onPublish?.();
-      setToolbarMessage('已创建发布，等待 runtime 回报');
-    } catch {
-      setToolbarMessage('发布配置失败');
-    } finally {
-      setActionState('idle');
-    }
-  };
+  const runtimeEdges = runtimeStatus?.edges ?? [];
+  const onlineRate = formatPercent(
+    summary.edge_count > 0
+      ? ((runtimeStatus?.healthyEdgeCount ?? healthyEdgeCount(edgeNodes)) /
+          summary.edge_count) *
+          100
+      : undefined,
+  );
+  const activeTaskCount = runtimeEdges.reduce(
+    (total, edge) => total + edge.collection.active_task_count,
+    0,
+  );
+  const badPointCount = runtimeEdges.reduce(
+    (total, edge) => total + edge.collection.bad_point_count,
+    0,
+  );
+  const bufferedRecords = runtimeEdges.reduce(
+    (total, edge) => total + edge.local_store.buffered_records,
+    0,
+  );
 
   return (
     <div className="page-stack">
       <section className="page-intro">
         <div>
-          <h2>运行总览</h2>
+          <h2>Dashboard</h2>
           <p>
-            汇总边端在线状态、配置草稿、发布进度和采集异常，帮助运维人员快速进入待处理工作。
+            只展示边端在线、系统资源、采集质量、同步延迟和最近事件；配置入口统一放到各管理页面。
           </p>
         </div>
-        <div className="toolbar" aria-label="快捷操作">
-          {toolbarMessage ? (
-            <span className="toolbar-status" role="status">
-              {toolbarMessage}
-            </span>
-          ) : null}
-          <span className="toolbar-status">边端连接后自动发现</span>
-          <button
-            className="secondary-button"
-            disabled={actionState === 'creating-point'}
-            onClick={() => {
-              void handleCreatePoint();
-            }}
-            type="button"
-          >
-            <Wrench size={15} aria-hidden="true" />
-            {actionState === 'creating-point' ? '创建中' : '创建点位'}
-          </button>
-          <button
-            className="primary-button"
-            disabled={actionState === 'publishing'}
-            onClick={() => {
-              void handlePublish();
-            }}
-            type="button"
-          >
-            <Send size={15} aria-hidden="true" />
-            {actionState === 'publishing' ? '发布中' : '发布配置'}
-          </button>
+        <div className="status-strip" aria-label="Dashboard 数据状态">
+          <span className={loadState === 'ready' ? 'status-pill online' : 'status-pill'}>
+            {loadState === 'ready' ? '监控 API 已连接' : '监控数据加载中'}
+          </span>
         </div>
       </section>
 
-      <section className="metric-grid" aria-label="工作台指标">
-        <Metric label="边端节点" value={String(summary.edge_count)} hint="云端已注册" />
-        <Metric label="在线率" value={onlineRate} hint="最近 60 秒心跳" />
-        <Metric label="遥测点位" value="128" hint="启用 116 个" />
-        <Metric label="异常点位" value="4" hint="需处理" tone="alert" />
+      <section className="metric-grid" aria-label="Dashboard 指标">
+        <Metric label="边端节点" value={String(summary.edge_count)} hint="云端已登记" />
+        <Metric label="在线率" value={onlineRate} hint="按 runtime 健康状态计算" />
         <Metric
-          label="待发布"
-          value={String(summary.pending_release_count)}
-          hint="草稿配置"
+          label="平均延迟"
+          value={runtimeStatus ? `${runtimeStatus.averageCollectionLatencyMs}ms` : '--'}
+          hint="采集链路平均值"
         />
-        <Metric label="高风险告警" value="2" hint="Agent 已标记" tone="alert" />
+        <Metric label="运行任务" value={String(activeTaskCount)} hint="边端当前任务数" />
+        <Metric
+          label="异常点位"
+          value={String(badPointCount)}
+          hint="runtime 上报质量异常"
+          tone={badPointCount > 0 ? 'alert' : undefined}
+        />
+        <Metric
+          label="缓存积压"
+          value={String(bufferedRecords)}
+          hint="本地存储待上传记录"
+          tone={bufferedRecords > 0 ? 'alert' : undefined}
+        />
       </section>
 
       <div className="dashboard-grid">
-        <section className="panel" aria-labelledby="edge-health-title">
+        <section className="panel" aria-labelledby="edge-monitor-title">
           <div className="panel-header">
-            <h3 id="edge-health-title">边端健康状态</h3>
-            <span>{loadState === 'ready' ? 'API 已连接' : '样例数据'}</span>
+            <h3 id="edge-monitor-title">边端运行监控</h3>
+            <span>{runtimeEdges.length || edgeNodes.length} 个边端</span>
           </div>
           <div className="table-wrap">
             <table className="ops-table">
               <thead>
                 <tr>
                   <th>Edge ID</th>
-                  <th>站点</th>
-                  <th>状态</th>
-                  <th>期望版本</th>
-                  <th>上报版本</th>
-                  <th>心跳</th>
+                  <th>Runtime</th>
+                  <th>健康</th>
+                  <th>CPU / 内存 / 磁盘</th>
+                  <th>任务 / 异常点</th>
+                  <th>期望 / 上报版本</th>
+                  <th>同步</th>
                 </tr>
               </thead>
               <tbody>
-                {edgeHealth.map(([edgeId, site, status, desired, reported, heartbeat]) => (
-                  <tr key={edgeId}>
-                    <td>{edgeId}</td>
-                    <td>{site}</td>
-                    <td>
-                      <span className={status === '在线' ? 'tag ok' : 'tag danger'}>
-                        {status}
-                      </span>
-                    </td>
-                    <td>{desired}</td>
-                    <td>{reported}</td>
-                    <td>{heartbeat}</td>
-                  </tr>
-                ))}
+                {runtimeEdges.length > 0
+                  ? runtimeEdges.map((edge) => (
+                      <RuntimeEdgeRow edge={edge} key={edge.edge_id} />
+                    ))
+                  : edgeNodes.map((edge) => (
+                      <tr key={edge.edgeId}>
+                        <td>{edge.edgeId}</td>
+                        <td>{edge.runtimeId}</td>
+                        <td>
+                          <span className={edge.status === '健康' ? 'tag ok' : 'tag warn'}>
+                            {edge.status}
+                          </span>
+                        </td>
+                        <td>{edge.resources}</td>
+                        <td>--</td>
+                        <td>--</td>
+                        <td>{edge.heartbeat}</td>
+                      </tr>
+                    ))}
               </tbody>
             </table>
           </div>
@@ -157,19 +126,58 @@ export function DashboardPage({
         <section className="panel" aria-labelledby="events-title">
           <div className="panel-header">
             <h3 id="events-title">最近事件</h3>
-            <span>实时审计流</span>
+            <span>runtime / audit</span>
           </div>
           <ul className="timeline-list">
-            {events.map(([title, description]) => (
-              <li key={title}>
-                <strong>{title}</strong>
-                <span>{description}</span>
+            {(runtimeStatus?.events ?? []).slice(0, 4).map((event) => (
+              <li key={`${event.edge_id}-${event.timestamp}-${event.code}`}>
+                <strong>{event.message}</strong>
+                <span>
+                  {event.edge_id} · {event.category} · {event.severity}
+                </span>
               </li>
             ))}
+            {auditRecords.slice(0, 4).map((record) => (
+              <li key={`${record.createdAt}-${record.action}-${record.target}`}>
+                <strong>{record.action}</strong>
+                <span>
+                  {record.actor} · {record.target} · {record.result}
+                </span>
+              </li>
+            ))}
+            {(runtimeStatus?.events.length ?? 0) === 0 && auditRecords.length === 0 ? (
+              <li>
+                <strong>暂无事件</strong>
+                <span>等待 runtime 或云端审计上报</span>
+              </li>
+            ) : null}
           </ul>
         </section>
       </div>
     </div>
+  );
+}
+
+function RuntimeEdgeRow({ edge }: { edge: EdgeRuntimeMetricsSnapshot }) {
+  return (
+    <tr>
+      <td>{edge.edge_id}</td>
+      <td>{edge.runtime_id}</td>
+      <td>
+        <span className={healthTagClass(edge.health)}>{formatHealth(edge.health)}</span>
+      </td>
+      <td>
+        {edge.system.cpu_percent}% / {edge.system.memory_percent}% /{' '}
+        {edge.system.disk_percent}%
+      </td>
+      <td>
+        {edge.collection.active_task_count} / {edge.collection.bad_point_count}
+      </td>
+      <td>
+        {edge.cloud_sync.desired_version} / {edge.cloud_sync.reported_version}
+      </td>
+      <td>{edge.cloud_sync.last_sync_seconds_ago} 秒前</td>
+    </tr>
   );
 }
 
@@ -191,4 +199,28 @@ function Metric({
       <small>{hint}</small>
     </article>
   );
+}
+
+function healthyEdgeCount(edges: EdgeNodeResponse[]) {
+  return edges.filter((edge) => edge.status === '健康').length;
+}
+
+function formatPercent(value: number | undefined) {
+  if (value === undefined || Number.isNaN(value)) {
+    return '--';
+  }
+  return `${Math.round(value)}%`;
+}
+
+function healthTagClass(health: EdgeRuntimeMetricsSnapshot['health']) {
+  if (health === 'Healthy') return 'tag ok';
+  if (health === 'Critical' || health === 'Offline') return 'tag danger';
+  return 'tag warn';
+}
+
+function formatHealth(health: EdgeRuntimeMetricsSnapshot['health']) {
+  if (health === 'Healthy') return '健康';
+  if (health === 'Degraded') return '降级';
+  if (health === 'Critical') return '严重';
+  return '离线';
 }

@@ -633,9 +633,10 @@ function renderPage(
     case 'dashboard':
       return (
         <DashboardPage
+          auditRecords={auditRecords}
+          edgeNodes={edgeNodes}
           loadState={loadState}
-          onCreatePoint={() => onCreatePoint(defaultConfigEdgeId)}
-          onPublish={() => onPublish(defaultConfigEdgeId)}
+          runtimeStatus={runtimeStatus}
           summary={summary}
         />
       );
@@ -667,6 +668,7 @@ function renderPage(
           onCreateConnection={onCreateProtocolConnection}
           onSaveConnection={onSaveProtocolConnection}
           onSelectEdge={onSelectProtocolEdge}
+          onValidateConnection={onValidateConfig}
           selectedEdgeId={selectedProtocolEdgeId}
         />
       );
