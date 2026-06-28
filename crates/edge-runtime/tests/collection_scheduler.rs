@@ -4,7 +4,7 @@ use edge_core::{
 };
 use edge_runtime::{
     append_modbus_rtu_crc, CollectionRunStats, CollectionSchedule, ConfiguredEdgeRuntime,
-    ScriptedSerialBus, ScriptedSerialBusFactory,
+    ScheduledCollectionFailure, ScriptedSerialBus, ScriptedSerialBusFactory,
 };
 
 fn package() -> EdgeConfigPackage {
@@ -198,6 +198,21 @@ fn collection_run_stats_converts_resilient_reports_to_runtime_metrics() {
     assert_eq!(metrics.success_rate, 2.0 / 3.0);
     assert_eq!(metrics.average_latency_ms, 20);
     assert_eq!(metrics.bad_point_count, 1);
+}
+
+#[test]
+fn scheduled_collection_failure_converts_to_runtime_event() {
+    let failure = ScheduledCollectionFailure {
+        task_id: "bad-task".to_string(),
+        reason: "serial response timed out".to_string(),
+    };
+
+    let event = failure.to_runtime_event("edge-dev");
+
+    assert_eq!(event.edge_id, "edge-dev");
+    assert_eq!(event.code, "collection.task_failed");
+    assert_eq!(event.context["task_id"], "bad-task");
+    assert_eq!(event.context["reason"], "serial response timed out");
 }
 
 fn response(slave_id: u8, registers: &[u16]) -> Vec<u8> {

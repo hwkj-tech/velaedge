@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use anyhow::{bail, Result};
 use edge_core::{
-    CollectionTask, DataQuality, DeviceShadow, EdgeConfigPackage, ProtocolConnection, ProtocolType,
+    CollectionTask, DataQuality, DeviceShadow, EdgeConfigPackage, EdgeRuntimeEvent,
+    ProtocolConnection, ProtocolType, RuntimeEventCategory, RuntimeEventSeverity,
     TelemetryPointMapping, TelemetrySample, TelemetryValue,
 };
 
@@ -22,6 +23,20 @@ pub struct ScheduledCollectionReport {
 pub struct ScheduledCollectionFailure {
     pub task_id: String,
     pub reason: String,
+}
+
+impl ScheduledCollectionFailure {
+    pub fn to_runtime_event(&self, edge_id: &str) -> EdgeRuntimeEvent {
+        EdgeRuntimeEvent::new(
+            edge_id,
+            RuntimeEventSeverity::Warning,
+            RuntimeEventCategory::Collection,
+            "collection.task_failed",
+            format!("Collection task {} failed", self.task_id),
+        )
+        .with_context("task_id", self.task_id.clone())
+        .with_context("reason", self.reason.clone())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

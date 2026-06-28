@@ -119,6 +119,7 @@ async fn main() -> Result<()> {
                 applied_version = %report.applied_version,
                 tasks_run = report.tasks_run,
                 samples_collected = report.samples_collected,
+                events_reported = report.events_reported,
                 cloud_api_url = %cloud_api_url,
                 "scheduled cloud config collection completed"
             );
@@ -196,6 +197,7 @@ struct ScheduledCloudRunReport {
     applied_version: String,
     tasks_run: usize,
     samples_collected: usize,
+    events_reported: usize,
 }
 
 async fn run_scheduled_cloud_ticks<C, R>(
@@ -239,6 +241,7 @@ where
     );
     let mut tasks_run = 0;
     let mut samples_collected = 0;
+    let mut failure_events = Vec::new();
 
     for tick in 0..scheduled_ticks {
         let now_ms = u64::from(tick).saturating_mul(scheduler_tick_ms);
@@ -255,6 +258,12 @@ where
         );
         tasks_run += report.tasks_run;
         samples_collected += report.samples_collected;
+        failure_events.extend(
+            report
+                .failures
+                .into_iter()
+                .map(|failure| failure.to_runtime_event(edge_id)),
+        );
     }
 
     let applied_version = runtime.reported_version().to_string();
@@ -265,11 +274,16 @@ where
         .with_collection_metrics(stats.metrics())
         .snapshot();
     runtime_reporter.report_metrics(snapshot).await?;
+    let events_reported = failure_events.len();
+    for event in failure_events {
+        runtime_reporter.report_event(event).await?;
+    }
 
     Ok(ScheduledCloudRunReport {
         applied_version,
         tasks_run,
         samples_collected,
+        events_reported,
     })
 }
 
