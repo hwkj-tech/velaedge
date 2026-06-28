@@ -5,8 +5,8 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    report_runtime_status_once, AppliedEdgeConfig, ConfiguredSimulatedRuntime,
-    RuntimeStatusReporter,
+    report_runtime_status_once, AppliedEdgeConfig, ConfiguredSimulatedRuntime, MqttPublisher,
+    RumqttcMqttPublisher, RuntimeStatusReporter,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -19,6 +19,13 @@ pub struct EdgeDesiredConfig {
 pub struct EdgeConfigSyncReport {
     pub applied_version: String,
     pub samples_collected: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EdgeConfigMqttSyncReport {
+    pub applied_version: String,
+    pub samples_collected: usize,
+    pub mqtt_messages_published: usize,
 }
 
 #[async_trait]
@@ -129,6 +136,63 @@ where
     Ok(report)
 }
 
+pub async fn sync_and_report_with_mqtt_publisher_once<C, R, P>(
+    edge_id: &str,
+    runtime_id: &str,
+    client: &mut C,
+    reporter: &mut R,
+    publisher: &mut P,
+) -> Result<EdgeConfigMqttSyncReport>
+where
+    C: EdgeConfigSyncClient + Send,
+    R: RuntimeStatusReporter + Send,
+    P: MqttPublisher + Send,
+{
+    let (report, applied) = sync_once_inner_with_mqtt_publisher(edge_id, client, publisher).await?;
+    report_runtime_status_once(runtime_id, applied, reporter).await?;
+
+    Ok(report)
+}
+
+pub async fn sync_and_report_mqtt_uplink_once<C, R>(
+    edge_id: &str,
+    runtime_id: &str,
+    client: &mut C,
+    reporter: &mut R,
+) -> Result<EdgeConfigMqttSyncReport>
+where
+    C: EdgeConfigSyncClient + Send,
+    R: RuntimeStatusReporter + Send,
+{
+    let desired = client.fetch_desired_config(edge_id).await?;
+    let applied = apply_desired_config(edge_id, desired)?;
+    let mut runtime = ConfiguredSimulatedRuntime::new(applied.clone());
+    let collection = if let Some(uplink) = applied.package().mqtt_uplinks.first() {
+        let mut publisher = RumqttcMqttPublisher::connect_from_uplink(uplink)?;
+        runtime
+            .collect_once_and_publish_mqtt(&mut publisher)
+            .await?
+    } else {
+        let collection = runtime.collect_once().await?;
+        crate::ConfiguredMqttCollectionReport {
+            collection,
+            mqtt_messages_published: 0,
+        }
+    };
+    let applied_version = runtime.reported_version().to_string();
+
+    client
+        .report_applied_version(edge_id, &applied_version)
+        .await?;
+    report_runtime_status_once(runtime_id, applied, reporter).await?;
+
+    Ok(EdgeConfigMqttSyncReport {
+        applied_version,
+        samples_collected: collection.collection.samples_collected,
+        mqtt_messages_published: collection.mqtt_messages_published,
+    })
+}
+
 async fn sync_once_inner<C>(
     edge_id: &str,
     client: &mut C,
@@ -137,22 +201,7 @@ where
     C: EdgeConfigSyncClient + Send,
 {
     let desired = client.fetch_desired_config(edge_id).await?;
-    if desired.package.edge_id != edge_id {
-        bail!(
-            "desired package targets edge {}, but runtime is {}",
-            desired.package.edge_id,
-            edge_id
-        );
-    }
-    if desired.package.version != desired.desired_version {
-        bail!(
-            "desired version {} does not match package version {}",
-            desired.desired_version,
-            desired.package.version
-        );
-    }
-
-    let applied = AppliedEdgeConfig::apply(desired.package)?;
+    let applied = apply_desired_config(edge_id, desired)?;
     let mut runtime = ConfiguredSimulatedRuntime::new(applied.clone());
     let collection = runtime.collect_once().await?;
     let applied_version = runtime.reported_version().to_string();
@@ -168,4 +217,52 @@ where
         },
         applied,
     ))
+}
+
+async fn sync_once_inner_with_mqtt_publisher<C, P>(
+    edge_id: &str,
+    client: &mut C,
+    publisher: &mut P,
+) -> Result<(EdgeConfigMqttSyncReport, AppliedEdgeConfig)>
+where
+    C: EdgeConfigSyncClient + Send,
+    P: MqttPublisher + Send,
+{
+    let desired = client.fetch_desired_config(edge_id).await?;
+    let applied = apply_desired_config(edge_id, desired)?;
+    let mut runtime = ConfiguredSimulatedRuntime::new(applied.clone());
+    let collection = runtime.collect_once_and_publish_mqtt(publisher).await?;
+    let applied_version = runtime.reported_version().to_string();
+
+    client
+        .report_applied_version(edge_id, &applied_version)
+        .await?;
+
+    Ok((
+        EdgeConfigMqttSyncReport {
+            applied_version,
+            samples_collected: collection.collection.samples_collected,
+            mqtt_messages_published: collection.mqtt_messages_published,
+        },
+        applied,
+    ))
+}
+
+fn apply_desired_config(edge_id: &str, desired: EdgeDesiredConfig) -> Result<AppliedEdgeConfig> {
+    if desired.package.edge_id != edge_id {
+        bail!(
+            "desired package targets edge {}, but runtime is {}",
+            desired.package.edge_id,
+            edge_id
+        );
+    }
+    if desired.package.version != desired.desired_version {
+        bail!(
+            "desired version {} does not match package version {}",
+            desired.desired_version,
+            desired.package.version
+        );
+    }
+
+    AppliedEdgeConfig::apply(desired.package)
 }

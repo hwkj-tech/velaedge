@@ -9,9 +9,10 @@ use edge_core::{
     TelemetrySample, TelemetryValue,
 };
 use edge_runtime::{
-    publish_edgelink_runtime_status_with_store_and_capabilities_once, sync_and_report_once,
-    EdgeRuntime, HttpEdgeConfigSyncClient, HttpRuntimeStatusReporter, JsonlLocalStore,
-    RocksEdgeRuntimeStore, RuntimeCapabilityConfig, SimulatedProtocolAdapter,
+    publish_edgelink_runtime_status_with_store_and_capabilities_once,
+    sync_and_report_mqtt_uplink_once, sync_and_report_once, EdgeRuntime, HttpEdgeConfigSyncClient,
+    HttpRuntimeStatusReporter, JsonlLocalStore, RocksEdgeRuntimeStore, RuntimeCapabilityConfig,
+    SimulatedProtocolAdapter,
 };
 use tracing::info;
 
@@ -33,6 +34,8 @@ struct Args {
     cloud_api_url: Option<String>,
     #[arg(long)]
     cloud_gateway_addr: Option<String>,
+    #[arg(long)]
+    mqtt_uplink: bool,
 }
 
 #[tokio::main]
@@ -76,6 +79,28 @@ async fn main() -> Result<()> {
     if let Some(cloud_api_url) = args.cloud_api_url {
         let mut config_client = HttpEdgeConfigSyncClient::new(&cloud_api_url)?;
         let mut runtime_reporter = HttpRuntimeStatusReporter::new(&cloud_api_url)?;
+        if args.mqtt_uplink {
+            let report = sync_and_report_mqtt_uplink_once(
+                &args.edge_id,
+                &args.runtime_id,
+                &mut config_client,
+                &mut runtime_reporter,
+            )
+            .await?;
+
+            info!(
+                edge_id = %args.edge_id,
+                runtime_id = %args.runtime_id,
+                applied_version = %report.applied_version,
+                samples_collected = report.samples_collected,
+                mqtt_messages_published = report.mqtt_messages_published,
+                cloud_api_url = %cloud_api_url,
+                "cloud config sync, mqtt uplink, and runtime status report completed"
+            );
+
+            return Ok(());
+        }
+
         let report = sync_and_report_once(
             &args.edge_id,
             &args.runtime_id,

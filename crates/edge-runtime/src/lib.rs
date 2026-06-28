@@ -26,14 +26,15 @@ pub use edgelink_client::{
 pub use local_db::RocksEdgeRuntimeStore;
 pub use metrics::SimulatedRuntimeMetricsCollector;
 pub use mqtt_uplink::{
-    build_mqtt_publish_messages, publish_mqtt_samples, MqttPublishMessage, MqttPublisher,
-    RecordingMqttPublisher,
+    build_mqtt_publish_messages, parse_mqtt_broker_target, publish_mqtt_samples, MqttBrokerTarget,
+    MqttPublishMessage, MqttPublisher, RecordingMqttPublisher, RumqttcMqttPublisher,
 };
 pub use protocol::{ProtocolAdapter, SimulatedProtocolAdapter};
 pub use reporting::{report_runtime_status_once, HttpRuntimeStatusReporter, RuntimeStatusReporter};
 pub use runtime::{CollectionReport, EdgeRuntime};
 pub use storage::{JsonlLocalStore, LocalStore};
 pub use sync::{
-    sync_and_report_once, sync_once, EdgeConfigSyncClient, EdgeConfigSyncReport, EdgeDesiredConfig,
-    HttpEdgeConfigSyncClient,
+    sync_and_report_mqtt_uplink_once, sync_and_report_once,
+    sync_and_report_with_mqtt_publisher_once, sync_once, EdgeConfigMqttSyncReport,
+    EdgeConfigSyncClient, EdgeConfigSyncReport, EdgeDesiredConfig, HttpEdgeConfigSyncClient,
 };

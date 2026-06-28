@@ -1,7 +1,11 @@
-use anyhow::{bail, Result};
+use std::time::Duration;
+
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use edge_core::{EdgeConfigPackage, MqttUplinkConfig, TelemetrySample};
+use rumqttc::{AsyncClient, EventLoop, MqttOptions, QoS, Transport};
 use serde::Serialize;
+use tokio::task::JoinHandle;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MqttPublishMessage {
@@ -13,6 +17,13 @@ pub struct MqttPublishMessage {
     pub payload: Vec<u8>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MqttBrokerTarget {
+    pub host: String,
+    pub port: u16,
+    pub tls: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct MqttTelemetryPayload<'a> {
     edge_id: &'a str,
@@ -22,6 +33,45 @@ struct MqttTelemetryPayload<'a> {
     value: &'a edge_core::TelemetryValue,
     quality: edge_core::DataQuality,
     timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+pub struct RumqttcMqttPublisher {
+    client: AsyncClient,
+    _eventloop_task: JoinHandle<()>,
+}
+
+impl RumqttcMqttPublisher {
+    pub fn connect_from_uplink(uplink: &MqttUplinkConfig) -> Result<Self> {
+        validate_uplink(uplink)?;
+        let target = parse_mqtt_broker_target(&uplink.broker)?;
+        let mut options = MqttOptions::new(&uplink.client_id, target.host, target.port);
+        options.set_keep_alive(Duration::from_secs(30));
+        if target.tls {
+            options.set_transport(Transport::tls_with_default_config());
+        }
+
+        let (client, eventloop) = AsyncClient::new(options, uplink.batch_size.max(1) as usize);
+        Ok(Self {
+            client,
+            _eventloop_task: spawn_eventloop(eventloop),
+        })
+    }
+}
+
+#[async_trait]
+impl MqttPublisher for RumqttcMqttPublisher {
+    async fn publish(&mut self, message: MqttPublishMessage) -> Result<()> {
+        self.client
+            .publish(
+                message.topic,
+                rumqttc_qos(message.qos)?,
+                false,
+                message.payload,
+            )
+            .await
+            .context("enqueue mqtt publish")?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -94,6 +144,39 @@ where
     Ok(messages_published)
 }
 
+pub fn parse_mqtt_broker_target(broker: &str) -> Result<MqttBrokerTarget> {
+    let broker = broker.trim();
+    let Some((scheme, rest)) = broker.split_once("://") else {
+        bail!("mqtt broker must include a scheme such as mqtt:// or mqtts://");
+    };
+
+    let (tls, default_port) = match scheme.to_ascii_lowercase().as_str() {
+        "mqtt" | "tcp" => (false, 1883),
+        "mqtts" | "ssl" => (true, 8883),
+        _ => bail!("unsupported mqtt broker scheme: {scheme}"),
+    };
+
+    let authority = rest.split('/').next().unwrap_or_default();
+    if authority.is_empty() {
+        bail!("mqtt broker host is required");
+    }
+    if authority.contains('@') {
+        bail!("mqtt broker credentials must be configured separately");
+    }
+
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if !host.is_empty() && !port.is_empty() => {
+            let port = port
+                .parse::<u16>()
+                .with_context(|| format!("invalid mqtt broker port: {port}"))?;
+            (host.to_string(), port)
+        }
+        _ => (authority.to_string(), default_port),
+    };
+
+    Ok(MqttBrokerTarget { host, port, tls })
+}
+
 fn validate_uplink(uplink: &MqttUplinkConfig) -> Result<()> {
     if uplink.sink_id.trim().is_empty() {
         bail!("mqtt uplink sink id is required");
@@ -108,6 +191,26 @@ fn validate_uplink(uplink: &MqttUplinkConfig) -> Result<()> {
         bail!("mqtt uplink qos must be 0, 1, or 2");
     }
     Ok(())
+}
+
+fn rumqttc_qos(qos: u8) -> Result<QoS> {
+    match qos {
+        0 => Ok(QoS::AtMostOnce),
+        1 => Ok(QoS::AtLeastOnce),
+        2 => Ok(QoS::ExactlyOnce),
+        _ => bail!("mqtt uplink qos must be 0, 1, or 2"),
+    }
+}
+
+fn spawn_eventloop(mut eventloop: EventLoop) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            if let Err(error) = eventloop.poll().await {
+                tracing::warn!(?error, "mqtt eventloop poll failed");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    })
 }
 
 fn render_topic(

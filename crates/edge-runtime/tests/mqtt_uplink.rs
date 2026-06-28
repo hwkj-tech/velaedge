@@ -4,8 +4,8 @@ use edge_core::{
     ProtocolConnection, TelemetryPointMapping, TelemetryType, TelemetryValue,
 };
 use edge_runtime::{
-    build_mqtt_publish_messages, AppliedEdgeConfig, ConfiguredSimulatedRuntime,
-    RecordingMqttPublisher,
+    build_mqtt_publish_messages, parse_mqtt_broker_target, AppliedEdgeConfig,
+    ConfiguredSimulatedRuntime, RecordingMqttPublisher,
 };
 
 fn package() -> EdgeConfigPackage {
@@ -80,4 +80,17 @@ async fn configured_runtime_collects_and_publishes_to_recording_mqtt_sink() {
         publisher.messages()[0].topic,
         "velamq/edge-dev/pump-1/pressure"
     );
+}
+
+#[test]
+fn mqtt_broker_target_parses_tcp_and_tls_urls() {
+    let mqtt = parse_mqtt_broker_target("mqtt://velamq.local").unwrap();
+    assert_eq!(mqtt.host, "velamq.local");
+    assert_eq!(mqtt.port, 1883);
+    assert!(!mqtt.tls);
+
+    let mqtts = parse_mqtt_broker_target("mqtts://velamq.local:8883").unwrap();
+    assert_eq!(mqtts.host, "velamq.local");
+    assert_eq!(mqtts.port, 8883);
+    assert!(mqtts.tls);
 }
