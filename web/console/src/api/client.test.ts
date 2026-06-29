@@ -4,9 +4,11 @@ import {
   createAlgorithmDraft,
   createEdgeNode,
   createDeviceModelDraft,
+  createEdgeDataConfig,
   createCollectionTaskDraft,
   createPointMappingDraft,
   createEdgeProtocolConnection,
+  deleteEdgeDataConfig,
   enableEdgeMaintenanceMode,
   fetchDiscoverySuggestions,
   generateAgentSuggestions,
@@ -15,6 +17,7 @@ import {
   fetchCollectionTasks,
   fetchDeviceModels,
   fetchEdgeCollectionTasks,
+  fetchEdgeDataConfigs,
   fetchEdgeAlgorithms,
   fetchEdgeNodes,
   fetchEdgePointMappings,
@@ -33,6 +36,7 @@ import {
   publishLatestRelease,
   rotateEdgeCredentials,
   saveEdgeCollectionTask,
+  saveEdgeDataConfig,
   saveEdgeAlgorithm,
   saveDeviceModel,
   saveEdgePointMapping,
@@ -396,6 +400,97 @@ describe('fetchEdgeCollectionTasks', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/collection-tasks');
     expect(result[0].taskId).toBe('pump-main');
     expect(result[0].pointIds).toEqual(['pressure', 'running']);
+  });
+});
+
+describe('edge data config clients', () => {
+  it('creates, updates, lists, and deletes edge data configs', async () => {
+    const dataConfig = {
+      configId: 'pump_status',
+      name: '泵运行状态上报',
+      enabled: true,
+      deviceId: 'pump-1',
+      protocolConnectionId: 'modbus-line-a',
+      collection: { periodMs: 1000, timeoutMs: 800, retryCount: 2 },
+      points: [
+        {
+          pointId: 'pressure',
+          semanticId: 'pump.pressure',
+          addressKind: 'holding_register',
+          addressValue: '40001',
+          valueType: 'float32',
+          unit: 'MPa',
+          jsonField: 'pressure',
+        },
+      ],
+      publish: {
+        sinkId: 'velamq-main',
+        topicTemplate: 'factory/{edge_id}/{device_id}/status',
+        qos: 1,
+        payload: { mode: 'object' as const, timestampField: 'ts', includeQuality: true },
+      },
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [{ edgeId: 'edge-dev', ...dataConfig }],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ edgeId: 'edge-dev', ...dataConfig }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ edgeId: 'edge-dev', ...dataConfig, name: '泵状态' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => '',
+      });
+
+    const configs = await fetchEdgeDataConfigs(
+      'edge-dev',
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/data-configs');
+    expect(configs[0].configId).toBe('pump_status');
+
+    await createEdgeDataConfig(
+      'edge-dev',
+      dataConfig,
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/edges/edge-dev/data-configs', {
+      body: JSON.stringify(dataConfig),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    });
+
+    await saveEdgeDataConfig(
+      'edge-dev',
+      'pump_status',
+      { ...dataConfig, name: '泵状态' },
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/edges/edge-dev/data-configs/pump_status',
+      {
+        body: JSON.stringify({ ...dataConfig, name: '泵状态' }),
+        headers: { 'content-type': 'application/json' },
+        method: 'PUT',
+      },
+    );
+
+    await deleteEdgeDataConfig(
+      'edge-dev',
+      'pump_status',
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/edges/edge-dev/data-configs/pump_status',
+      { method: 'DELETE' },
+    );
   });
 });
 

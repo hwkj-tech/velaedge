@@ -8,6 +8,7 @@ import type {
   CreateDeviceModelRequest,
   CreateEdgeNodeRequest,
   CreatePointMappingRequest,
+  DataConfigResponse,
   EdgeNodeActionResponse,
   DeviceModelResponse,
   DiscoveryReportResponse,
@@ -22,6 +23,7 @@ import type {
   ManagementActionResponse,
   SaveAlgorithmRequest,
   SaveCollectionTaskRequest,
+  SaveDataConfigRequest,
   SaveDeviceModelRequest,
   SaveMqttUplinkRequest,
   SavePointMappingRequest,
@@ -182,6 +184,32 @@ export async function fetchEdgeCollectionTasks(
   return requestJson<CollectionTaskResponse[]>(
     `/api/edges/${encodeURIComponent(edgeId)}/collection-tasks`,
     fetcher,
+  );
+}
+
+export async function fetchEdgeDataConfigs(
+  edgeId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<DataConfigResponse[]> {
+  return requestJson<DataConfigResponse[]>(
+    `/api/edges/${encodeURIComponent(edgeId)}/data-configs`,
+    fetcher,
+  );
+}
+
+export async function createEdgeDataConfig(
+  edgeId: string,
+  request: SaveDataConfigRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<DataConfigResponse> {
+  return requestJson<DataConfigResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/data-configs`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    },
   );
 }
 
@@ -347,6 +375,37 @@ export async function saveEdgeCollectionTask(
   );
 }
 
+export async function saveEdgeDataConfig(
+  edgeId: string,
+  configId: string,
+  request: SaveDataConfigRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<DataConfigResponse> {
+  return requestJson<DataConfigResponse>(
+    `/api/edges/${encodeURIComponent(edgeId)}/data-configs/${encodeURIComponent(configId)}`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    },
+  );
+}
+
+export async function deleteEdgeDataConfig(
+  edgeId: string,
+  configId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  await requestText(
+    `/api/edges/${encodeURIComponent(edgeId)}/data-configs/${encodeURIComponent(configId)}`,
+    fetcher,
+    {
+      method: 'DELETE',
+    },
+  );
+}
+
 export async function saveEdgeProtocolConnection(
   edgeId: string,
   connectionId: string,
@@ -463,4 +522,17 @@ async function requestJson<T>(
   }
 
   return response.json() as Promise<T>;
+}
+
+async function requestText(
+  path: string,
+  fetcher: typeof fetch,
+  init?: RequestInit,
+): Promise<string> {
+  const response = init === undefined ? await fetcher(path) : await fetcher(path, init);
+  if (!response.ok) {
+    throw new Error(`Failed to load ${path}: ${response.status}`);
+  }
+
+  return response.text();
 }

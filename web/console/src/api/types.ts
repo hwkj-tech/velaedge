@@ -167,6 +167,49 @@ export interface CollectionTaskResponse {
   status: string;
 }
 
+export interface DataConfigCollection {
+  periodMs: number;
+  timeoutMs: number;
+  retryCount: number;
+}
+
+export interface DataConfigPoint {
+  pointId: string;
+  semanticId: string;
+  addressKind: string;
+  addressValue: string;
+  valueType: string;
+  unit?: string | null;
+  jsonField: string;
+}
+
+export interface DataConfigPayload {
+  mode: 'object' | 'array';
+  timestampField: string;
+  includeQuality: boolean;
+}
+
+export interface DataConfigPublish {
+  sinkId: string;
+  topicTemplate: string;
+  qos: number;
+  payload: DataConfigPayload;
+}
+
+export interface DataConfigResponse {
+  edgeId: string;
+  configId: string;
+  name: string;
+  enabled: boolean;
+  deviceId: string;
+  protocolConnectionId: string;
+  collection: DataConfigCollection;
+  points: DataConfigPoint[];
+  publish: DataConfigPublish;
+}
+
+export type SaveDataConfigRequest = Omit<DataConfigResponse, 'edgeId'>;
+
 export interface SaveCollectionTaskRequest {
   deviceId: string;
   pointIds: string[];
