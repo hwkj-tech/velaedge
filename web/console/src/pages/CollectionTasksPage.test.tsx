@@ -10,6 +10,7 @@ describe('CollectionTasksPage', () => {
     expect(screen.getByText('任务清单')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '选择任务 pump-main' })).toBeInTheDocument();
     expect(screen.getAllByText('pressure, running').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: '选择任务 pump-main' }));
     expect(screen.getByText('编辑任务 pump-main')).toBeInTheDocument();
     expect(screen.getByLabelText('采集周期(ms)')).toBeInTheDocument();
   });
@@ -19,6 +20,7 @@ describe('CollectionTasksPage', () => {
 
     render(<CollectionTasksPage selectedEdgeId="edge-dev" onSaveTask={onSaveTask} />);
 
+    fireEvent.click(screen.getByRole('button', { name: '选择任务 pump-main' }));
     fireEvent.change(screen.getByLabelText('采集点位'), {
       target: { value: 'pressure' },
     });

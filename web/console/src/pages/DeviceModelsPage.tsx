@@ -65,6 +65,7 @@ export function DeviceModelsPage({
     'idle',
   );
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateDeviceModelRequest>(() =>
     emptyCreateForm(),
   );
@@ -196,7 +197,10 @@ export function DeviceModelsPage({
                         aria-label={`选择设备模型 ${model.deviceType}`}
                         aria-pressed={model.deviceType === activeModel.deviceType}
                         className="point-id-button"
-                        onClick={() => setSelectedDeviceType(model.deviceType)}
+                        onClick={() => {
+                          setSelectedDeviceType(model.deviceType);
+                          setEditDialogOpen(true);
+                        }}
                         type="button"
                       >
                         {model.deviceType}
@@ -223,7 +227,9 @@ export function DeviceModelsPage({
           ) : null}
         </section>
 
+        {editDialogOpen ? (
         <Drawer
+          onClose={() => setEditDialogOpen(false)}
           subtitle="模型保存后进入待发布配置，发布后边端按语义点位匹配协议地址"
           title={`编辑设备模型 ${activeModel.deviceType}`}
           footer={
@@ -236,6 +242,7 @@ export function DeviceModelsPage({
                 onClick={() => {
                   setEditForm(modelToSaveForm(activeModel));
                   setSaveState('idle');
+                  setEditDialogOpen(false);
                 }}
                 type="button"
               >
@@ -362,6 +369,7 @@ export function DeviceModelsPage({
             </div>
           </section>
         </Drawer>
+        ) : null}
       </div>
     </div>
   );

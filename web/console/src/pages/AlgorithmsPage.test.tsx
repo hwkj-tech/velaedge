@@ -11,6 +11,7 @@ describe('AlgorithmsPage', () => {
     expect(
       screen.getByRole('button', { name: '选择算法 pressure-change-report' }),
     ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '选择算法 pressure-change-report' }));
     expect(screen.getByText('编辑算法 pressure-change-report')).toBeInTheDocument();
     expect(screen.getByLabelText('算法类型')).toBeInTheDocument();
     expect(screen.getByLabelText('DSL 预览')).toHaveTextContent('changeFilter');
@@ -23,6 +24,7 @@ describe('AlgorithmsPage', () => {
       <AlgorithmsPage selectedEdgeId="edge-dev" onSaveAlgorithm={onSaveAlgorithm} />,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: '选择算法 pressure-change-report' }));
     fireEvent.change(screen.getByLabelText('算法类型'), {
       target: { value: 'WindowAggregate' },
     });

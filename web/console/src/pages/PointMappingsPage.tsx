@@ -111,6 +111,7 @@ export function PointMappingsPage({
   );
   const [toolbarMessage, setToolbarMessage] = useState('');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreatePointMappingRequest>({
     addressKind: 'holding_register',
     addressValue: '40001',
@@ -128,7 +129,10 @@ export function PointMappingsPage({
   const isConfigureMode = mode === 'configure';
   const columns = pointColumns(
     selectedPoint.pointId,
-    setSelectedPointId,
+    (pointId) => {
+      setSelectedPointId(pointId);
+      setEditDialogOpen(true);
+    },
     isConfigureMode,
   );
   const activeEdge =
@@ -482,8 +486,9 @@ export function PointMappingsPage({
           />
         </section>
 
-        {isConfigureMode ? (
+        {isConfigureMode && editDialogOpen ? (
           <Drawer
+          onClose={() => setEditDialogOpen(false)}
           subtitle="保存后进入待发布配置，发布后边端 runtime 执行"
           title={`编辑点位 ${selectedPoint.pointId}`}
           footer={
@@ -496,6 +501,7 @@ export function PointMappingsPage({
                 onClick={() => {
                   setForm(pointToEditorForm(selectedPoint));
                   setSaveState('idle');
+                  setEditDialogOpen(false);
                 }}
                 type="button"
               >

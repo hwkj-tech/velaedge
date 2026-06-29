@@ -79,6 +79,7 @@ export function CollectionTasksPage({
   );
   const [toolbarMessage, setToolbarMessage] = useState('');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [createForm, setCreateForm] = useState({
     deviceId: fallbackTasks[0].deviceId,
     enabled: true,
@@ -373,7 +374,10 @@ export function CollectionTasksPage({
                           aria-label={`选择任务 ${task.taskId}`}
                           aria-pressed={task.taskId === selectedTask.taskId}
                           className="point-id-button"
-                          onClick={() => setSelectedTaskId(task.taskId)}
+                          onClick={() => {
+                            setSelectedTaskId(task.taskId);
+                            setEditDialogOpen(true);
+                          }}
                           type="button"
                         >
                           {task.taskId}
@@ -406,8 +410,9 @@ export function CollectionTasksPage({
           ) : null}
         </section>
 
-        {isConfigureMode ? (
+        {isConfigureMode && editDialogOpen ? (
           <Drawer
+          onClose={() => setEditDialogOpen(false)}
           subtitle="保存后进入待发布配置，发布后边端 runtime 调度执行"
           title={`编辑任务 ${selectedTask.taskId}`}
           footer={
@@ -420,6 +425,7 @@ export function CollectionTasksPage({
                 onClick={() => {
                   setForm(taskToEditorForm(selectedTask));
                   setSaveState('idle');
+                  setEditDialogOpen(false);
                 }}
                 type="button"
               >

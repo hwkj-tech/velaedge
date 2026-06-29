@@ -1,6 +1,6 @@
 .point-config-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   align-items: start;
 }
@@ -44,14 +44,22 @@
 
 .drawer {
   display: grid;
+  width: min(880px, 100%);
+  max-height: calc(100vh - 48px);
   gap: 14px;
+  overflow: auto;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: #ffffff;
+  box-shadow: 0 24px 70px rgb(15 23 42 / 22%);
   padding: 16px;
 }
 
 .drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
   border-bottom: 1px solid var(--color-border);
   padding-bottom: 12px;
 }

@@ -129,7 +129,7 @@ describe('DeviceModelsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '选择设备模型 meter' }));
 
     expect(screen.getByText('编辑设备模型 meter')).toBeInTheDocument();
-    const editor = screen.getByRole('complementary', {
+    const editor = screen.getByRole('dialog', {
       name: '编辑设备模型 meter',
     });
     fireEvent.change(within(editor).getByLabelText('模型版本'), {

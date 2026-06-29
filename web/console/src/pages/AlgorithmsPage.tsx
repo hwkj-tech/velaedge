@@ -114,6 +114,7 @@ export function AlgorithmsPage({
   );
   const [toolbarMessage, setToolbarMessage] = useState('');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [createForm, setCreateForm] = useState<EditorForm>(() => ({
     algorithmKind: 'ChangeReport',
     expression: 'a + b + c',
@@ -324,7 +325,10 @@ export function AlgorithmsPage({
                             algorithm.algorithmId === selectedAlgorithm.algorithmId
                           }
                           className="point-id-button"
-                          onClick={() => setSelectedAlgorithmId(algorithm.algorithmId)}
+                          onClick={() => {
+                            setSelectedAlgorithmId(algorithm.algorithmId);
+                            setEditDialogOpen(true);
+                          }}
                           type="button"
                         >
                           {algorithm.algorithmId}
@@ -359,8 +363,9 @@ export function AlgorithmsPage({
           ) : null}
         </section>
 
-        {isConfigureMode ? (
+        {isConfigureMode && editDialogOpen ? (
           <Drawer
+            onClose={() => setEditDialogOpen(false)}
             subtitle="保存后进入待发布配置，发布后边端 runtime 按点位样本执行"
             title={`编辑算法 ${selectedAlgorithm.algorithmId}`}
             footer={
@@ -373,6 +378,7 @@ export function AlgorithmsPage({
                   onClick={() => {
                     setForm(algorithmToEditorForm(selectedAlgorithm));
                     setSaveState('idle');
+                    setEditDialogOpen(false);
                   }}
                   type="button"
                 >

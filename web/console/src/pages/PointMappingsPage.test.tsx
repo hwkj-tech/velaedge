@@ -10,6 +10,7 @@ describe('PointMappingsPage', () => {
     expect(screen.getByText('点位配置表')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '选择点位 pressure' })).toBeInTheDocument();
     expect(screen.getByText('holding_register:40001')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '选择点位 pressure' }));
     expect(screen.getByText('编辑点位 pressure')).toBeInTheDocument();
     expect(screen.getByText('采集周期')).toBeInTheDocument();
     expect(screen.queryByText(/草稿/)).not.toBeInTheDocument();
@@ -20,6 +21,7 @@ describe('PointMappingsPage', () => {
 
     render(<PointMappingsPage selectedEdgeId="edge-dev" onSavePoint={onSavePoint} />);
 
+    fireEvent.click(screen.getByRole('button', { name: '选择点位 pressure' }));
     fireEvent.change(screen.getByLabelText('地址值'), {
       target: { value: '40002' },
     });

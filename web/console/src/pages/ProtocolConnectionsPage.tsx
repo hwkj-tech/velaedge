@@ -90,6 +90,7 @@ export function ProtocolConnectionsPage({
   );
   const [createState, setCreateState] = useState<'idle' | 'creating'>('idle');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateProtocolConnectionRequest>({
     endpoint: '/dev/ttyUSB0',
     protocolType: 'ModbusRtu',
@@ -359,7 +360,10 @@ export function ProtocolConnectionsPage({
                             connection.connectionId === selectedConnection.connectionId
                           }
                           className="point-id-button"
-                          onClick={() => setSelectedConnectionId(connection.connectionId)}
+                          onClick={() => {
+                            setSelectedConnectionId(connection.connectionId);
+                            setEditDialogOpen(true);
+                          }}
                           type="button"
                         >
                           {connection.connectionId}
@@ -392,8 +396,9 @@ export function ProtocolConnectionsPage({
           ) : null}
         </section>
 
-        {isConfigureMode ? (
+        {isConfigureMode && editDialogOpen ? (
           <Drawer
+          onClose={() => setEditDialogOpen(false)}
           subtitle="保存后进入待发布配置，发布后边端 runtime 重新建立协议会话"
           title={`编辑连接 ${selectedConnection.connectionId}`}
           footer={
@@ -406,6 +411,7 @@ export function ProtocolConnectionsPage({
                 onClick={() => {
                   setForm(connectionToEditorForm(selectedConnection));
                   setSaveState('idle');
+                  setEditDialogOpen(false);
                 }}
                 type="button"
               >

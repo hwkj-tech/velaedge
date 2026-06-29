@@ -11,6 +11,7 @@ describe('ProtocolConnectionsPage', () => {
     expect(
       screen.getByRole('button', { name: '选择连接 modbus-line-a' }),
     ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '选择连接 modbus-line-a' }));
     expect(screen.getByText('编辑连接 modbus-line-a')).toBeInTheDocument();
     expect(screen.getByLabelText('协议类型')).toBeInTheDocument();
   });
@@ -25,6 +26,7 @@ describe('ProtocolConnectionsPage', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: '选择连接 modbus-line-a' }));
     fireEvent.change(screen.getByLabelText('协议类型'), {
       target: { value: 'OpcUa' },
     });
@@ -32,7 +34,7 @@ describe('ProtocolConnectionsPage', () => {
       target: { value: 'opc.tcp://10.12.0.80:4840' },
     });
     fireEvent.click(
-      within(screen.getByRole('complementary', { name: '编辑连接 modbus-line-a' })).getByRole(
+      within(screen.getByRole('dialog', { name: '编辑连接 modbus-line-a' })).getByRole(
         'button',
         { name: '保存' },
       ),
@@ -190,6 +192,7 @@ describe('ProtocolConnectionsPage', () => {
       });
     });
     expect(screen.getByText('已创建连接 connection-draft-2')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '选择连接 connection-draft-2' }));
     expect(screen.getByText('编辑连接 connection-draft-2')).toBeInTheDocument();
   });
 });

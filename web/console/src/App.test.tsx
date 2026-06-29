@@ -514,6 +514,7 @@ describe('App cloud console write actions', () => {
     await openEdgeConfiguration();
     fireEvent.click(screen.getByRole('button', { name: /点位配置/ }));
     expect(await screen.findByText('holding_register:40001')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '选择点位 pressure' }));
 
     fireEvent.change(screen.getByLabelText('地址值'), {
       target: { value: '40002' },
@@ -560,6 +561,7 @@ describe('App cloud console write actions', () => {
     await openEdgeConfiguration();
     fireEvent.click(screen.getByRole('button', { name: /采集任务/ }));
     expect((await screen.findAllByText('pressure, running')).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: '选择任务 pump-main' }));
 
     fireEvent.change(screen.getByLabelText('采集点位'), {
       target: { value: 'pressure' },
@@ -604,6 +606,7 @@ describe('App cloud console write actions', () => {
 
     await openEdgeConfiguration();
     expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '选择连接 modbus-line-a' }));
 
     fireEvent.change(screen.getByLabelText('协议类型'), {
       target: { value: 'OpcUa' },
@@ -667,29 +670,36 @@ describe('App cloud console write actions', () => {
     fireEvent.click(screen.getByRole('button', { name: /协议连接/ }));
     expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '新建连接' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '选择连接 modbus-line-a' }));
     expect(screen.getByText('编辑连接 modbus-line-a')).toBeInTheDocument();
     expect(screen.getByLabelText('配置边端')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '保存草稿' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
 
     fireEvent.click(screen.getByRole('button', { name: /点位配置/ }));
     expect(await screen.findByText('holding_register:40001')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '新建点位' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '选择点位 pressure' }));
     expect(screen.getByText('编辑点位 pressure')).toBeInTheDocument();
     expect(screen.getByLabelText('配置边端')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
 
     fireEvent.click(screen.getByRole('button', { name: /采集任务/ }));
     expect(
       await screen.findByRole('button', { name: '选择任务 pump-main' }),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '新建任务' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '选择任务 pump-main' }));
     expect(screen.getByText('编辑任务 pump-main')).toBeInTheDocument();
     expect(screen.getByLabelText('配置边端')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
 
     fireEvent.click(screen.getByRole('button', { name: /算法配置/ }));
     expect(
       await screen.findByRole('button', { name: '选择算法 pump-anomaly-v1' }),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '新建算法' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '选择算法 pump-anomaly-v1' }));
     expect(screen.getByText('编辑算法 pump-anomaly-v1')).toBeInTheDocument();
     expect(screen.getByLabelText('配置边端')).toBeInTheDocument();
   });
@@ -698,11 +708,12 @@ describe('App cloud console write actions', () => {
     render(<App />);
 
     await openEdgeConfiguration();
-    expect(screen.getByText('编辑连接 modbus-line-a')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '选择连接 modbus-line-a' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /协议连接/ }));
 
     expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '选择连接 modbus-line-a' }));
     expect(screen.getByText('编辑连接 modbus-line-a')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '新建连接' })).toBeInTheDocument();
   });
@@ -715,7 +726,9 @@ describe('App cloud console write actions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '配置边端 edge-dev' }));
 
-    expect(await screen.findByText('编辑连接 modbus-line-a')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: '选择连接 modbus-line-a' }),
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '新建连接' })).toBeInTheDocument();
     await waitFor(() => {
       expect(fetchEdgeProtocolConnections).toHaveBeenCalledWith('edge-dev');
@@ -805,6 +818,7 @@ describe('App cloud console write actions', () => {
     await openEdgeConfiguration();
     fireEvent.click(screen.getByRole('button', { name: /算法配置/ }));
     expect(await screen.findByText('pressure.reported')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '选择算法 pump-anomaly-v1' }));
 
     fireEvent.change(screen.getByLabelText('算法版本'), {
       target: { value: '1.1.0' },
@@ -1119,7 +1133,9 @@ describe('App cloud console write actions', () => {
     render(<App />);
 
     fireEvent.click(screen.getByRole('button', { name: /设备模型/ }));
-    expect(await screen.findByText('pump@v1 遥测定义')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: '选择设备模型 pump' }),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '新建设备模型' }));
     const dialog = screen.getByRole('dialog', { name: '新建设备模型' });
     expect(dialog).toBeInTheDocument();
@@ -1194,7 +1210,9 @@ describe('App cloud console write actions', () => {
     expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /设备模型/ }));
-    expect(await screen.findByText('pump@v1 遥测定义')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: '选择设备模型 pump' }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /协议连接/ }));
     expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
@@ -1241,5 +1259,7 @@ async function openEdgeConfiguration() {
   fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
   expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '配置边端 edge-dev' }));
-  expect(await screen.findByText('编辑连接 modbus-line-a')).toBeInTheDocument();
+  expect(
+    await screen.findByRole('button', { name: '选择连接 modbus-line-a' }),
+  ).toBeInTheDocument();
 }
