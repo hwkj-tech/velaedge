@@ -1,11 +1,13 @@
 use chrono::{TimeZone, Utc};
 use edge_core::{
-    CollectionTask, DataQuality, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, PointAddress,
-    ProtocolConnection, TelemetryPointMapping, TelemetryType, TelemetryValue,
+    CollectionTask, DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint,
+    DataConfigPublish, DataQuality, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig,
+    PointAddress, ProtocolConnection, TelemetryPointMapping, TelemetryType, TelemetryValue,
 };
 use edge_runtime::{
-    build_mqtt_publish_messages, parse_mqtt_broker_target, AppliedEdgeConfig,
-    ConfiguredSimulatedRuntime, RecordingMqttPublisher,
+    build_data_config_mqtt_publish_messages, build_mqtt_publish_messages,
+    parse_mqtt_broker_target, AppliedEdgeConfig, ConfiguredSimulatedRuntime,
+    RecordingMqttPublisher,
 };
 
 fn package() -> EdgeConfigPackage {
@@ -60,6 +62,73 @@ fn mqtt_uplink_builds_velamq_publish_messages_from_cloud_config() {
     assert_eq!(payload["config_version"], "2026.06.28-001");
     assert_eq!(payload["value"], serde_json::json!({"Float": 2.4}));
     assert_eq!(payload["quality"], "Good");
+}
+
+#[test]
+fn data_config_builds_one_json_message_per_config() {
+    let package = EdgeConfigPackage::new("edge-dev", "v1")
+        .with_device(DeviceInstance::new("pump-1", "pump"))
+        .with_mqtt_uplink(MqttUplinkConfig::velamq(
+            "velamq-main",
+            "mqtts://velamq.local:8883",
+            "edge-dev-runtime",
+        ))
+        .with_data_config(
+            DataConfig::new(
+                "pump_status",
+                "泵运行状态上报",
+                "pump-1",
+                "modbus-line-a",
+                DataConfigCollection::new(1000),
+                DataConfigPublish::new(
+                    "velamq-main",
+                    "factory/{edge_id}/{device_id}/status",
+                    DataConfigPayload::object(),
+                ),
+            )
+            .with_point(DataConfigPoint::new(
+                "pressure",
+                "pump.pressure",
+                PointAddress::modbus_holding_register(40001),
+                TelemetryType::Float,
+                "pressure",
+            ))
+            .with_point(DataConfigPoint::new(
+                "running",
+                "pump.running",
+                PointAddress::modbus_holding_register(40002),
+                TelemetryType::Boolean,
+                "running",
+            )),
+        );
+
+    let samples = vec![
+        edge_core::TelemetrySample::new(
+            "pump-1",
+            "pressure",
+            TelemetryValue::Float(0.82),
+            DataQuality::Good,
+            Utc.with_ymd_and_hms(2026, 6, 30, 8, 30, 0).unwrap(),
+        ),
+        edge_core::TelemetrySample::new(
+            "pump-1",
+            "running",
+            TelemetryValue::Boolean(true),
+            DataQuality::Good,
+            Utc.with_ymd_and_hms(2026, 6, 30, 8, 30, 1).unwrap(),
+        ),
+    ];
+
+    let messages = build_data_config_mqtt_publish_messages(&package, &samples).unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].topic, "factory/edge-dev/pump-1/status");
+
+    let payload: serde_json::Value = serde_json::from_slice(&messages[0].payload).unwrap();
+    assert_eq!(payload["edge_id"], "edge-dev");
+    assert_eq!(payload["device_id"], "pump-1");
+    assert_eq!(payload["values"]["pressure"], 0.82);
+    assert_eq!(payload["values"]["running"], true);
+    assert_eq!(payload["quality"]["pressure"], "good");
 }
 
 #[tokio::test]

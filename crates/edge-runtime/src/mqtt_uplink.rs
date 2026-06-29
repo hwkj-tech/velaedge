@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use edge_core::{EdgeConfigPackage, MqttUplinkConfig, TelemetrySample};
+use edge_core::{
+    DataConfig, DataConfigPayloadMode, DataConfigPoint, EdgeConfigPackage, MqttUplinkConfig,
+    TelemetrySample, TelemetryValue,
+};
 use rumqttc::{AsyncClient, EventLoop, MqttOptions, QoS, Transport};
 use serde::Serialize;
 use tokio::task::JoinHandle;
@@ -128,6 +131,59 @@ pub fn build_mqtt_publish_messages(
     Ok(messages)
 }
 
+pub fn build_data_config_mqtt_publish_messages(
+    package: &EdgeConfigPackage,
+    samples: &[TelemetrySample],
+) -> Result<Vec<MqttPublishMessage>> {
+    let mut messages = Vec::new();
+    for data_config in &package.data_configs {
+        if !data_config.enabled {
+            continue;
+        }
+
+        let uplink = package
+            .mqtt_uplinks
+            .iter()
+            .find(|uplink| uplink.sink_id == data_config.publish.sink_id)
+            .with_context(|| {
+                format!(
+                    "mqtt sink not found for data config {}: {}",
+                    data_config.config_id, data_config.publish.sink_id
+                )
+            })?;
+        validate_uplink(uplink)?;
+        validate_qos(data_config.publish.qos)?;
+
+        let selected = data_config
+            .points
+            .iter()
+            .filter_map(|point| {
+                samples
+                    .iter()
+                    .find(|sample| {
+                        sample.device_id == data_config.device_id
+                            && sample.telemetry_id == point.point_id
+                    })
+                    .map(|sample| (point, sample))
+            })
+            .collect::<Vec<_>>();
+
+        if selected.is_empty() {
+            continue;
+        }
+
+        messages.push(MqttPublishMessage {
+            sink_id: uplink.sink_id.clone(),
+            broker: uplink.broker.clone(),
+            client_id: uplink.client_id.clone(),
+            topic: render_data_config_topic(package, data_config),
+            qos: data_config.publish.qos,
+            payload: build_data_config_payload(package, data_config, &selected)?,
+        });
+    }
+    Ok(messages)
+}
+
 pub async fn publish_mqtt_samples<P>(
     package: &EdgeConfigPackage,
     samples: &[TelemetrySample],
@@ -137,6 +193,22 @@ where
     P: MqttPublisher + ?Sized,
 {
     let messages = build_mqtt_publish_messages(package, samples)?;
+    let messages_published = messages.len();
+    for message in messages {
+        publisher.publish(message).await?;
+    }
+    Ok(messages_published)
+}
+
+pub async fn publish_data_config_mqtt_samples<P>(
+    package: &EdgeConfigPackage,
+    samples: &[TelemetrySample],
+    publisher: &mut P,
+) -> Result<usize>
+where
+    P: MqttPublisher + ?Sized,
+{
+    let messages = build_data_config_mqtt_publish_messages(package, samples)?;
     let messages_published = messages.len();
     for message in messages {
         publisher.publish(message).await?;
@@ -187,13 +259,19 @@ fn validate_uplink(uplink: &MqttUplinkConfig) -> Result<()> {
     if uplink.client_id.trim().is_empty() {
         bail!("mqtt uplink client id is required");
     }
-    if uplink.qos > 2 {
-        bail!("mqtt uplink qos must be 0, 1, or 2");
+    validate_qos(uplink.qos)?;
+    Ok(())
+}
+
+fn validate_qos(qos: u8) -> Result<()> {
+    if qos > 2 {
+        bail!("mqtt qos must be 0, 1, or 2");
     }
     Ok(())
 }
 
 fn rumqttc_qos(qos: u8) -> Result<QoS> {
+    validate_qos(qos)?;
     match qos {
         0 => Ok(QoS::AtMostOnce),
         1 => Ok(QoS::AtLeastOnce),
@@ -223,4 +301,98 @@ fn render_topic(
         .replace("{edge_id}", &package.edge_id)
         .replace("{device_id}", &sample.device_id)
         .replace("{telemetry_id}", &sample.telemetry_id)
+}
+
+fn build_data_config_payload(
+    package: &EdgeConfigPackage,
+    data_config: &DataConfig,
+    selected: &[(&DataConfigPoint, &TelemetrySample)],
+) -> Result<Vec<u8>> {
+    let timestamp = selected
+        .iter()
+        .map(|(_, sample)| sample.timestamp)
+        .max()
+        .unwrap_or_default();
+
+    let mut payload = serde_json::Map::new();
+    payload.insert("edge_id".to_string(), serde_json::json!(package.edge_id));
+    payload.insert(
+        "config_version".to_string(),
+        serde_json::json!(package.version),
+    );
+    payload.insert(
+        "config_id".to_string(),
+        serde_json::json!(data_config.config_id),
+    );
+    payload.insert("device_id".to_string(), serde_json::json!(data_config.device_id));
+    payload.insert(
+        data_config.publish.payload.timestamp_field.clone(),
+        serde_json::json!(timestamp),
+    );
+
+    match data_config.publish.payload.mode {
+        DataConfigPayloadMode::Object => {
+            let mut values = serde_json::Map::new();
+            let mut quality = serde_json::Map::new();
+            for (point, sample) in selected {
+                values.insert(point.json_field.clone(), telemetry_value_to_json(&sample.value));
+                quality.insert(
+                    point.json_field.clone(),
+                    serde_json::json!(quality_to_json_label(sample.quality)),
+                );
+            }
+            payload.insert("values".to_string(), serde_json::Value::Object(values));
+            if data_config.publish.payload.include_quality {
+                payload.insert("quality".to_string(), serde_json::Value::Object(quality));
+            }
+        }
+        DataConfigPayloadMode::Array => {
+            let points = selected
+                .iter()
+                .map(|(point, sample)| {
+                    let mut item = serde_json::Map::new();
+                    item.insert("point_id".to_string(), serde_json::json!(point.point_id));
+                    item.insert("field".to_string(), serde_json::json!(point.json_field));
+                    item.insert("value".to_string(), telemetry_value_to_json(&sample.value));
+                    if data_config.publish.payload.include_quality {
+                        item.insert(
+                            "quality".to_string(),
+                            serde_json::json!(quality_to_json_label(sample.quality)),
+                        );
+                    }
+                    serde_json::Value::Object(item)
+                })
+                .collect::<Vec<_>>();
+            payload.insert("points".to_string(), serde_json::Value::Array(points));
+        }
+    }
+
+    Ok(serde_json::to_vec(&serde_json::Value::Object(payload))?)
+}
+
+fn telemetry_value_to_json(value: &TelemetryValue) -> serde_json::Value {
+    match value {
+        TelemetryValue::Float(value) => serde_json::json!(value),
+        TelemetryValue::Integer(value) => serde_json::json!(value),
+        TelemetryValue::Boolean(value) => serde_json::json!(value),
+        TelemetryValue::Text(value) => serde_json::json!(value),
+    }
+}
+
+fn quality_to_json_label(quality: edge_core::DataQuality) -> &'static str {
+    match quality {
+        edge_core::DataQuality::Good => "good",
+        edge_core::DataQuality::Uncertain => "uncertain",
+        edge_core::DataQuality::Bad => "bad",
+    }
+}
+
+fn render_data_config_topic(package: &EdgeConfigPackage, data_config: &DataConfig) -> String {
+    data_config
+        .publish
+        .topic_template
+        .replace("{edge_id}", &package.edge_id)
+        .replace("{device_id}", &data_config.device_id)
+        .replace("{config_id}", &data_config.config_id)
+        .replace("{site}", "default")
 }
