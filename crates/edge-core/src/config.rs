@@ -11,6 +11,8 @@ pub struct EdgeConfigPackage {
     pub protocol_connections: Vec<ProtocolConnection>,
     #[serde(default)]
     pub mqtt_uplinks: Vec<MqttUplinkConfig>,
+    #[serde(default)]
+    pub data_configs: Vec<DataConfig>,
     pub point_mappings: Vec<TelemetryPointMapping>,
     pub collection_tasks: Vec<CollectionTask>,
     pub algorithms: Vec<AlgorithmSpec>,
@@ -25,6 +27,7 @@ impl EdgeConfigPackage {
             devices: Vec::new(),
             protocol_connections: Vec::new(),
             mqtt_uplinks: Vec::new(),
+            data_configs: Vec::new(),
             point_mappings: Vec::new(),
             collection_tasks: Vec::new(),
             algorithms: Vec::new(),
@@ -43,6 +46,11 @@ impl EdgeConfigPackage {
 
     pub fn with_mqtt_uplink(mut self, uplink: MqttUplinkConfig) -> Self {
         self.mqtt_uplinks.push(uplink);
+        self
+    }
+
+    pub fn with_data_config(mut self, data_config: DataConfig) -> Self {
+        self.data_configs.push(data_config);
         self
     }
 
@@ -194,6 +202,175 @@ impl MqttUplinkConfig {
         self.qos = qos;
         self
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DataConfig {
+    pub config_id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub device_id: String,
+    pub protocol_connection_id: String,
+    pub collection: DataConfigCollection,
+    pub points: Vec<DataConfigPoint>,
+    pub publish: DataConfigPublish,
+}
+
+impl DataConfig {
+    pub fn new(
+        config_id: impl Into<String>,
+        name: impl Into<String>,
+        device_id: impl Into<String>,
+        protocol_connection_id: impl Into<String>,
+        collection: DataConfigCollection,
+        publish: DataConfigPublish,
+    ) -> Self {
+        Self {
+            config_id: config_id.into(),
+            name: name.into(),
+            enabled: true,
+            device_id: device_id.into(),
+            protocol_connection_id: protocol_connection_id.into(),
+            collection,
+            points: Vec::new(),
+            publish,
+        }
+    }
+
+    pub fn with_point(mut self, point: DataConfigPoint) -> Self {
+        self.points.push(point);
+        self
+    }
+
+    pub fn disabled(mut self) -> Self {
+        self.enabled = false;
+        self
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DataConfigCollection {
+    pub period_ms: u64,
+    pub timeout_ms: u64,
+    pub retry_count: u32,
+}
+
+impl DataConfigCollection {
+    pub fn new(period_ms: u64) -> Self {
+        Self {
+            period_ms,
+            timeout_ms: 800,
+            retry_count: 2,
+        }
+    }
+
+    pub fn with_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.timeout_ms = timeout_ms;
+        self
+    }
+
+    pub fn with_retry_count(mut self, retry_count: u32) -> Self {
+        self.retry_count = retry_count;
+        self
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DataConfigPoint {
+    pub point_id: String,
+    pub semantic_id: String,
+    pub address: PointAddress,
+    pub value_type: TelemetryType,
+    pub unit: Option<String>,
+    pub json_field: String,
+}
+
+impl DataConfigPoint {
+    pub fn new(
+        point_id: impl Into<String>,
+        semantic_id: impl Into<String>,
+        address: PointAddress,
+        value_type: TelemetryType,
+        json_field: impl Into<String>,
+    ) -> Self {
+        Self {
+            point_id: point_id.into(),
+            semantic_id: semantic_id.into(),
+            address,
+            value_type,
+            unit: None,
+            json_field: json_field.into(),
+        }
+    }
+
+    pub fn with_unit(mut self, unit: impl Into<String>) -> Self {
+        self.unit = Some(unit.into());
+        self
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DataConfigPublish {
+    pub sink_id: String,
+    pub topic_template: String,
+    pub qos: u8,
+    pub payload: DataConfigPayload,
+}
+
+impl DataConfigPublish {
+    pub fn new(
+        sink_id: impl Into<String>,
+        topic_template: impl Into<String>,
+        payload: DataConfigPayload,
+    ) -> Self {
+        Self {
+            sink_id: sink_id.into(),
+            topic_template: topic_template.into(),
+            qos: 1,
+            payload,
+        }
+    }
+
+    pub fn with_qos(mut self, qos: u8) -> Self {
+        self.qos = qos;
+        self
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DataConfigPayload {
+    pub mode: DataConfigPayloadMode,
+    pub timestamp_field: String,
+    pub include_quality: bool,
+}
+
+impl DataConfigPayload {
+    pub fn object() -> Self {
+        Self {
+            mode: DataConfigPayloadMode::Object,
+            timestamp_field: "ts".to_string(),
+            include_quality: true,
+        }
+    }
+
+    pub fn array() -> Self {
+        Self {
+            mode: DataConfigPayloadMode::Array,
+            timestamp_field: "ts".to_string(),
+            include_quality: true,
+        }
+    }
+
+    pub fn without_quality(mut self) -> Self {
+        self.include_quality = false;
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DataConfigPayloadMode {
+    Object,
+    Array,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

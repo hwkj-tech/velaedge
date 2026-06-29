@@ -1,6 +1,7 @@
 use edge_core::{
     AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
     AlgorithmReportPolicy, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger, CollectionTask,
+    DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish,
     DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, NumberRange, PointAddress,
     ProtocolConnection, ProtocolType, SerialConnectionSettings, TelemetryPointMapping,
     TelemetryType, WindowAggregateFunction,
@@ -84,6 +85,53 @@ fn mqtt_is_modeled_as_northbound_uplink_not_device_protocol() {
         uplink.topic_template,
         "edge/{edge_id}/device/{device_id}/telemetry"
     );
+}
+
+#[test]
+fn config_package_contains_data_configs_for_grouped_mqtt_publishing() {
+    let package = EdgeConfigPackage::new("edge-dev", "v1")
+        .with_mqtt_uplink(MqttUplinkConfig::velamq(
+            "velamq-main",
+            "mqtts://velamq.local:8883",
+            "edge-dev-runtime",
+        ))
+        .with_data_config(
+            DataConfig::new(
+                "pump_status",
+                "泵运行状态上报",
+                "pump-1",
+                "modbus-line-a",
+                DataConfigCollection::new(1000),
+                DataConfigPublish::new(
+                    "velamq-main",
+                    "factory/{site}/pump/{device_id}/status",
+                    DataConfigPayload::object(),
+                ),
+            )
+            .with_point(DataConfigPoint::new(
+                "pressure",
+                "pump.pressure",
+                PointAddress::modbus_holding_register(40001),
+                TelemetryType::Float,
+                "pressure",
+            ))
+            .with_point(DataConfigPoint::new(
+                "running",
+                "pump.running",
+                PointAddress::modbus_holding_register(40002),
+                TelemetryType::Boolean,
+                "running",
+            )),
+        );
+
+    let json = serde_json::to_value(&package).unwrap();
+    assert_eq!(json["data_configs"][0]["config_id"], "pump_status");
+    assert_eq!(json["data_configs"][0]["collection"]["period_ms"], 1000);
+    assert_eq!(
+        json["data_configs"][0]["publish"]["topic_template"],
+        "factory/{site}/pump/{device_id}/status"
+    );
+    assert_eq!(json["data_configs"][0]["points"][0]["json_field"], "pressure");
 }
 
 #[test]
