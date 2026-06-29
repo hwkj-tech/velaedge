@@ -305,6 +305,24 @@ Replace the current split configuration experience with a primary `数据配置`
 - `数据配置`: one complete flow containing collection period, protocol point mappings, JSON payload fields, and MQTT topic.
 - `MQTT Sink`: reusable broker, TLS/auth, QoS, client id, reconnect/batch settings.
 
+Navigation should become:
+
+```text
+Dashboard
+边端管理
+设备模型
+协议连接
+数据配置
+MQTT Sink
+点位探测
+配置发布
+运行状态
+审计日志
+Agent 助手
+```
+
+`点位配置` and `采集任务` should no longer be primary navigation entries. Their concepts move into the data configuration editor. If advanced troubleshooting still needs them, they can be exposed later as read-only advanced views.
+
 The `数据配置` page should be list-first:
 
 - Config ID.
@@ -327,6 +345,22 @@ Clicking a data configuration opens a dialog editor. The editor should include:
 - Configure payload mode and quality inclusion.
 - Preview JSON payload from sample/latest values.
 - Save and validate.
+
+The editor should be a step-based dialog:
+
+1. `基础信息`: config id, name, enabled flag, edge, device, protocol connection.
+2. `采集设置`: collection period, timeout, retry count, failure policy.
+3. `点位映射`: editable table for point id, semantic id, address kind, address value, value type, unit, JSON field.
+4. `MQTT 上报`: sink, topic template, QoS, payload mode, timestamp field, include quality.
+5. `JSON 预览`: live object/array preview generated from the point table.
+
+The dialog footer should provide `上一步`, `下一步`, `保存`, and `保存并校验`. `保存` persists a draft data configuration. `保存并校验` persists and runs the same cloud validation rules used before release.
+
+Point discovery should integrate with data configurations:
+
+- The discovery page keeps the protocol scan workflow.
+- Discovery suggestions can be imported into an existing data configuration or used to create a new data configuration.
+- Importing suggestions fills the point mapping table and derives default JSON field names from point ids.
 
 Agent assistance can suggest data configurations from Modbus scan results, point names, and device models, but the user must save and publish the data configuration explicitly.
 
