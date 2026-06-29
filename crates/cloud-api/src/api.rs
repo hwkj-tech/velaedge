@@ -9,10 +9,11 @@ use cloud_control::{AuditAction, EdgeNode, ReleaseService, ReleaseStatus};
 use edge_core::{
     AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
     AlgorithmReportPolicy, AlgorithmRuntime, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger,
-    CollectionTask, DeviceSpec, DiscoveredPoint, DiscoveryReport, EdgeConfigPackage, EdgeHealth,
-    EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, MqttUplinkConfig, NumberRange, PointAddress,
-    PointMappingSuggestion, ProtocolConnection, ProtocolType, TelemetryPoint,
-    TelemetryPointMapping, TelemetryType,
+    CollectionTask, DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPayloadMode,
+    DataConfigPoint, DataConfigPublish, DeviceSpec, DiscoveredPoint, DiscoveryReport,
+    EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, MqttUplinkConfig,
+    NumberRange, PointAddress, PointMappingSuggestion, ProtocolConnection, ProtocolType,
+    TelemetryPoint, TelemetryPointMapping, TelemetryType,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -46,6 +47,14 @@ pub fn app(state: AppState) -> Router {
             put(save_edge_protocol_connection),
         )
         .route("/api/collection-tasks", get(collection_tasks))
+        .route(
+            "/api/edges/{edge_id}/data-configs",
+            get(edge_data_configs).post(create_edge_data_config),
+        )
+        .route(
+            "/api/edges/{edge_id}/data-configs/{config_id}",
+            put(save_edge_data_config).delete(delete_edge_data_config),
+        )
         .route(
             "/api/edges/{edge_id}/collection-tasks",
             get(edge_collection_tasks).post(create_edge_collection_task),
@@ -772,6 +781,146 @@ async fn collection_tasks(State(state): State<AppState>) -> Json<Vec<CollectionT
     rows.sort_by(|left, right| left.task_id.cmp(&right.task_id));
 
     Json(rows)
+}
+
+async fn edge_data_configs(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<Json<Vec<DataConfigResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let package = store
+        .latest_config_package_for_edge(&edge_id)
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+    let mut configs = package
+        .data_configs
+        .iter()
+        .map(|data_config| data_config_response(package, data_config))
+        .collect::<Vec<_>>();
+    configs.sort_by(|left, right| left.config_id.cmp(&right.config_id));
+
+    Ok(Json(configs))
+}
+
+async fn create_edge_data_config(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+    Json(request): Json<SaveDataConfigRequest>,
+) -> Result<(StatusCode, Json<DataConfigResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let (package, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut package = store
+            .latest_config_package_for_edge(&edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+        let data_config = build_data_config_from_request(&package, None, request)?;
+        if package
+            .data_configs
+            .iter()
+            .any(|candidate| candidate.config_id == data_config.config_id)
+        {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!("data config `{}` already exists", data_config.config_id),
+            ));
+        }
+
+        package.version = next_version(&package.version);
+        package.data_configs.push(data_config);
+        let response = data_config_response(
+            &package,
+            package
+                .data_configs
+                .last()
+                .expect("new data config exists"),
+        );
+        store.upsert_config_package(package.clone());
+        store.push_audit(AuditAction::UpdateConfig, edge_id);
+        (package, response)
+    };
+
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+async fn save_edge_data_config(
+    State(state): State<AppState>,
+    Path((edge_id, config_id)): Path<(String, String)>,
+    Json(request): Json<SaveDataConfigRequest>,
+) -> Result<Json<DataConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let (package, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut package = store
+            .latest_config_package_for_edge(&edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+        let config_index = package
+            .data_configs
+            .iter()
+            .position(|candidate| candidate.config_id == config_id)
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing data config"))?;
+
+        let data_config = build_data_config_from_request(&package, Some(&config_id), request)?;
+        if data_config.config_id != config_id
+            && package
+                .data_configs
+                .iter()
+                .any(|candidate| candidate.config_id == data_config.config_id)
+        {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!("data config `{}` already exists", data_config.config_id),
+            ));
+        }
+
+        package.version = next_version(&package.version);
+        package.data_configs[config_index] = data_config;
+        let response = data_config_response(&package, &package.data_configs[config_index]);
+        store.upsert_config_package(package.clone());
+        store.push_audit(AuditAction::UpdateConfig, edge_id);
+        (package, response)
+    };
+
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(Json(response))
+}
+
+async fn delete_edge_data_config(
+    State(state): State<AppState>,
+    Path((edge_id, config_id)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let package = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut package = store
+            .latest_config_package_for_edge(&edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+        let before = package.data_configs.len();
+        package
+            .data_configs
+            .retain(|candidate| candidate.config_id != config_id);
+        if package.data_configs.len() == before {
+            return Err(error(StatusCode::NOT_FOUND, "missing data config"));
+        }
+        package.version = next_version(&package.version);
+        store.upsert_config_package(package.clone());
+        store.push_audit(AuditAction::UpdateConfig, edge_id);
+        package
+    };
+
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn edge_collection_tasks(
@@ -1677,6 +1826,57 @@ pub struct CollectionTaskResponse {
     pub status: String,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataConfigResponse {
+    pub edge_id: String,
+    pub config_id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub device_id: String,
+    pub protocol_connection_id: String,
+    pub collection: DataConfigCollectionDto,
+    pub points: Vec<DataConfigPointDto>,
+    pub publish: DataConfigPublishDto,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataConfigCollectionDto {
+    pub period_ms: u64,
+    pub timeout_ms: u64,
+    pub retry_count: u32,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataConfigPointDto {
+    pub point_id: String,
+    pub semantic_id: String,
+    pub address_kind: String,
+    pub address_value: String,
+    pub value_type: String,
+    pub unit: Option<String>,
+    pub json_field: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataConfigPublishDto {
+    pub sink_id: String,
+    pub topic_template: String,
+    pub qos: u8,
+    pub payload: DataConfigPayloadDto,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataConfigPayloadDto {
+    pub mode: String,
+    pub timestamp_field: String,
+    pub include_quality: bool,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlgorithmResponse {
@@ -1840,6 +2040,19 @@ pub struct CreateCollectionTaskRequest {
     pub point_ids: Vec<String>,
     pub interval_ms: u64,
     pub enabled: Option<bool>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveDataConfigRequest {
+    pub config_id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub device_id: String,
+    pub protocol_connection_id: String,
+    pub collection: DataConfigCollectionDto,
+    pub points: Vec<DataConfigPointDto>,
+    pub publish: DataConfigPublishDto,
 }
 
 #[derive(Deserialize)]
@@ -2123,6 +2336,116 @@ fn build_collection_task_from_create_request(
     );
     task.enabled = request.enabled.unwrap_or(true);
     Ok(task)
+}
+
+fn build_data_config_from_request(
+    package: &EdgeConfigPackage,
+    existing_config_id: Option<&str>,
+    request: SaveDataConfigRequest,
+) -> Result<DataConfig, (StatusCode, Json<ErrorResponse>)> {
+    let config_id = non_empty_field(request.config_id, "configId")?;
+    if let Some(existing_config_id) = existing_config_id {
+        if config_id != existing_config_id
+            && package
+                .data_configs
+                .iter()
+                .any(|candidate| candidate.config_id == config_id)
+        {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!("data config `{config_id}` already exists"),
+            ));
+        }
+    }
+
+    let device_id = non_empty_field(request.device_id, "deviceId")?;
+    if !package
+        .devices
+        .iter()
+        .any(|device| device.device_id == device_id)
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("data config device `{device_id}` missing"),
+        ));
+    }
+
+    let protocol_connection_id =
+        non_empty_field(request.protocol_connection_id, "protocolConnectionId")?;
+    if !package
+        .protocol_connections
+        .iter()
+        .any(|connection| connection.connection_id == protocol_connection_id)
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("data config connection `{protocol_connection_id}` missing"),
+        ));
+    }
+
+    if !package
+        .mqtt_uplinks
+        .iter()
+        .any(|uplink| uplink.sink_id == request.publish.sink_id)
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("data config mqtt sink `{}` missing", request.publish.sink_id),
+        ));
+    }
+    if request.points.is_empty() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "data config must include at least one point",
+        ));
+    }
+
+    let collection = DataConfigCollection {
+        period_ms: request.collection.period_ms.max(100),
+        timeout_ms: request.collection.timeout_ms.max(1),
+        retry_count: request.collection.retry_count,
+    };
+    let publish = DataConfigPublish {
+        sink_id: non_empty_field(request.publish.sink_id, "sinkId")?,
+        topic_template: non_empty_field(request.publish.topic_template, "topicTemplate")?,
+        qos: request.publish.qos.min(2),
+        payload: DataConfigPayload {
+            mode: parse_data_config_payload_mode(&request.publish.payload.mode)?,
+            timestamp_field: non_empty_field(
+                request.publish.payload.timestamp_field,
+                "timestampField",
+            )?,
+            include_quality: request.publish.payload.include_quality,
+        },
+    };
+    let mut data_config = DataConfig::new(
+        config_id,
+        non_empty_field(request.name, "name")?,
+        device_id,
+        protocol_connection_id,
+        collection,
+        publish,
+    );
+    data_config.enabled = request.enabled;
+
+    for point in request.points {
+        let mut data_point = DataConfigPoint::new(
+            non_empty_field(point.point_id, "pointId")?,
+            non_empty_field(point.semantic_id, "semanticId")?,
+            PointAddress {
+                kind: non_empty_field(point.address_kind, "addressKind")?,
+                value: non_empty_field(point.address_value, "addressValue")?,
+            },
+            parse_telemetry_type(&point.value_type)?,
+            non_empty_field(point.json_field, "jsonField")?,
+        );
+        if let Some(unit) = non_empty_optional(point.unit) {
+            data_point = data_point.with_unit(unit);
+        }
+        data_config = data_config.with_point(data_point);
+    }
+
+    Ok(data_config)
 }
 
 fn build_algorithm_from_create_request(
@@ -2444,6 +2767,48 @@ fn collection_task_response(
     }
 }
 
+fn data_config_response(
+    package: &EdgeConfigPackage,
+    data_config: &DataConfig,
+) -> DataConfigResponse {
+    DataConfigResponse {
+        edge_id: package.edge_id.clone(),
+        config_id: data_config.config_id.clone(),
+        name: data_config.name.clone(),
+        enabled: data_config.enabled,
+        device_id: data_config.device_id.clone(),
+        protocol_connection_id: data_config.protocol_connection_id.clone(),
+        collection: DataConfigCollectionDto {
+            period_ms: data_config.collection.period_ms,
+            timeout_ms: data_config.collection.timeout_ms,
+            retry_count: data_config.collection.retry_count,
+        },
+        points: data_config
+            .points
+            .iter()
+            .map(|point| DataConfigPointDto {
+                point_id: point.point_id.clone(),
+                semantic_id: point.semantic_id.clone(),
+                address_kind: point.address.kind.clone(),
+                address_value: point.address.value.clone(),
+                value_type: format_telemetry_type(point.value_type),
+                unit: point.unit.clone(),
+                json_field: point.json_field.clone(),
+            })
+            .collect(),
+        publish: DataConfigPublishDto {
+            sink_id: data_config.publish.sink_id.clone(),
+            topic_template: data_config.publish.topic_template.clone(),
+            qos: data_config.publish.qos,
+            payload: DataConfigPayloadDto {
+                mode: format_data_config_payload_mode(data_config.publish.payload.mode),
+                timestamp_field: data_config.publish.payload.timestamp_field.clone(),
+                include_quality: data_config.publish.payload.include_quality,
+            },
+        },
+    }
+}
+
 fn protocol_connection_response(
     package: &EdgeConfigPackage,
     connection: &ProtocolConnection,
@@ -2700,6 +3065,27 @@ fn parse_telemetry_type(
         value => Err(error(
             StatusCode::BAD_REQUEST,
             format!("unsupported telemetry valueType: {value}"),
+        )),
+    }
+}
+
+fn format_data_config_payload_mode(mode: DataConfigPayloadMode) -> String {
+    match mode {
+        DataConfigPayloadMode::Object => "object",
+        DataConfigPayloadMode::Array => "array",
+    }
+    .to_string()
+}
+
+fn parse_data_config_payload_mode(
+    mode: &str,
+) -> Result<DataConfigPayloadMode, (StatusCode, Json<ErrorResponse>)> {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "object" => Ok(DataConfigPayloadMode::Object),
+        "array" => Ok(DataConfigPayloadMode::Array),
+        value => Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("unsupported data config payload mode: {value}"),
         )),
     }
 }

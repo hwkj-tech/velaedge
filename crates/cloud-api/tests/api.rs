@@ -157,6 +157,65 @@ async fn edge_point_mapping_save_updates_selected_edge_draft() {
 }
 
 #[tokio::test]
+async fn data_config_endpoints_create_and_list_edge_configs() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/data-configs")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "configId": "pump_status_extra",
+                        "name": "泵运行状态上报",
+                        "enabled": true,
+                        "deviceId": "pump-1",
+                        "protocolConnectionId": "modbus-line-a",
+                        "collection": {"periodMs": 1000, "timeoutMs": 800, "retryCount": 2},
+                        "points": [{
+                            "pointId": "pressure",
+                            "semanticId": "pump.pressure",
+                            "addressKind": "holding_register",
+                            "addressValue": "40001",
+                            "valueType": "float32",
+                            "unit": "MPa",
+                            "jsonField": "pressure"
+                        }],
+                        "publish": {
+                            "sinkId": "velamq-main",
+                            "topicTemplate": "factory/{edge_id}/{device_id}/status",
+                            "qos": 1,
+                            "payload": {"mode": "object", "timestampField": "ts", "includeQuality": true}
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/data-configs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let configs: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(configs
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|config| config["configId"] == "pump_status_extra"));
+}
+
+#[tokio::test]
 async fn releases_endpoint_returns_seeded_apply_results() {
     let response = app(AppState::default())
         .oneshot(Request::get("/api/releases").body(Body::empty()).unwrap())

@@ -2,8 +2,9 @@ use cloud_control::{
     AuditAction, CloudControlStore, ConfigValidator, ReleaseService, ReleaseStatus,
 };
 use edge_core::{
-    CollectionTask, DeviceInstance, DeviceSpec, EdgeConfigPackage, PointAddress,
-    ProtocolConnection, TelemetryPoint, TelemetryPointMapping, TelemetryType,
+    CollectionTask, DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPublish,
+    DeviceInstance, DeviceSpec, EdgeConfigPackage, PointAddress, ProtocolConnection,
+    TelemetryPoint, TelemetryPointMapping, TelemetryType,
 };
 
 fn valid_package() -> EdgeConfigPackage {
@@ -54,6 +55,32 @@ fn validator_rejects_point_mapping_with_missing_connection() {
 
     assert_eq!(errors.len(), 1);
     assert!(errors[0].message.contains("missing protocol connection"));
+}
+
+#[test]
+fn validator_rejects_data_config_with_missing_mqtt_sink() {
+    let package = EdgeConfigPackage::new("edge-dev", "v1")
+        .with_device(DeviceInstance::new("pump-1", "pump"))
+        .with_protocol_connection(ProtocolConnection::simulated("sim-line"))
+        .with_data_config(DataConfig::new(
+            "pump_status",
+            "泵运行状态上报",
+            "pump-1",
+            "sim-line",
+            DataConfigCollection::new(1000),
+            DataConfigPublish::new(
+                "missing-sink",
+                "factory/{edge_id}/{device_id}/status",
+                DataConfigPayload::object(),
+            ),
+        ));
+
+    let errors = ConfigValidator::validate_package(&package);
+
+    assert_eq!(errors.len(), 2);
+    assert!(errors
+        .iter()
+        .any(|error| error.message.contains("missing-sink")));
 }
 
 #[test]

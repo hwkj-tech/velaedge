@@ -5,11 +5,12 @@ use chrono::Utc;
 use cloud_control::{CloudControlStore, EdgeNode, ReleaseRecord, ReleaseService, SqliteCloudStore};
 use edge_core::{
     AlgorithmDsl, AlgorithmKind, AlgorithmRuntime, AlgorithmSpec, CloudSyncMetrics,
-    CollectionRuntimeMetrics, CollectionTask, CommandRisk, CommandSpec, DeviceInstance, DeviceSpec,
-    EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, EventSeverity,
-    EventSpec, LocalStoreMetrics, MqttUplinkConfig, NumberRange, PointAddress, ProtocolConnection,
-    ProtocolRuntimeMetrics, ProtocolType, SystemRuntimeMetrics, TelemetryPoint,
-    TelemetryPointMapping, TelemetryType,
+    CollectionRuntimeMetrics, CollectionTask, CommandRisk, CommandSpec, DataConfig,
+    DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish, DeviceInstance,
+    DeviceSpec, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot,
+    EventSeverity, EventSpec, LocalStoreMetrics, MqttUplinkConfig, NumberRange, PointAddress,
+    ProtocolConnection, ProtocolRuntimeMetrics, ProtocolType, SystemRuntimeMetrics,
+    TelemetryPoint, TelemetryPointMapping, TelemetryType,
 };
 
 #[derive(Clone)]
@@ -195,7 +196,41 @@ fn demo_store() -> CloudControlStore {
             "pump-1",
             vec!["pressure".to_string(), "running".to_string()],
             1000,
-        ));
+        ))
+        .with_data_config(
+            DataConfig::new(
+                "pump_status",
+                "泵状态上报",
+                "pump-1",
+                "modbus-line-a",
+                DataConfigCollection::new(1000),
+                DataConfigPublish::new(
+                    "velamq-main",
+                    "factory/{edge_id}/{device_id}/status",
+                    DataConfigPayload::object(),
+                ),
+            )
+            .with_point(
+                DataConfigPoint::new(
+                    "pressure",
+                    "pump.pressure",
+                    PointAddress::modbus_holding_register(40001),
+                    TelemetryType::Float,
+                    "pressure",
+                )
+                .with_unit("MPa"),
+            )
+            .with_point(DataConfigPoint::new(
+                "running",
+                "pump.running",
+                PointAddress {
+                    kind: "coil".to_string(),
+                    value: "00001".to_string(),
+                },
+                TelemetryType::Boolean,
+                "running",
+            )),
+        );
     package.device_models.push(pump_model.clone());
     package.algorithms.push(AlgorithmSpec {
         id: "pump-anomaly-v1".to_string(),
