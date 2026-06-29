@@ -1,6 +1,7 @@
 use edge_core::{
     AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
     AlgorithmReportPolicy, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger, CollectionTask,
+    DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish,
     DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, PointAddress, ProtocolConnection,
     SerialConnectionSettings, TelemetryPointMapping, TelemetryType, TelemetryValue,
 };
@@ -74,6 +75,40 @@ async fn configured_runtime_publishes_modbus_samples_to_mqtt_uplink() {
 }
 
 #[tokio::test]
+async fn configured_runtime_publishes_one_mqtt_message_per_data_config() {
+    let package = package_with_two_modbus_data_configs();
+    let bus_factory = ScriptedSerialBusFactory::new(vec![(
+        "meter-rs485-bus-1".to_string(),
+        ScriptedSerialBus::new(vec![
+            response(1, &[220]),
+            response(1, &[1]),
+            response(1, &[61]),
+            response(1, &[1290]),
+            response(1, &[19]),
+            response(1, &[7]),
+        ]),
+    )]);
+    let mut runtime = ConfiguredEdgeRuntime::new(package, bus_factory).unwrap();
+    let mut publisher = RecordingMqttPublisher::default();
+
+    let report = runtime
+        .collect_data_configs_once_and_publish_mqtt(&mut publisher)
+        .await
+        .unwrap();
+
+    assert_eq!(report.collection.samples_collected, 6);
+    assert_eq!(report.mqtt_messages_published, 2);
+    assert_eq!(publisher.messages().len(), 2);
+    assert_eq!(publisher.messages()[0].topic, "velamq/edge-dev/meter-1/status");
+    assert_eq!(publisher.messages()[1].topic, "velamq/edge-dev/meter-1/energy");
+
+    let status_payload: serde_json::Value =
+        serde_json::from_slice(&publisher.messages()[0].payload).unwrap();
+    assert_eq!(status_payload["values"]["voltage"], 220);
+    assert_eq!(status_payload["values"]["running"], true);
+}
+
+#[tokio::test]
 async fn configured_runtime_publishes_algorithm_virtual_points_to_mqtt_uplink() {
     let package = EdgeConfigPackage::new("edge-dev", "2026.06.28-dsl")
         .with_device(DeviceInstance::new("pump-1", "pump"))
@@ -132,4 +167,87 @@ fn response(slave_id: u8, registers: &[u16]) -> Vec<u8> {
     }
     append_modbus_rtu_crc(&mut frame);
     frame
+}
+
+fn package_with_two_modbus_data_configs() -> EdgeConfigPackage {
+    EdgeConfigPackage::new("edge-dev", "2026.06.30-data-config")
+        .with_device(DeviceInstance::new("meter-1", "power-meter"))
+        .with_protocol_connection(ProtocolConnection::modbus_rtu_serial(
+            "meter-rs485-bus-1",
+            SerialConnectionSettings::new("/dev/ttyUSB0", 9600),
+        ))
+        .with_mqtt_uplink(
+            MqttUplinkConfig::velamq("velamq-main", "mqtt://velamq.local:1883", "edge-dev")
+                .with_topic_template("unused/{edge_id}/{device_id}/{telemetry_id}"),
+        )
+        .with_data_config(
+            DataConfig::new(
+                "meter_status",
+                "电表状态",
+                "meter-1",
+                "meter-rs485-bus-1",
+                DataConfigCollection::new(1000),
+                DataConfigPublish::new(
+                    "velamq-main",
+                    "velamq/{edge_id}/{device_id}/status",
+                    DataConfigPayload::object(),
+                ),
+            )
+            .with_point(DataConfigPoint::new(
+                "voltage",
+                "meter.voltage",
+                PointAddress::modbus_holding_register(40001),
+                TelemetryType::Integer,
+                "voltage",
+            ))
+            .with_point(DataConfigPoint::new(
+                "running",
+                "meter.running",
+                PointAddress::modbus_holding_register(40002),
+                TelemetryType::Boolean,
+                "running",
+            ))
+            .with_point(DataConfigPoint::new(
+                "load",
+                "meter.load",
+                PointAddress::modbus_holding_register(40003),
+                TelemetryType::Integer,
+                "load",
+            )),
+        )
+        .with_data_config(
+            DataConfig::new(
+                "meter_energy",
+                "电表能耗",
+                "meter-1",
+                "meter-rs485-bus-1",
+                DataConfigCollection::new(5000),
+                DataConfigPublish::new(
+                    "velamq-main",
+                    "velamq/{edge_id}/{device_id}/energy",
+                    DataConfigPayload::object(),
+                ),
+            )
+            .with_point(DataConfigPoint::new(
+                "energy_total",
+                "meter.energy_total",
+                PointAddress::modbus_holding_register(40101),
+                TelemetryType::Integer,
+                "energyTotal",
+            ))
+            .with_point(DataConfigPoint::new(
+                "current_a",
+                "meter.current_a",
+                PointAddress::modbus_holding_register(40102),
+                TelemetryType::Integer,
+                "currentA",
+            ))
+            .with_point(DataConfigPoint::new(
+                "current_b",
+                "meter.current_b",
+                PointAddress::modbus_holding_register(40103),
+                TelemetryType::Integer,
+                "currentB",
+            )),
+        )
 }

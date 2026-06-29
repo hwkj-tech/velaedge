@@ -9,8 +9,9 @@ use edge_core::{
 
 use crate::CollectionSchedule;
 use crate::{
-    publish_mqtt_samples, AlgorithmEngine, CollectionReport, ConfiguredMqttCollectionReport,
-    ModbusRtuAdapter, MqttPublisher, ProtocolAdapter, SerialBusFactory,
+    publish_data_config_mqtt_samples, publish_mqtt_samples, AlgorithmEngine, CollectionReport,
+    ConfiguredMqttCollectionReport, ModbusRtuAdapter, MqttPublisher, ProtocolAdapter,
+    SerialBusFactory,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -191,6 +192,24 @@ where
         })
     }
 
+    pub async fn collect_data_configs_once_and_publish_mqtt<P>(
+        &mut self,
+        publisher: &mut P,
+    ) -> Result<ConfiguredMqttCollectionReport>
+    where
+        P: MqttPublisher + ?Sized,
+    {
+        let samples = self.collect_data_config_samples_once().await?;
+        let mqtt_messages_published =
+            publish_data_config_mqtt_samples(&self.package, &samples, publisher).await?;
+        Ok(ConfiguredMqttCollectionReport {
+            collection: CollectionReport {
+                samples_collected: samples.len(),
+            },
+            mqtt_messages_published,
+        })
+    }
+
     pub fn reported_version(&self) -> &str {
         &self.package.version
     }
@@ -219,6 +238,37 @@ where
             .cloned()
             .collect();
         let samples = self.collect_mappings(mappings).await?;
+        self.apply_algorithm_samples(samples)
+    }
+
+    async fn collect_data_config_samples_once(&mut self) -> Result<Vec<TelemetrySample>> {
+        let data_configs = self.package.data_configs.clone();
+        let mut samples = Vec::new();
+
+        for data_config in data_configs {
+            if !data_config.enabled {
+                continue;
+            }
+
+            let mappings = data_config
+                .points
+                .iter()
+                .map(|point| {
+                    TelemetryPointMapping::new(
+                        point.point_id.clone(),
+                        data_config.device_id.clone(),
+                        point.semantic_id.clone(),
+                        data_config.protocol_connection_id.clone(),
+                        point.address.clone(),
+                        point.value_type,
+                    )
+                    .with_interval_ms(data_config.collection.period_ms)
+                })
+                .collect::<Vec<_>>();
+
+            samples.append(&mut self.collect_mappings(mappings).await?);
+        }
+
         self.apply_algorithm_samples(samples)
     }
 
