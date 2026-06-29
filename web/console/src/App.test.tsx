@@ -421,7 +421,7 @@ describe('App cloud console write actions', () => {
     vi.mocked(runConfigValidation).mockResolvedValue({
       action: 'validate_config',
       details: ['协议连接 1 个'],
-      message: '草稿校验已完成',
+      message: '配置校验已完成',
       status: '已通过',
     });
     vi.mocked(runReleaseDiff).mockResolvedValue({
@@ -1011,6 +1011,75 @@ describe('App cloud console write actions', () => {
       });
     });
     expect(await screen.findByText('algorithm-draft-2')).toBeInTheDocument();
+  });
+
+  it('imports discovered point suggestions into selected edge point mappings', async () => {
+    const importSuggestions = [
+      {
+        pointId: 'meter_voltage_a',
+        deviceId: 'meter-1',
+        semanticId: 'electric.voltage_a',
+        protocolConnectionId: 'meter-rs485-bus-1',
+        address: 'holding_register:40001',
+        valueType: 'float32',
+        unit: 'V',
+        confidence: 0.82,
+        evidence: '旧候选连接不存在',
+      },
+      {
+        pointId: 'flow_rate',
+        deviceId: 'pump-1',
+        semanticId: 'pump.flow_rate',
+        protocolConnectionId: 'modbus-line-a',
+        address: 'holding_register:40003',
+        valueType: 'float32',
+        unit: 'm3/h',
+        confidence: 0.88,
+        evidence: '流量读数稳定',
+      },
+    ];
+    vi.mocked(fetchDiscoverySuggestions)
+      .mockResolvedValueOnce(discoverySuggestions)
+      .mockResolvedValueOnce(importSuggestions)
+      .mockResolvedValueOnce(importSuggestions);
+    vi.mocked(fetchEdgePointMappings)
+      .mockResolvedValueOnce([basePoint])
+      .mockResolvedValueOnce([basePoint])
+      .mockResolvedValueOnce([basePoint])
+      .mockResolvedValueOnce([
+        basePoint,
+        {
+          ...createdPoint,
+          pointId: 'flow_rate',
+          pointName: 'flow_rate',
+          semanticTelemetry: 'pump.flow_rate',
+        },
+      ]);
+
+    render(<App />);
+    await openEdgeConfiguration();
+
+    fireEvent.click(screen.getByRole('button', { name: /点位配置/ }));
+    expect(await screen.findByText('holding_register:40001')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '批量导入' }));
+
+    await waitFor(() => {
+      expect(fetchDiscoverySuggestions).toHaveBeenCalledWith('edge-dev');
+    });
+    await waitFor(() => {
+      expect(createPointMappingDraft).toHaveBeenCalledTimes(1);
+      expect(createPointMappingDraft).toHaveBeenCalledWith('edge-dev', {
+        addressKind: 'holding_register',
+        addressValue: '40003',
+        connectionId: 'modbus-line-a',
+        deviceId: 'pump-1',
+        pointId: 'flow_rate',
+        semanticId: 'pump.flow_rate',
+        unit: 'm3/h',
+        valueType: 'float32',
+      });
+    });
+    expect(await screen.findByText('已导入 1 个候选点位')).toBeInTheDocument();
   });
 
   it('runs validation and release diff actions through API clients', async () => {

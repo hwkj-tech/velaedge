@@ -400,16 +400,16 @@ fn simulated_discovery_report(edge_id: &str, connection_id: &str) -> DiscoveryRe
         )
         .with_suggestion(
             PointMappingSuggestion::new(
-                "meter_voltage_a",
-                "meter-1",
-                "electric.voltage_a",
+                "pump_flow_rate",
+                "pump-1",
+                "pump.flow_rate",
                 connection_id,
                 PointAddress::modbus_holding_register(40001),
                 TelemetryType::Float,
             )
-            .with_unit("V")
+            .with_unit("m3/h")
             .with_confidence(0.82)
-            .with_evidence("数值范围和波动特征符合 A 相电压"),
+            .with_evidence("数值范围和波动特征符合泵流量"),
         )
 }
 
@@ -2344,7 +2344,7 @@ fn config_validation_response(package: &EdgeConfigPackage) -> ManagementActionRe
             format!("采集任务 {} 个", package.collection_tasks.len()),
             format!("算法 {} 个", package.algorithms.len()),
         ],
-        message: "草稿校验已完成".to_string(),
+        message: "配置校验已完成".to_string(),
         status: "已通过".to_string(),
     }
 }

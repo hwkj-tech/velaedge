@@ -191,11 +191,53 @@ export default function App() {
   const handleImportPoints = async (
     edgeId: string,
   ): Promise<ManagementActionResponse> => {
-    await handleCreatePoint(edgeId);
+    const [suggestions, currentPoints, currentConnections] = await Promise.all([
+      fetchDiscoverySuggestions(edgeId),
+      fetchEdgePointMappings(edgeId),
+      fetchEdgeProtocolConnections(edgeId),
+    ]);
+    const existingPointIds = new Set(currentPoints.map((point) => point.pointId));
+    const knownDeviceIds = new Set(currentPoints.map((point) => point.deviceId));
+    const knownConnectionIds = new Set(
+      currentConnections.map((connection) => connection.connectionId),
+    );
+    const importableSuggestions = uniqueSuggestions(suggestions).filter(
+      (suggestion) =>
+        !existingPointIds.has(suggestion.pointId) &&
+        knownConnectionIds.has(suggestion.protocolConnectionId) &&
+        (knownDeviceIds.size === 0 || knownDeviceIds.has(suggestion.deviceId)),
+    );
+
+    if (importableSuggestions.length === 0) {
+      return {
+        action: 'import_points',
+        details: ['当前边端没有可导入的候选点位'],
+        message: '没有可导入的候选点位',
+        status: '未变更',
+      };
+    }
+
+    for (const suggestion of importableSuggestions) {
+      await createPointMappingDraft(edgeId, suggestionToPointRequest(suggestion));
+    }
+
+    const [nextPointMappings, nextReleaseList, nextSuggestions] = await Promise.all([
+      fetchEdgePointMappings(edgeId),
+      fetchReleaseList(),
+      fetchDiscoverySuggestions(edgeId),
+    ]);
+    setPointMappings(nextPointMappings);
+    setReleaseList(nextReleaseList);
+    setDiscoverySuggestions(nextSuggestions);
+    setSelectedPointEdgeId(edgeId);
+
     return {
       action: 'import_points',
-      details: ['已按云端模板导入 1 个点位配置'],
-      message: '批量导入已完成',
+      details: importableSuggestions.map(
+        (suggestion) =>
+          `${suggestion.pointId} -> ${suggestion.protocolConnectionId}:${suggestion.address}`,
+      ),
+      message: `已导入 ${importableSuggestions.length} 个候选点位`,
       status: '已完成',
     };
   };
@@ -575,6 +617,33 @@ async function loadConsoleSnapshot(): Promise<ConsoleSnapshot> {
     runtimeStatus,
     summary,
   };
+}
+
+function suggestionToPointRequest(
+  suggestion: PointMappingSuggestionResponse,
+): CreatePointMappingRequest {
+  const [addressKind, ...addressParts] = suggestion.address.split(':');
+  return {
+    addressKind: addressKind || 'simulated',
+    addressValue: addressParts.join(':') || suggestion.pointId,
+    connectionId: suggestion.protocolConnectionId,
+    deviceId: suggestion.deviceId,
+    pointId: suggestion.pointId,
+    semanticId: suggestion.semanticId,
+    unit: suggestion.unit,
+    valueType: suggestion.valueType,
+  };
+}
+
+function uniqueSuggestions(suggestions: PointMappingSuggestionResponse[]) {
+  const seen = new Set<string>();
+  return suggestions.filter((suggestion) => {
+    if (seen.has(suggestion.pointId)) {
+      return false;
+    }
+    seen.add(suggestion.pointId);
+    return true;
+  });
 }
 
 function renderPage(

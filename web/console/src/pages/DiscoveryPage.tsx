@@ -19,7 +19,7 @@ export function DiscoveryPage({
   selectedEdgeId?: string;
   suggestions?: PointMappingSuggestionResponse[];
 }) {
-  const [connectionId, setConnectionId] = useState('meter-rs485-bus-1');
+  const [connectionId, setConnectionId] = useState('modbus-line-a');
   const [addressRange, setAddressRange] = useState('holding_register:40001-40002');
   const [rows, setRows] = useState(suggestions);
   const [status, setStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');

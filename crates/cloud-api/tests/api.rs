@@ -1196,7 +1196,7 @@ async fn discovery_run_endpoint_returns_agent_mapping_suggestions() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let report: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(report["jobId"], "discovery-edge-dev-1");
-    assert_eq!(report["suggestions"][0]["pointId"], "meter_voltage_a");
+    assert_eq!(report["suggestions"][0]["pointId"], "pump_flow_rate");
     assert_eq!(report["suggestions"][0]["confidence"], 0.82);
 
     let response = router
@@ -1210,11 +1210,8 @@ async fn discovery_run_endpoint_returns_agent_mapping_suggestions() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let suggestions: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(suggestions[0]["semanticId"], "electric.voltage_a");
-    assert_eq!(
-        suggestions[0]["evidence"],
-        "数值范围和波动特征符合 A 相电压"
-    );
+    assert_eq!(suggestions[0]["semanticId"], "pump.flow_rate");
+    assert_eq!(suggestions[0]["evidence"], "数值范围和波动特征符合泵流量");
 }
 
 #[tokio::test]
