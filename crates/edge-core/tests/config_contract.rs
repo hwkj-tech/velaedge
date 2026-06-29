@@ -1,7 +1,9 @@
 use edge_core::{
-    CollectionTask, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, NumberRange, PointAddress,
+    AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
+    AlgorithmReportPolicy, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger, CollectionTask,
+    DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, NumberRange, PointAddress,
     ProtocolConnection, ProtocolType, SerialConnectionSettings, TelemetryPointMapping,
-    TelemetryType,
+    TelemetryType, WindowAggregateFunction,
 };
 
 #[test]
@@ -82,4 +84,50 @@ fn mqtt_is_modeled_as_northbound_uplink_not_device_protocol() {
         uplink.topic_template,
         "edge/{edge_id}/device/{device_id}/telemetry"
     );
+}
+
+#[test]
+fn algorithm_dsl_binds_point_inputs_and_virtual_outputs() {
+    let algorithm = AlgorithmSpec::dsl(
+        "pressure-window-summary",
+        "v1",
+        AlgorithmKind::WindowAggregate,
+        AlgorithmDsl {
+            inputs: vec![AlgorithmInputBinding::new("p", "pressure")],
+            trigger: AlgorithmTrigger::window(60_000),
+            steps: vec![AlgorithmStep::window_aggregate(
+                "p",
+                vec![WindowAggregateFunction::Avg {
+                    output: "pressure_avg".to_string(),
+                }],
+            )],
+            outputs: vec![AlgorithmOutput::virtual_point(
+                "pressure_avg",
+                "pressure.avg_1m",
+            )],
+            report: AlgorithmReportPolicy::new(AlgorithmReportMode::WindowResult, "velamq-main"),
+        },
+    );
+
+    let package = EdgeConfigPackage::new("edge-dev", "2026.06.28-001")
+        .with_device(DeviceInstance::new("pump-1", "pump"))
+        .with_protocol_connection(ProtocolConnection::simulated("sim-main"))
+        .with_point_mapping(TelemetryPointMapping::new(
+            "pressure",
+            "pump-1",
+            "pressure",
+            "sim-main",
+            PointAddress::simulated("pressure"),
+            TelemetryType::Float,
+        ))
+        .with_algorithm(algorithm.clone());
+
+    assert_eq!(package.algorithms[0].kind, AlgorithmKind::WindowAggregate);
+    assert_eq!(package.algorithms[0].inputs(), vec!["pressure"]);
+    assert_eq!(package.algorithms[0].outputs(), vec!["pressure.avg_1m"]);
+
+    let json = serde_json::to_value(&algorithm).expect("algorithm serializes");
+    assert_eq!(json["kind"], "WindowAggregate");
+    assert_eq!(json["dsl"]["inputs"][0]["pointId"], "pressure");
+    assert_eq!(json["dsl"]["outputs"][0]["pointId"], "pressure.avg_1m");
 }

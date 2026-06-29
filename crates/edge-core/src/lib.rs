@@ -20,9 +20,11 @@ pub use edgelink::{
 };
 pub use message::CloudEnvelope;
 pub use model::{
-    AlgorithmRuntime, AlgorithmSpec, CommandCandidate, CommandParameter, CommandRisk, CommandSpec,
-    DataQuality, DeviceSpec, EventSeverity, EventSpec, NumberRange, TelemetryPoint,
-    TelemetrySample, TelemetryType, TelemetryValue,
+    AlgorithmDsl, AlgorithmEventOutput, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput,
+    AlgorithmReportMode, AlgorithmReportPolicy, AlgorithmRuntime, AlgorithmSpec, AlgorithmStep,
+    AlgorithmTrigger, CommandCandidate, CommandParameter, CommandRisk, CommandSpec,
+    CompareOperator, DataQuality, DeviceSpec, EventSeverity, EventSpec, NumberRange,
+    TelemetryPoint, TelemetrySample, TelemetryType, TelemetryValue, WindowAggregateFunction,
 };
 pub use observability::{
     AlgorithmRuntimeMetrics, CloudSyncMetrics, CollectionRuntimeMetrics, EdgeHealth,

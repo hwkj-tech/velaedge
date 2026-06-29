@@ -408,12 +408,20 @@ describe('fetchEdgeAlgorithms', () => {
           edgeId: 'edge-dev',
           algorithmId: 'pump-anomaly-v1',
           version: '1.0.0',
-          runtime: 'Onnx',
-          kind: '异常检测',
-          inputIds: ['pressure', 'running'],
-          outputIds: ['pump.anomaly_score'],
-          inputs: 'pressure, running',
-          outputs: 'pump.anomaly_score',
+          algorithmKind: 'ChangeReport',
+          dsl: {
+            inputs: [{ alias: 'p', pointId: 'pressure' }],
+            trigger: { type: 'onSample' },
+            steps: [{ type: 'changeFilter', source: 'p', threshold: 0.2 }],
+            outputs: [{ name: 'reported', pointId: 'pressure.reported' }],
+            report: { mode: 'OnChange', sink: 'velamq-main' },
+          },
+          runtime: 'Rule',
+          kind: '变化上报',
+          inputIds: ['pressure'],
+          outputIds: ['pressure.reported'],
+          inputs: 'pressure',
+          outputs: 'pressure.reported',
           execution: '边端本地执行',
           validation: '已通过',
         },
@@ -426,8 +434,8 @@ describe('fetchEdgeAlgorithms', () => {
     );
 
     expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/algorithms');
-    expect(result[0].runtime).toBe('Onnx');
-    expect(result[0].inputIds).toEqual(['pressure', 'running']);
+    expect(result[0].algorithmKind).toBe('ChangeReport');
+    expect(result[0].inputIds).toEqual(['pressure']);
   });
 });
 
@@ -475,12 +483,26 @@ describe('saveEdgeAlgorithm', () => {
         edgeId: 'edge-dev',
         algorithmId: 'pump-anomaly-v1',
         version: '1.1.0',
-        runtime: 'Wasm',
-        kind: 'WASM 算法',
+        algorithmKind: 'WindowAggregate',
+        dsl: {
+          inputs: [{ alias: 'p', pointId: 'pressure' }],
+          trigger: { type: 'window', everyMs: 60000 },
+          steps: [
+            {
+              type: 'windowAggregate',
+              source: 'p',
+              functions: [{ function: 'avg', output: 'pressure_avg' }],
+            },
+          ],
+          outputs: [{ name: 'pressure_avg', pointId: 'pressure.avg_1m' }],
+          report: { mode: 'WindowResult', sink: 'velamq-main' },
+        },
+        runtime: 'Rule',
+        kind: '窗口聚合',
         inputIds: ['pressure'],
-        outputIds: ['pump.pressure_score'],
+        outputIds: ['pressure.avg_1m'],
         inputs: 'pressure',
-        outputs: 'pump.pressure_score',
+        outputs: 'pressure.avg_1m',
         execution: '边端本地执行',
         validation: '已通过',
       }),
@@ -491,9 +513,20 @@ describe('saveEdgeAlgorithm', () => {
       'pump-anomaly-v1',
       {
         version: '1.1.0',
-        runtime: 'Wasm',
-        inputIds: ['pressure'],
-        outputIds: ['pump.pressure_score'],
+        algorithmKind: 'WindowAggregate',
+        dsl: {
+          inputs: [{ alias: 'p', pointId: 'pressure' }],
+          trigger: { type: 'window', everyMs: 60000 },
+          steps: [
+            {
+              type: 'windowAggregate',
+              source: 'p',
+              functions: [{ function: 'avg', output: 'pressure_avg' }],
+            },
+          ],
+          outputs: [{ name: 'pressure_avg', pointId: 'pressure.avg_1m' }],
+          report: { mode: 'WindowResult', sink: 'velamq-main' },
+        },
       },
       fetchMock as unknown as typeof fetch,
     );
@@ -503,15 +536,26 @@ describe('saveEdgeAlgorithm', () => {
       {
         body: JSON.stringify({
           version: '1.1.0',
-          runtime: 'Wasm',
-          inputIds: ['pressure'],
-          outputIds: ['pump.pressure_score'],
+          algorithmKind: 'WindowAggregate',
+          dsl: {
+            inputs: [{ alias: 'p', pointId: 'pressure' }],
+            trigger: { type: 'window', everyMs: 60000 },
+            steps: [
+              {
+                type: 'windowAggregate',
+                source: 'p',
+                functions: [{ function: 'avg', output: 'pressure_avg' }],
+              },
+            ],
+            outputs: [{ name: 'pressure_avg', pointId: 'pressure.avg_1m' }],
+            report: { mode: 'WindowResult', sink: 'velamq-main' },
+          },
         }),
         headers: { 'content-type': 'application/json' },
         method: 'PUT',
       },
     );
-    expect(result.kind).toBe('WASM 算法');
+    expect(result.kind).toBe('窗口聚合');
   });
 });
 
@@ -701,10 +745,27 @@ describe('draft creation clients', () => {
         'edge-dev',
         {
           algorithmId: 'thermal-rule',
-          inputIds: ['pressure'],
-          outputIds: ['thermal.alert'],
-          runtime: 'Rule',
           version: '1.0.0',
+          algorithmKind: 'ThresholdRule',
+          dsl: {
+            inputs: [{ alias: 'p', pointId: 'pressure' }],
+            trigger: { type: 'onSample' },
+            steps: [
+              {
+                type: 'thresholdRule',
+                source: 'p',
+                operator: 'Gt',
+                threshold: 0.2,
+                event: {
+                  code: 'THERMAL_ALERT',
+                  severity: 'Warning',
+                  message: '算法阈值告警',
+                },
+              },
+            ],
+            outputs: [{ name: 'alert', pointId: 'thermal.alert' }],
+            report: { mode: 'EventOnly', sink: 'velamq-main' },
+          },
         },
         fetchMock as unknown as typeof fetch,
       ),
@@ -757,10 +818,27 @@ describe('draft creation clients', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/edges/edge-dev/algorithms', {
       body: JSON.stringify({
         algorithmId: 'thermal-rule',
-        inputIds: ['pressure'],
-        outputIds: ['thermal.alert'],
-        runtime: 'Rule',
         version: '1.0.0',
+        algorithmKind: 'ThresholdRule',
+        dsl: {
+          inputs: [{ alias: 'p', pointId: 'pressure' }],
+          trigger: { type: 'onSample' },
+          steps: [
+            {
+              type: 'thresholdRule',
+              source: 'p',
+              operator: 'Gt',
+              threshold: 0.2,
+              event: {
+                code: 'THERMAL_ALERT',
+                severity: 'Warning',
+                message: '算法阈值告警',
+              },
+            },
+          ],
+          outputs: [{ name: 'alert', pointId: 'thermal.alert' }],
+          report: { mode: 'EventOnly', sink: 'velamq-main' },
+        },
       }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',

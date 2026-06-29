@@ -1,7 +1,8 @@
 use edge_core::{
-    CollectionTask, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, PointAddress,
-    ProtocolConnection, SerialConnectionSettings, TelemetryPointMapping, TelemetryType,
-    TelemetryValue,
+    AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
+    AlgorithmReportPolicy, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger, CollectionTask,
+    DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, PointAddress, ProtocolConnection,
+    SerialConnectionSettings, TelemetryPointMapping, TelemetryType, TelemetryValue,
 };
 use edge_runtime::{
     append_modbus_rtu_crc, ConfiguredEdgeRuntime, RecordingMqttPublisher, ScriptedSerialBus,
@@ -69,6 +70,58 @@ async fn configured_runtime_publishes_modbus_samples_to_mqtt_uplink() {
     assert_eq!(
         publisher.messages()[0].topic,
         "velamq/edge-dev/meter-1/voltage"
+    );
+}
+
+#[tokio::test]
+async fn configured_runtime_publishes_algorithm_virtual_points_to_mqtt_uplink() {
+    let package = EdgeConfigPackage::new("edge-dev", "2026.06.28-dsl")
+        .with_device(DeviceInstance::new("pump-1", "pump"))
+        .with_protocol_connection(ProtocolConnection::simulated("sim-main"))
+        .with_mqtt_uplink(
+            MqttUplinkConfig::velamq("velamq-main", "mqtt://velamq.local:1883", "edge-dev")
+                .with_topic_template("velamq/{edge_id}/{device_id}/{telemetry_id}"),
+        )
+        .with_point_mapping(TelemetryPointMapping::new(
+            "pressure",
+            "pump-1",
+            "pressure",
+            "sim-main",
+            PointAddress::simulated("pressure"),
+            TelemetryType::Float,
+        ))
+        .with_collection_task(CollectionTask::interval(
+            "pump-main",
+            "pump-1",
+            vec!["pressure".to_string()],
+            1000,
+        ))
+        .with_algorithm(AlgorithmSpec::dsl(
+            "pressure-change",
+            "v1",
+            AlgorithmKind::ChangeReport,
+            AlgorithmDsl {
+                inputs: vec![AlgorithmInputBinding::new("p", "pressure")],
+                trigger: AlgorithmTrigger::on_sample(),
+                steps: vec![AlgorithmStep::change_filter("p", 0.1)],
+                outputs: vec![AlgorithmOutput::virtual_point("p", "pressure.reported")],
+                report: AlgorithmReportPolicy::new(AlgorithmReportMode::OnChange, "velamq-main"),
+            },
+        ));
+    let mut runtime = ConfiguredEdgeRuntime::new(package, ScriptedSerialBusFactory::new(vec![]))
+        .expect("runtime builds");
+    let mut publisher = RecordingMqttPublisher::default();
+
+    let report = runtime
+        .collect_once_and_publish_mqtt(&mut publisher)
+        .await
+        .unwrap();
+
+    assert_eq!(report.collection.samples_collected, 2);
+    assert_eq!(report.mqtt_messages_published, 2);
+    assert_eq!(
+        publisher.messages()[1].topic,
+        "velamq/edge-dev/pump-1/pressure.reported"
     );
 }
 

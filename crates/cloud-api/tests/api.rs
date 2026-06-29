@@ -862,9 +862,18 @@ async fn edge_algorithm_save_updates_selected_edge_draft() {
                 .body(Body::from(
                     json!({
                         "version": "1.1.0",
-                        "runtime": "Wasm",
-                        "inputIds": ["pressure"],
-                        "outputIds": ["pump.pressure_score"]
+                        "algorithmKind": "WindowAggregate",
+                        "dsl": {
+                            "inputs": [{"alias": "p", "pointId": "pressure"}],
+                            "trigger": {"type": "window", "everyMs": 60000},
+                            "steps": [{
+                                "type": "windowAggregate",
+                                "source": "p",
+                                "functions": [{"function": "avg", "output": "pressure_avg"}]
+                            }],
+                            "outputs": [{"name": "pressure_avg", "pointId": "pump.pressure.avg_1m"}],
+                            "report": {"mode": "WindowResult", "sink": "velamq-main"}
+                        }
                     })
                     .to_string(),
                 ))
@@ -880,10 +889,11 @@ async fn edge_algorithm_save_updates_selected_edge_draft() {
     assert_eq!(saved["edgeId"], "edge-dev");
     assert_eq!(saved["algorithmId"], "pump-anomaly-v1");
     assert_eq!(saved["version"], "1.1.0");
-    assert_eq!(saved["runtime"], "Wasm");
-    assert_eq!(saved["kind"], "WASM 算法");
+    assert_eq!(saved["algorithmKind"], "WindowAggregate");
+    assert_eq!(saved["kind"], "窗口聚合");
     assert_eq!(saved["inputIds"], json!(["pressure"]));
-    assert_eq!(saved["outputIds"], json!(["pump.pressure_score"]));
+    assert_eq!(saved["outputIds"], json!(["pump.pressure.avg_1m"]));
+    assert_eq!(saved["dsl"]["trigger"]["type"], "window");
 
     let response = router
         .oneshot(
@@ -899,14 +909,21 @@ async fn edge_algorithm_save_updates_selected_edge_draft() {
     let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(config["desiredVersion"], "2026.06.26-002");
     assert_eq!(config["package"]["algorithms"][0]["version"], "1.1.0");
-    assert_eq!(config["package"]["algorithms"][0]["runtime"], "Wasm");
+    assert_eq!(
+        config["package"]["algorithms"][0]["kind"],
+        "WindowAggregate"
+    );
     assert_eq!(
         config["package"]["algorithms"][0]["inputs"],
         json!(["pressure"])
     );
     assert_eq!(
         config["package"]["algorithms"][0]["outputs"],
-        json!(["pump.pressure_score"])
+        json!(["pump.pressure.avg_1m"])
+    );
+    assert_eq!(
+        config["package"]["algorithms"][0]["dsl"]["outputs"][0]["pointId"],
+        "pump.pressure.avg_1m"
     );
 }
 

@@ -1,7 +1,7 @@
 use cloud_control::{AgentCommandDraft, ConfigPackage, EdgeNode, FleetRegistry};
 use edge_core::{
-    AlgorithmRuntime, AlgorithmSpec, CommandParameter, CommandRisk, CommandSpec, DeviceSpec,
-    NumberRange, PolicyEngine, TelemetryType, TelemetryValue,
+    AlgorithmDsl, AlgorithmKind, AlgorithmRuntime, AlgorithmSpec, CommandParameter, CommandRisk,
+    CommandSpec, DeviceSpec, NumberRange, PolicyEngine, TelemetryType, TelemetryValue,
 };
 
 #[test]
@@ -20,6 +20,8 @@ fn config_package_targets_edge_and_versions_algorithms() {
     let algorithm = AlgorithmSpec {
         id: "pump-anomaly".to_string(),
         version: "1.0.0".to_string(),
+        kind: AlgorithmKind::ChangeReport,
+        dsl: AlgorithmDsl::default(),
         runtime: AlgorithmRuntime::Onnx,
         inputs: vec!["pressure".to_string()],
         outputs: vec!["anomaly_score".to_string()],

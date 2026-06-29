@@ -55,6 +55,11 @@ impl EdgeConfigPackage {
         self.collection_tasks.push(task);
         self
     }
+
+    pub fn with_algorithm(mut self, algorithm: AlgorithmSpec) -> Self {
+        self.algorithms.push(algorithm);
+        self
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

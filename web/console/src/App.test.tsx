@@ -270,17 +270,27 @@ const createdCollectionTask: CollectionTaskResponse = {
   taskId: 'task-draft-2',
 };
 
+const changeReportDsl = {
+  inputs: [{ alias: 'p', pointId: 'pressure' }],
+  trigger: { type: 'onSample' as const },
+  steps: [{ type: 'changeFilter' as const, source: 'p', threshold: 0.2 }],
+  outputs: [{ name: 'reported', pointId: 'pressure.reported' }],
+  report: { mode: 'OnChange' as const, sink: 'velamq-main' },
+};
+
 const algorithms: AlgorithmResponse[] = [
   {
     edgeId: 'edge-dev',
     algorithmId: 'pump-anomaly-v1',
     version: '1.0.0',
-    runtime: 'Onnx',
-    kind: '异常检测',
-    inputIds: ['pressure', 'running'],
-    outputIds: ['pump.anomaly_score'],
-    inputs: 'pressure, running',
-    outputs: 'pump.anomaly_score',
+    algorithmKind: 'ChangeReport',
+    dsl: changeReportDsl,
+    runtime: 'Rule',
+    kind: '变化上报',
+    inputIds: ['pressure'],
+    outputIds: ['pressure.reported'],
+    inputs: 'pressure',
+    outputs: 'pressure.reported',
     execution: '边端本地执行',
     validation: '已通过',
   },
@@ -289,10 +299,11 @@ const algorithms: AlgorithmResponse[] = [
 const createdAlgorithm: AlgorithmResponse = {
   ...algorithms[0],
   algorithmId: 'algorithm-draft-2',
+  algorithmKind: 'ThresholdRule',
   inputIds: ['pressure'],
   inputs: 'pressure',
-  outputIds: ['algorithm-draft-2.output'],
-  outputs: 'algorithm-draft-2.output',
+  outputIds: ['thermal.alert'],
+  outputs: 'thermal.alert',
   runtime: 'Rule',
 };
 
@@ -454,12 +465,26 @@ describe('App cloud console write actions', () => {
     });
     vi.mocked(saveEdgeAlgorithm).mockResolvedValue({
       ...algorithms[0],
+      algorithmKind: 'WindowAggregate',
+      dsl: {
+        inputs: [{ alias: 'p', pointId: 'pressure' }],
+        trigger: { type: 'window', everyMs: 60000 },
+        steps: [
+          {
+            type: 'windowAggregate',
+            source: 'p',
+            functions: [{ function: 'avg', output: 'avg_1m' }],
+          },
+        ],
+        outputs: [{ name: 'avg_1m', pointId: 'pressure.avg_1m' }],
+        report: { mode: 'WindowResult', sink: 'velamq-main' },
+      },
       inputIds: ['pressure'],
       inputs: 'pressure',
-      kind: 'WASM 算法',
-      outputIds: ['pump.pressure_score'],
-      outputs: 'pump.pressure_score',
-      runtime: 'Wasm',
+      kind: '窗口聚合',
+      outputIds: ['pressure.avg_1m'],
+      outputs: 'pressure.avg_1m',
+      runtime: 'Rule',
       version: '1.1.0',
     });
     vi.mocked(publishLatestRelease).mockResolvedValue(updatedReleaseList);
@@ -751,12 +776,26 @@ describe('App cloud console write actions', () => {
       .mockResolvedValueOnce([
         {
           ...algorithms[0],
+          algorithmKind: 'WindowAggregate',
+          dsl: {
+            inputs: [{ alias: 'p', pointId: 'pressure' }],
+            trigger: { type: 'window', everyMs: 60000 },
+            steps: [
+              {
+                type: 'windowAggregate',
+                source: 'p',
+                functions: [{ function: 'avg', output: 'avg_1m' }],
+              },
+            ],
+            outputs: [{ name: 'avg_1m', pointId: 'pressure.avg_1m' }],
+            report: { mode: 'WindowResult', sink: 'velamq-main' },
+          },
           inputIds: ['pressure'],
           inputs: 'pressure',
-          kind: 'WASM 算法',
-          outputIds: ['pump.pressure_score'],
-          outputs: 'pump.pressure_score',
-          runtime: 'Wasm',
+          kind: '窗口聚合',
+          outputIds: ['pressure.avg_1m'],
+          outputs: 'pressure.avg_1m',
+          runtime: 'Rule',
           version: '1.1.0',
         },
       ]);
@@ -765,27 +804,38 @@ describe('App cloud console write actions', () => {
 
     await openEdgeConfiguration();
     fireEvent.click(screen.getByRole('button', { name: /算法配置/ }));
-    expect(await screen.findByText('pressure, running')).toBeInTheDocument();
+    expect(await screen.findByText('pressure.reported')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('算法版本'), {
       target: { value: '1.1.0' },
     });
-    fireEvent.change(screen.getByLabelText('算法运行时'), {
-      target: { value: 'Wasm' },
+    fireEvent.change(screen.getByLabelText('算法类型'), {
+      target: { value: 'WindowAggregate' },
     });
     fireEvent.change(screen.getByLabelText('输入点位'), {
       target: { value: 'pressure' },
     });
-    fireEvent.change(screen.getByLabelText('输出变量'), {
-      target: { value: 'pump.pressure_score' },
+    fireEvent.change(screen.getByLabelText('输出虚拟点位'), {
+      target: { value: 'pressure.avg_1m' },
     });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     const expectedRequest: SaveAlgorithmRequest = {
       version: '1.1.0',
-      runtime: 'Wasm',
-      inputIds: ['pressure'],
-      outputIds: ['pump.pressure_score'],
+      algorithmKind: 'WindowAggregate',
+      dsl: {
+        inputs: [{ alias: 'p', pointId: 'pressure' }],
+        trigger: { type: 'window', everyMs: 60000 },
+        steps: [
+          {
+            type: 'windowAggregate',
+            source: 'p',
+            functions: [{ function: 'avg', output: 'avg_1m' }],
+          },
+        ],
+        outputs: [{ name: 'avg_1m', pointId: 'pressure.avg_1m' }],
+        report: { mode: 'WindowResult', sink: 'velamq-main' },
+      },
     };
     await waitFor(() => {
       expect(saveEdgeAlgorithm).toHaveBeenCalledWith(
@@ -794,7 +844,7 @@ describe('App cloud console write actions', () => {
         expectedRequest,
       );
     });
-    expect(await screen.findByText('pump.pressure_score')).toBeInTheDocument();
+    expect(await screen.findByText('pressure.avg_1m')).toBeInTheDocument();
     expect(screen.getByText('已保存')).toBeInTheDocument();
   });
 
@@ -924,20 +974,40 @@ describe('App cloud console write actions', () => {
     fireEvent.change(within(algorithmDialog).getByLabelText('新建 Algorithm ID'), {
       target: { value: 'thermal-rule' },
     });
-    fireEvent.change(within(algorithmDialog).getByLabelText('新建算法输入点位'), {
+    fireEvent.change(within(algorithmDialog).getByLabelText('算法类型'), {
+      target: { value: 'ThresholdRule' },
+    });
+    fireEvent.change(within(algorithmDialog).getByLabelText('输入点位'), {
       target: { value: 'pressure' },
     });
-    fireEvent.change(within(algorithmDialog).getByLabelText('新建算法输出变量'), {
+    fireEvent.change(within(algorithmDialog).getByLabelText('输出虚拟点位'), {
       target: { value: 'thermal.alert' },
     });
     fireEvent.click(within(algorithmDialog).getByRole('button', { name: '保存' }));
     await waitFor(() => {
       expect(createAlgorithmDraft).toHaveBeenCalledWith('edge-dev', {
         algorithmId: 'thermal-rule',
-        inputIds: ['pressure'],
-        outputIds: ['thermal.alert'],
-        runtime: 'Rule',
         version: '1.0.0',
+        algorithmKind: 'ThresholdRule',
+        dsl: {
+          inputs: [{ alias: 'p', pointId: 'pressure' }],
+          trigger: { type: 'onSample' },
+          steps: [
+            {
+              type: 'thresholdRule',
+              source: 'p',
+              operator: 'Gt',
+              threshold: 0.2,
+              event: {
+                code: 'THERMAL.ALERT_ALARM',
+                severity: 'Warning',
+                message: '算法阈值告警',
+              },
+            },
+          ],
+          outputs: [{ name: 'alert', pointId: 'thermal.alert' }],
+          report: { mode: 'EventOnly', sink: 'velamq-main' },
+        },
       });
     });
     expect(await screen.findByText('algorithm-draft-2')).toBeInTheDocument();

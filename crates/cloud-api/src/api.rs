@@ -7,10 +7,12 @@ use axum::{
 };
 use cloud_control::{AuditAction, EdgeNode, ReleaseService, ReleaseStatus};
 use edge_core::{
-    AlgorithmRuntime, AlgorithmSpec, CollectionTask, DeviceSpec, DiscoveredPoint, DiscoveryReport,
-    EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, MqttUplinkConfig,
-    NumberRange, PointAddress, PointMappingSuggestion, ProtocolConnection, ProtocolType,
-    TelemetryPoint, TelemetryPointMapping, TelemetryType,
+    AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
+    AlgorithmReportPolicy, AlgorithmRuntime, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger,
+    CollectionTask, DeviceSpec, DiscoveredPoint, DiscoveryReport, EdgeConfigPackage, EdgeHealth,
+    EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, MqttUplinkConfig, NumberRange, PointAddress,
+    PointMappingSuggestion, ProtocolConnection, ProtocolType, TelemetryPoint,
+    TelemetryPointMapping, TelemetryType,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -903,6 +905,8 @@ async fn create_edge_algorithm(
                 AlgorithmSpec {
                     id: algorithm_id.clone(),
                     version: "0.1.0".to_string(),
+                    kind: AlgorithmKind::ChangeReport,
+                    dsl: AlgorithmDsl::default(),
                     runtime: AlgorithmRuntime::Rule,
                     inputs: vec![input],
                     outputs: vec![format!("{algorithm_id}.output")],
@@ -1313,23 +1317,7 @@ async fn save_edge_algorithm(
             .cloned()
             .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
 
-        if request.input_ids.is_empty() {
-            return Err(error(
-                StatusCode::BAD_REQUEST,
-                "algorithm must include at least one input",
-            ));
-        }
-        if let Some(missing_point_id) = request.input_ids.iter().find(|point_id| {
-            !package
-                .point_mappings
-                .iter()
-                .any(|mapping| mapping.point_id == **point_id)
-        }) {
-            return Err(error(
-                StatusCode::BAD_REQUEST,
-                format!("algorithm input point `{missing_point_id}` missing"),
-            ));
-        }
+        validate_algorithm_dsl(&package, &request.dsl)?;
 
         let algorithm_index = package
             .algorithms
@@ -1341,9 +1329,11 @@ async fn save_edge_algorithm(
         {
             let algorithm = &mut package.algorithms[algorithm_index];
             algorithm.version = request.version;
-            algorithm.runtime = request.runtime;
-            algorithm.inputs = request.input_ids;
-            algorithm.outputs = request.output_ids;
+            algorithm.kind = request.algorithm_kind;
+            algorithm.dsl = request.dsl;
+            algorithm.runtime = AlgorithmRuntime::Rule;
+            algorithm.inputs = algorithm.inputs();
+            algorithm.outputs = algorithm.outputs();
         }
 
         let response = algorithm_response(&package, &package.algorithms[algorithm_index]);
@@ -1693,6 +1683,8 @@ pub struct AlgorithmResponse {
     pub edge_id: String,
     pub algorithm_id: String,
     pub version: String,
+    pub algorithm_kind: AlgorithmKind,
+    pub dsl: AlgorithmDsl,
     pub runtime: AlgorithmRuntime,
     pub kind: String,
     pub input_ids: Vec<String>,
@@ -1868,9 +1860,8 @@ pub struct CreateProtocolConnectionRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SaveAlgorithmRequest {
     pub version: String,
-    pub runtime: AlgorithmRuntime,
-    pub input_ids: Vec<String>,
-    pub output_ids: Vec<String>,
+    pub algorithm_kind: AlgorithmKind,
+    pub dsl: AlgorithmDsl,
 }
 
 #[derive(Deserialize)]
@@ -1878,8 +1869,12 @@ pub struct SaveAlgorithmRequest {
 pub struct CreateAlgorithmRequest {
     pub algorithm_id: Option<String>,
     pub version: Option<String>,
-    pub runtime: AlgorithmRuntime,
+    pub algorithm_kind: Option<AlgorithmKind>,
+    pub dsl: Option<AlgorithmDsl>,
+    pub runtime: Option<AlgorithmRuntime>,
+    #[serde(default)]
     pub input_ids: Vec<String>,
+    #[serde(default)]
     pub output_ids: Vec<String>,
 }
 
@@ -2134,23 +2129,17 @@ fn build_algorithm_from_create_request(
     package: &EdgeConfigPackage,
     request: CreateAlgorithmRequest,
 ) -> Result<AlgorithmSpec, (StatusCode, Json<ErrorResponse>)> {
-    if request.input_ids.is_empty() {
-        return Err(error(
-            StatusCode::BAD_REQUEST,
-            "algorithm must include at least one input",
-        ));
-    }
-    if let Some(missing_point_id) = request.input_ids.iter().find(|point_id| {
-        !package
-            .point_mappings
-            .iter()
-            .any(|mapping| mapping.point_id == **point_id)
-    }) {
-        return Err(error(
-            StatusCode::BAD_REQUEST,
-            format!("algorithm input point `{missing_point_id}` missing"),
-        ));
-    }
+    let algorithm_kind = request
+        .algorithm_kind
+        .unwrap_or(AlgorithmKind::ChangeReport);
+    let dsl = request.dsl.unwrap_or_else(|| {
+        legacy_algorithm_dsl(
+            request.input_ids.clone(),
+            request.output_ids.clone(),
+            AlgorithmReportMode::OnChange,
+        )
+    });
+    validate_algorithm_dsl(package, &dsl)?;
 
     let algorithm_id =
         non_empty_optional(request.algorithm_id).unwrap_or_else(|| next_algorithm_id(package));
@@ -2165,13 +2154,87 @@ fn build_algorithm_from_create_request(
         ));
     }
 
-    Ok(AlgorithmSpec {
-        id: algorithm_id,
-        version: non_empty_optional(request.version).unwrap_or_else(|| "0.1.0".to_string()),
-        runtime: request.runtime,
-        inputs: request.input_ids,
-        outputs: request.output_ids,
-    })
+    let version = non_empty_optional(request.version).unwrap_or_else(|| "0.1.0".to_string());
+    let mut algorithm = AlgorithmSpec::dsl(algorithm_id, version, algorithm_kind, dsl);
+    algorithm.runtime = request.runtime.unwrap_or(AlgorithmRuntime::Rule);
+    Ok(algorithm)
+}
+
+fn legacy_algorithm_dsl(
+    input_ids: Vec<String>,
+    output_ids: Vec<String>,
+    mode: AlgorithmReportMode,
+) -> AlgorithmDsl {
+    let first_input = input_ids
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "input".to_string());
+    let first_output = output_ids
+        .first()
+        .cloned()
+        .unwrap_or_else(|| format!("{first_input}.reported"));
+    AlgorithmDsl {
+        inputs: input_ids
+            .into_iter()
+            .enumerate()
+            .map(|(index, point_id)| AlgorithmInputBinding::new(format!("p{index}"), point_id))
+            .collect(),
+        trigger: AlgorithmTrigger::on_sample(),
+        steps: vec![AlgorithmStep::change_filter("p0", 0.0)],
+        outputs: vec![AlgorithmOutput::virtual_point("p0", first_output)],
+        report: AlgorithmReportPolicy::new(mode, "velamq-main"),
+    }
+}
+
+fn validate_algorithm_dsl(
+    package: &EdgeConfigPackage,
+    dsl: &AlgorithmDsl,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if dsl.inputs.is_empty() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "algorithm DSL must include at least one input point",
+        ));
+    }
+    if dsl.outputs.is_empty() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "algorithm DSL must include at least one output point",
+        ));
+    }
+    if let Some(input) = dsl.inputs.iter().find(|input| {
+        !package
+            .point_mappings
+            .iter()
+            .any(|mapping| mapping.point_id == input.point_id)
+    }) {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("algorithm input point `{}` missing", input.point_id),
+        ));
+    }
+    let aliases = dsl
+        .inputs
+        .iter()
+        .map(|input| input.alias.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for step in &dsl.steps {
+        let source = match step {
+            AlgorithmStep::ChangeFilter { source, .. }
+            | AlgorithmStep::WindowAggregate { source, .. }
+            | AlgorithmStep::ThresholdRule { source, .. } => Some(source.as_str()),
+            AlgorithmStep::Expression { .. } => None,
+        };
+        if let Some(source) = source {
+            if !aliases.contains(source) {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    format!("algorithm step references missing input alias `{source}`"),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn non_empty_field(
@@ -2406,12 +2469,14 @@ fn algorithm_response(package: &EdgeConfigPackage, algorithm: &AlgorithmSpec) ->
         edge_id: package.edge_id.clone(),
         algorithm_id: algorithm.id.clone(),
         version: algorithm.version.clone(),
+        algorithm_kind: algorithm.kind,
+        dsl: algorithm.dsl.clone(),
         runtime: algorithm.runtime,
-        kind: format_algorithm_runtime(algorithm.runtime),
-        input_ids: algorithm.inputs.clone(),
-        output_ids: algorithm.outputs.clone(),
-        inputs: algorithm.inputs.join(", "),
-        outputs: algorithm.outputs.join(", "),
+        kind: format_algorithm_kind(algorithm.kind),
+        input_ids: algorithm.inputs(),
+        output_ids: algorithm.outputs(),
+        inputs: algorithm.inputs().join(", "),
+        outputs: algorithm.outputs().join(", "),
         execution: "边端本地执行".to_string(),
         validation: "已通过".to_string(),
     }
@@ -2650,12 +2715,16 @@ fn parse_number_range(range: &str) -> Result<NumberRange, (StatusCode, Json<Erro
     Ok(NumberRange::new(min, max))
 }
 
-fn format_algorithm_runtime(runtime: AlgorithmRuntime) -> String {
-    match runtime {
-        AlgorithmRuntime::Rule => "规则算法",
-        AlgorithmRuntime::Wasm => "WASM 算法",
-        AlgorithmRuntime::Onnx => "异常检测",
-        AlgorithmRuntime::Python => "Python 算法",
+fn format_algorithm_kind(kind: AlgorithmKind) -> String {
+    match kind {
+        AlgorithmKind::ChangeReport => "变化上报",
+        AlgorithmKind::WindowAggregate => "窗口聚合",
+        AlgorithmKind::ExpressionAggregate => "表达式聚合",
+        AlgorithmKind::ThresholdRule => "阈值告警",
+        AlgorithmKind::DurationRule => "持续条件",
+        AlgorithmKind::Deadband => "死区过滤",
+        AlgorithmKind::Debounce => "去抖动",
+        AlgorithmKind::Statistics => "统计计算",
     }
     .to_string()
 }

@@ -1,5 +1,6 @@
 //! Deterministic edge runtime components.
 
+pub mod algorithm;
 pub mod capability;
 pub mod config;
 pub mod configured_runtime;
@@ -17,6 +18,7 @@ pub mod serial;
 pub mod storage;
 pub mod sync;
 
+pub use algorithm::{AlgorithmEngine, AlgorithmExecutionReport};
 pub use capability::RuntimeCapabilityConfig;
 pub use config::{AppliedEdgeConfig, ConfiguredMqttCollectionReport, ConfiguredSimulatedRuntime};
 pub use configured_runtime::{

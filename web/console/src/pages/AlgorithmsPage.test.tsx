@@ -7,12 +7,13 @@ describe('AlgorithmsPage', () => {
   it('shows algorithm table and editor fields', () => {
     render(<AlgorithmsPage selectedEdgeId="edge-dev" />);
 
-    expect(screen.getByText('算法模板')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '算法模板', level: 3 })).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: '选择算法 pump-anomaly-v1' }),
+      screen.getByRole('button', { name: '选择算法 pressure-change-report' }),
     ).toBeInTheDocument();
-    expect(screen.getByText('编辑算法 pump-anomaly-v1')).toBeInTheDocument();
-    expect(screen.getByLabelText('算法运行时')).toBeInTheDocument();
+    expect(screen.getByText('编辑算法 pressure-change-report')).toBeInTheDocument();
+    expect(screen.getByLabelText('算法类型')).toBeInTheDocument();
+    expect(screen.getByLabelText('DSL 预览')).toHaveTextContent('changeFilter');
   });
 
   it('saves edited algorithm drafts from the editor drawer', async () => {
@@ -22,29 +23,40 @@ describe('AlgorithmsPage', () => {
       <AlgorithmsPage selectedEdgeId="edge-dev" onSaveAlgorithm={onSaveAlgorithm} />,
     );
 
-    fireEvent.change(screen.getByLabelText('算法版本'), {
-      target: { value: '1.1.0' },
-    });
-    fireEvent.change(screen.getByLabelText('算法运行时'), {
-      target: { value: 'Wasm' },
+    fireEvent.change(screen.getByLabelText('算法类型'), {
+      target: { value: 'WindowAggregate' },
     });
     fireEvent.change(screen.getByLabelText('输入点位'), {
       target: { value: 'pressure' },
     });
-    fireEvent.change(screen.getByLabelText('输出变量'), {
-      target: { value: 'pump.pressure_score' },
+    fireEvent.change(screen.getByLabelText('输出虚拟点位'), {
+      target: { value: 'pressure.avg_1m' },
+    });
+    fireEvent.change(screen.getByLabelText('窗口大小(ms)'), {
+      target: { value: '60000' },
     });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
       expect(onSaveAlgorithm).toHaveBeenCalledWith(
         'edge-dev',
-        'pump-anomaly-v1',
+        'pressure-change-report',
         {
-          version: '1.1.0',
-          runtime: 'Wasm',
-          inputIds: ['pressure'],
-          outputIds: ['pump.pressure_score'],
+          version: '1.0.0',
+          algorithmKind: 'WindowAggregate',
+          dsl: {
+            inputs: [{ alias: 'p', pointId: 'pressure' }],
+            trigger: { type: 'window', everyMs: 60000 },
+            steps: [
+              {
+                type: 'windowAggregate',
+                source: 'p',
+                functions: [{ function: 'avg', output: 'avg_1m' }],
+              },
+            ],
+            outputs: [{ name: 'avg_1m', pointId: 'pressure.avg_1m' }],
+            report: { mode: 'WindowResult', sink: 'velamq-main' },
+          },
         },
       );
     });
@@ -65,7 +77,7 @@ describe('AlgorithmsPage', () => {
             status: '健康',
             resources: '18% / 42% / 61%',
             heartbeat: '8 秒前',
-            capabilities: ['algorithm:onnx'],
+            capabilities: ['algorithm:dsl'],
           },
           {
             edgeId: 'edge-prod',
@@ -75,7 +87,7 @@ describe('AlgorithmsPage', () => {
             status: '健康',
             resources: '22% / 48% / 66%',
             heartbeat: '6 秒前',
-            capabilities: ['algorithm:wasm'],
+            capabilities: ['algorithm:dsl'],
           },
         ]}
         selectedEdgeId="edge-dev"
@@ -127,23 +139,43 @@ describe('AlgorithmsPage', () => {
     fireEvent.change(within(dialog).getByLabelText('新建 Algorithm ID'), {
       target: { value: 'thermal-rule' },
     });
-    fireEvent.change(within(dialog).getByLabelText('新建算法版本'), {
+    fireEvent.change(within(dialog).getByLabelText('算法版本'), {
       target: { value: '1.0.0' },
     });
-    fireEvent.change(within(dialog).getByLabelText('新建算法输入点位'), {
+    fireEvent.change(within(dialog).getByLabelText('算法类型'), {
+      target: { value: 'ThresholdRule' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('输入点位'), {
       target: { value: 'pressure' },
     });
-    fireEvent.change(within(dialog).getByLabelText('新建算法输出变量'), {
+    fireEvent.change(within(dialog).getByLabelText('输出虚拟点位'), {
       target: { value: 'thermal.alert' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
     await waitFor(() => {
       expect(onCreateAlgorithm).toHaveBeenCalledWith('edge-dev', {
         algorithmId: 'thermal-rule',
-        inputIds: ['pressure'],
-        outputIds: ['thermal.alert'],
-        runtime: 'Rule',
         version: '1.0.0',
+        algorithmKind: 'ThresholdRule',
+        dsl: {
+          inputs: [{ alias: 'p', pointId: 'pressure' }],
+          trigger: { type: 'onSample' },
+          steps: [
+            {
+              type: 'thresholdRule',
+              source: 'p',
+              operator: 'Gt',
+              threshold: 0.2,
+              event: {
+                code: 'THERMAL.ALERT_ALARM',
+                severity: 'Warning',
+                message: '算法阈值告警',
+              },
+            },
+          ],
+          outputs: [{ name: 'alert', pointId: 'thermal.alert' }],
+          report: { mode: 'EventOnly', sink: 'velamq-main' },
+        },
       });
     });
     expect(await screen.findByText('已创建算法 algorithm-draft-2')).toBeInTheDocument();

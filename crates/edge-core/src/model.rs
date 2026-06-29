@@ -280,9 +280,64 @@ pub enum EventSeverity {
 pub struct AlgorithmSpec {
     pub id: String,
     pub version: String,
+    #[serde(default = "default_algorithm_kind")]
+    pub kind: AlgorithmKind,
+    #[serde(default)]
+    pub dsl: AlgorithmDsl,
     pub runtime: AlgorithmRuntime,
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
+}
+
+impl AlgorithmSpec {
+    pub fn dsl(
+        id: impl Into<String>,
+        version: impl Into<String>,
+        kind: AlgorithmKind,
+        dsl: AlgorithmDsl,
+    ) -> Self {
+        let inputs = dsl
+            .inputs
+            .iter()
+            .map(|input| input.point_id.clone())
+            .collect();
+        let outputs = dsl
+            .outputs
+            .iter()
+            .map(|output| output.point_id.clone())
+            .collect();
+        Self {
+            id: id.into(),
+            version: version.into(),
+            kind,
+            dsl,
+            runtime: AlgorithmRuntime::Rule,
+            inputs,
+            outputs,
+        }
+    }
+
+    pub fn inputs(&self) -> Vec<String> {
+        if self.dsl.inputs.is_empty() {
+            return self.inputs.clone();
+        }
+        self.dsl
+            .inputs
+            .iter()
+            .map(|input| input.point_id.clone())
+            .collect()
+    }
+
+    pub fn outputs(&self) -> Vec<String> {
+        if self.dsl.outputs.is_empty() {
+            return self.outputs.clone();
+        }
+        self.dsl
+            .outputs
+            .iter()
+            .map(|output| output.point_id.clone())
+            .collect()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -291,4 +346,197 @@ pub enum AlgorithmRuntime {
     Wasm,
     Onnx,
     Python,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AlgorithmKind {
+    ChangeReport,
+    WindowAggregate,
+    ExpressionAggregate,
+    ThresholdRule,
+    DurationRule,
+    Deadband,
+    Debounce,
+    Statistics,
+}
+
+fn default_algorithm_kind() -> AlgorithmKind {
+    AlgorithmKind::ChangeReport
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct AlgorithmDsl {
+    #[serde(default)]
+    pub inputs: Vec<AlgorithmInputBinding>,
+    pub trigger: AlgorithmTrigger,
+    #[serde(default)]
+    pub steps: Vec<AlgorithmStep>,
+    #[serde(default)]
+    pub outputs: Vec<AlgorithmOutput>,
+    pub report: AlgorithmReportPolicy,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AlgorithmInputBinding {
+    pub alias: String,
+    pub point_id: String,
+}
+
+impl AlgorithmInputBinding {
+    pub fn new(alias: impl Into<String>, point_id: impl Into<String>) -> Self {
+        Self {
+            alias: alias.into(),
+            point_id: point_id.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum AlgorithmTrigger {
+    OnSample,
+    OnAnyInput,
+    Window {
+        #[serde(rename = "everyMs")]
+        every_ms: u64,
+    },
+}
+
+impl Default for AlgorithmTrigger {
+    fn default() -> Self {
+        Self::OnSample
+    }
+}
+
+impl AlgorithmTrigger {
+    pub fn on_sample() -> Self {
+        Self::OnSample
+    }
+
+    pub fn on_any_input() -> Self {
+        Self::OnAnyInput
+    }
+
+    pub fn window(every_ms: u64) -> Self {
+        Self::Window { every_ms }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum AlgorithmStep {
+    ChangeFilter {
+        source: String,
+        threshold: f64,
+    },
+    WindowAggregate {
+        source: String,
+        functions: Vec<WindowAggregateFunction>,
+    },
+    Expression {
+        output: String,
+        expr: String,
+    },
+    ThresholdRule {
+        source: String,
+        operator: CompareOperator,
+        threshold: f64,
+        event: AlgorithmEventOutput,
+    },
+}
+
+impl AlgorithmStep {
+    pub fn change_filter(source: impl Into<String>, threshold: f64) -> Self {
+        Self::ChangeFilter {
+            source: source.into(),
+            threshold,
+        }
+    }
+
+    pub fn window_aggregate(
+        source: impl Into<String>,
+        functions: Vec<WindowAggregateFunction>,
+    ) -> Self {
+        Self::WindowAggregate {
+            source: source.into(),
+            functions,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "function", rename_all = "camelCase")]
+pub enum WindowAggregateFunction {
+    Avg { output: String },
+    Min { output: String },
+    Max { output: String },
+    Sum { output: String },
+    Count { output: String },
+    First { output: String },
+    Last { output: String },
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CompareOperator {
+    Gt,
+    Gte,
+    Lt,
+    Lte,
+    Eq,
+    Ne,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AlgorithmEventOutput {
+    pub code: String,
+    pub severity: EventSeverity,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AlgorithmOutput {
+    pub name: String,
+    pub point_id: String,
+}
+
+impl AlgorithmOutput {
+    pub fn virtual_point(name: impl Into<String>, point_id: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            point_id: point_id.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AlgorithmReportPolicy {
+    pub mode: AlgorithmReportMode,
+    pub sink: String,
+}
+
+impl Default for AlgorithmReportPolicy {
+    fn default() -> Self {
+        Self::new(AlgorithmReportMode::OnOutput, "velamq-main")
+    }
+}
+
+impl AlgorithmReportPolicy {
+    pub fn new(mode: AlgorithmReportMode, sink: impl Into<String>) -> Self {
+        Self {
+            mode,
+            sink: sink.into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AlgorithmReportMode {
+    OnOutput,
+    OnChange,
+    WindowResult,
+    EventOnly,
 }

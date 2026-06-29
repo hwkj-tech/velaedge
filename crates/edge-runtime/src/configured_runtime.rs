@@ -9,8 +9,8 @@ use edge_core::{
 
 use crate::CollectionSchedule;
 use crate::{
-    publish_mqtt_samples, CollectionReport, ConfiguredMqttCollectionReport, ModbusRtuAdapter,
-    MqttPublisher, ProtocolAdapter, SerialBusFactory,
+    publish_mqtt_samples, AlgorithmEngine, CollectionReport, ConfiguredMqttCollectionReport,
+    ModbusRtuAdapter, MqttPublisher, ProtocolAdapter, SerialBusFactory,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +52,7 @@ pub struct ConfiguredEdgeRuntime<F> {
     package: EdgeConfigPackage,
     serial_bus_factory: F,
     shadows: BTreeMap<String, DeviceShadow>,
+    algorithm_engine: AlgorithmEngine,
 }
 
 impl<F> ConfiguredEdgeRuntime<F>
@@ -74,10 +75,13 @@ where
             );
         }
 
+        let algorithm_engine = AlgorithmEngine::new(package.algorithms.clone())?;
+
         Ok(Self {
             package,
             serial_bus_factory,
             shadows,
+            algorithm_engine,
         })
     }
 
@@ -197,7 +201,8 @@ where
 
     async fn collect_samples_once(&mut self) -> Result<Vec<TelemetrySample>> {
         let mappings = self.package.point_mappings.clone();
-        self.collect_mappings(mappings).await
+        let samples = self.collect_mappings(mappings).await?;
+        self.apply_algorithm_samples(samples)
     }
 
     async fn collect_samples_for_task(
@@ -213,7 +218,8 @@ where
             })
             .cloned()
             .collect();
-        self.collect_mappings(mappings).await
+        let samples = self.collect_mappings(mappings).await?;
+        self.apply_algorithm_samples(samples)
     }
 
     async fn collect_mappings(
@@ -245,6 +251,20 @@ where
             samples.append(&mut connection_samples);
         }
 
+        Ok(samples)
+    }
+
+    fn apply_algorithm_samples(
+        &mut self,
+        mut samples: Vec<TelemetrySample>,
+    ) -> Result<Vec<TelemetrySample>> {
+        let mut algorithm_report = self.algorithm_engine.apply_samples(&samples)?;
+        for sample in &algorithm_report.samples {
+            if let Some(shadow) = self.shadows.get_mut(&sample.device_id) {
+                shadow.update(sample.clone());
+            }
+        }
+        samples.append(&mut algorithm_report.samples);
         Ok(samples)
     }
 }

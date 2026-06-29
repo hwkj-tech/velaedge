@@ -4,11 +4,12 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use cloud_control::{CloudControlStore, EdgeNode, ReleaseRecord, ReleaseService, SqliteCloudStore};
 use edge_core::{
-    AlgorithmRuntime, AlgorithmSpec, CloudSyncMetrics, CollectionRuntimeMetrics, CollectionTask,
-    CommandRisk, CommandSpec, DeviceInstance, DeviceSpec, EdgeConfigPackage, EdgeHealth,
-    EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, EventSeverity, EventSpec, LocalStoreMetrics,
-    MqttUplinkConfig, NumberRange, PointAddress, ProtocolConnection, ProtocolRuntimeMetrics,
-    ProtocolType, SystemRuntimeMetrics, TelemetryPoint, TelemetryPointMapping, TelemetryType,
+    AlgorithmDsl, AlgorithmKind, AlgorithmRuntime, AlgorithmSpec, CloudSyncMetrics,
+    CollectionRuntimeMetrics, CollectionTask, CommandRisk, CommandSpec, DeviceInstance, DeviceSpec,
+    EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, EventSeverity,
+    EventSpec, LocalStoreMetrics, MqttUplinkConfig, NumberRange, PointAddress, ProtocolConnection,
+    ProtocolRuntimeMetrics, ProtocolType, SystemRuntimeMetrics, TelemetryPoint,
+    TelemetryPointMapping, TelemetryType,
 };
 
 #[derive(Clone)]
@@ -199,6 +200,8 @@ fn demo_store() -> CloudControlStore {
     package.algorithms.push(AlgorithmSpec {
         id: "pump-anomaly-v1".to_string(),
         version: "1.0.0".to_string(),
+        kind: AlgorithmKind::ChangeReport,
+        dsl: AlgorithmDsl::default(),
         runtime: AlgorithmRuntime::Onnx,
         inputs: vec!["pressure".to_string(), "running".to_string()],
         outputs: vec!["pump.anomaly_score".to_string()],

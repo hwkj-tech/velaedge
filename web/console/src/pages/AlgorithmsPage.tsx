@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import { Plus, ShieldCheck, X } from 'lucide-react';
 
 import type {
+  AlgorithmDsl,
+  AlgorithmKind,
+  AlgorithmReportPolicy,
   AlgorithmResponse,
   CreateAlgorithmRequest,
   EdgeNodeResponse,
@@ -11,17 +14,27 @@ import type {
 import { Drawer } from '../components/Drawer';
 import './PointMappingsPage.css';
 
+const fallbackDsl: AlgorithmDsl = {
+  inputs: [{ alias: 'p', pointId: 'pressure' }],
+  trigger: { type: 'onSample' },
+  steps: [{ type: 'changeFilter', source: 'p', threshold: 0.2 }],
+  outputs: [{ name: 'p', pointId: 'pressure.reported' }],
+  report: { mode: 'OnChange', sink: 'velamq-main' },
+};
+
 const fallbackAlgorithms: AlgorithmResponse[] = [
   {
     edgeId: 'edge-dev',
-    algorithmId: 'pump-anomaly-v1',
+    algorithmId: 'pressure-change-report',
     version: '1.0.0',
-    runtime: 'Onnx',
-    kind: '异常检测',
-    inputIds: ['pressure', 'running'],
-    outputIds: ['pump.anomaly_score'],
-    inputs: 'pressure, running',
-    outputs: 'pump.anomaly_score',
+    algorithmKind: 'ChangeReport',
+    dsl: fallbackDsl,
+    runtime: 'Rule',
+    kind: '变化上报',
+    inputIds: ['pressure'],
+    outputIds: ['pressure.reported'],
+    inputs: 'pressure',
+    outputs: 'pressure.reported',
     execution: '边端本地执行',
     validation: '已通过',
   },
@@ -36,15 +49,26 @@ const fallbackEdges: EdgeNodeResponse[] = [
     status: '健康',
     resources: '18.5% / 42% / 61%',
     heartbeat: '8 秒前',
-    capabilities: ['algorithm:onnx'],
+    capabilities: ['algorithm:dsl'],
   },
 ];
 
-const runtimeOptions = [
-  ['Rule', '规则算法'],
-  ['Wasm', 'WASM 算法'],
-  ['Onnx', 'ONNX 模型'],
-  ['Python', 'Python 算法'],
+const algorithmKindOptions: Array<[AlgorithmKind, string]> = [
+  ['ChangeReport', '变化上报'],
+  ['WindowAggregate', '窗口聚合'],
+  ['ExpressionAggregate', '表达式聚合'],
+  ['ThresholdRule', '阈值告警'],
+  ['DurationRule', '持续条件'],
+  ['Deadband', '死区过滤'],
+  ['Debounce', '去抖动'],
+  ['Statistics', '统计计算'],
+];
+
+const reportModes: Array<[AlgorithmReportPolicy['mode'], string]> = [
+  ['OnOutput', '每次输出'],
+  ['OnChange', '变化上报'],
+  ['WindowResult', '窗口结果'],
+  ['EventOnly', '仅事件'],
 ];
 
 export function AlgorithmsPage({
@@ -88,19 +112,26 @@ export function AlgorithmsPage({
   );
   const [toolbarMessage, setToolbarMessage] = useState('');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [createForm, setCreateForm] = useState({
-    algorithmId: '',
-    inputIds: fallbackAlgorithms[0].inputIds.join(', '),
-    outputIds: 'algorithm.output',
-    runtime: 'Rule',
+  const [createForm, setCreateForm] = useState<EditorForm>(() => ({
+    algorithmKind: 'ChangeReport',
+    expression: 'a + b + c',
+    inputPoints: fallbackAlgorithms[0].inputIds.join(', '),
+    outputPoint: 'algorithm.output',
+    reportMode: 'OnChange',
+    sink: 'velamq-main',
+    threshold: '0.2',
     version: '1.0.0',
-  });
+    windowMs: '60000',
+  }));
+  const [createAlgorithmId, setCreateAlgorithmId] = useState('');
   const [actionState, setActionState] = useState<
     'idle' | 'assessing' | 'creating'
   >('idle');
   const isConfigureMode = mode === 'configure';
   const activeEdge =
     edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
+  const dslPreview = useMemo(() => buildAlgorithmDsl(form), [form]);
+  const createDslPreview = useMemo(() => buildAlgorithmDsl(createForm), [createForm]);
 
   useEffect(() => {
     setForm(algorithmToEditorForm(selectedAlgorithm));
@@ -161,11 +192,8 @@ export function AlgorithmsPage({
 
     try {
       const created = await onCreateAlgorithm?.(selectedEdgeId, {
-        algorithmId: createForm.algorithmId.trim(),
-        inputIds: splitCsv(createForm.inputIds),
-        outputIds: splitCsv(createForm.outputIds),
-        runtime: createForm.runtime,
-        version: createForm.version.trim(),
+        ...formToSaveRequest(createForm),
+        algorithmId: createAlgorithmId.trim(),
       });
       setToolbarMessage(
         created ? `已创建算法 ${created.algorithmId}` : '已创建算法',
@@ -184,7 +212,7 @@ export function AlgorithmsPage({
         <div>
           <h2>算法配置</h2>
           <p>
-            管理通用边缘算法模板、输入点位和本地执行策略。Agent 可生成草稿，但发布前必须人工复核。
+            使用点位驱动 DSL 配置边端数据处理、虚拟点位和 MQTT 上报策略。
           </p>
         </div>
         <div className="toolbar">
@@ -239,122 +267,18 @@ export function AlgorithmsPage({
       </section>
 
       {createDialogOpen ? (
-        <div className="modal-backdrop">
-          <form
-            aria-labelledby="algorithm-create-dialog-title"
-            className="modal-panel"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void handleCreateAlgorithm();
-            }}
-            role="dialog"
-          >
-            <div className="modal-header">
-              <h3 id="algorithm-create-dialog-title">新建算法</h3>
-              <button
-                aria-label="关闭"
-                className="icon-button"
-                onClick={() => setCreateDialogOpen(false)}
-                type="button"
-              >
-                <X size={16} aria-hidden="true" />
-              </button>
-            </div>
-            <div className="form-grid">
-              <label>
-                <span>Algorithm ID</span>
-                <input
-                  aria-label="新建 Algorithm ID"
-                  required
-                  value={createForm.algorithmId}
-                  onChange={(event) =>
-                    setCreateForm((current) => ({
-                      ...current,
-                      algorithmId: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span>算法版本</span>
-                <input
-                  aria-label="新建算法版本"
-                  required
-                  value={createForm.version}
-                  onChange={(event) =>
-                    setCreateForm((current) => ({
-                      ...current,
-                      version: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span>算法运行时</span>
-                <select
-                  aria-label="新建算法运行时"
-                  value={createForm.runtime}
-                  onChange={(event) =>
-                    setCreateForm((current) => ({
-                      ...current,
-                      runtime: event.target.value,
-                    }))
-                  }
-                >
-                  {runtimeOptions.map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>输入点位</span>
-                <input
-                  aria-label="新建算法输入点位"
-                  required
-                  value={createForm.inputIds}
-                  onChange={(event) =>
-                    setCreateForm((current) => ({
-                      ...current,
-                      inputIds: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span>输出变量</span>
-                <input
-                  aria-label="新建算法输出变量"
-                  required
-                  value={createForm.outputIds}
-                  onChange={(event) =>
-                    setCreateForm((current) => ({
-                      ...current,
-                      outputIds: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-            </div>
-            <div className="modal-actions">
-              <button
-                className="secondary-button"
-                onClick={() => setCreateDialogOpen(false)}
-                type="button"
-              >
-                取消
-              </button>
-              <button
-                className="primary-button"
-                disabled={actionState === 'creating'}
-                type="submit"
-              >
-                {actionState === 'creating' ? '保存中' : '保存'}
-              </button>
-            </div>
-          </form>
-        </div>
+        <AlgorithmDialog
+          actionState={actionState}
+          algorithmId={createAlgorithmId}
+          dsl={createDslPreview}
+          form={createForm}
+          onAlgorithmIdChange={setCreateAlgorithmId}
+          onClose={() => setCreateDialogOpen(false)}
+          onSubmit={() => {
+            void handleCreateAlgorithm();
+          }}
+          setForm={setCreateForm}
+        />
       ) : null}
 
       <div className={isConfigureMode ? 'point-config-layout' : 'point-config-layout list-only'}>
@@ -362,7 +286,7 @@ export function AlgorithmsPage({
           <div className="panel-header">
             <h3>算法模板</h3>
             <span>
-              {activeEdge.displayName} · {algorithms.length} 个本地算法
+              {activeEdge.displayName} · {algorithms.length} 个 DSL 算法
             </span>
           </div>
           <div className="table-wrap">
@@ -371,8 +295,8 @@ export function AlgorithmsPage({
                 <tr>
                   <th>Algorithm ID</th>
                   <th>类型</th>
-                  <th>输入</th>
-                  <th>输出</th>
+                  <th>输入点位</th>
+                  <th>输出点位</th>
                   <th>校验</th>
                 </tr>
               </thead>
@@ -415,111 +339,45 @@ export function AlgorithmsPage({
 
         {isConfigureMode ? (
           <Drawer
-          subtitle="云端草稿，发布后边端 runtime 加载或更新本地算法"
-          title={`编辑算法 ${selectedAlgorithm.algorithmId}`}
-          footer={
-            <>
-              <span className={`editor-status ${saveState}`} role="status">
-                {saveStatusText(saveState)}
-              </span>
-              <button
-                className="secondary-button"
-                onClick={() => {
-                  setForm(algorithmToEditorForm(selectedAlgorithm));
-                  setSaveState('idle');
-                }}
-                type="button"
-              >
-                取消
-              </button>
-              <button
-                className="primary-button"
-                disabled={saveState === 'saving'}
-                onClick={handleSave}
-                type="button"
-              >
-                {saveState === 'saving' ? '保存中' : '保存'}
-              </button>
-            </>
-          }
-        >
-          <section className="drawer-section">
-            <h4>算法参数</h4>
-            <div className="editor-grid">
-              <label className="editor-control">
-                <span>算法版本</span>
-                <input
-                  aria-label="算法版本"
-                  value={form.version}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      version: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label className="editor-control">
-                <span>算法运行时</span>
-                <select
-                  aria-label="算法运行时"
-                  value={form.runtime}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      runtime: event.target.value,
-                    }))
-                  }
+            subtitle="云端保存 DSL 草稿，发布后边端 runtime 按点位样本执行"
+            title={`编辑算法 ${selectedAlgorithm.algorithmId}`}
+            footer={
+              <>
+                <span className={`editor-status ${saveState}`} role="status">
+                  {saveStatusText(saveState)}
+                </span>
+                <button
+                  className="secondary-button"
+                  onClick={() => {
+                    setForm(algorithmToEditorForm(selectedAlgorithm));
+                    setSaveState('idle');
+                  }}
+                  type="button"
                 >
-                  {runtimeOptions.map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          </section>
-          <section className="drawer-section">
-            <h4>输入输出</h4>
-            <div className="editor-grid">
-              <label className="editor-control">
-                <span>输入点位</span>
-                <input
-                  aria-label="输入点位"
-                  value={form.inputIds}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      inputIds: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label className="editor-control">
-                <span>输出变量</span>
-                <input
-                  aria-label="输出变量"
-                  value={form.outputIds}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      outputIds: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-            </div>
-          </section>
-          <DrawerSection
-            fields={[
-              ['边端', selectedEdgeId],
-              ['Algorithm ID', selectedAlgorithm.algorithmId],
-              ['当前版本', selectedAlgorithm.version],
-              ['当前类型', selectedAlgorithm.kind],
-            ]}
-            title="当前版本"
-          />
+                  取消
+                </button>
+                <button
+                  className="primary-button"
+                  disabled={saveState === 'saving'}
+                  onClick={handleSave}
+                  type="button"
+                >
+                  {saveState === 'saving' ? '保存中' : '保存'}
+                </button>
+              </>
+            }
+          >
+            <AlgorithmEditor form={form} setForm={setForm} />
+            <DslPreview dsl={dslPreview} />
+            <DrawerSection
+              fields={[
+                ['边端', selectedEdgeId],
+                ['Algorithm ID', selectedAlgorithm.algorithmId],
+                ['当前版本', selectedAlgorithm.version],
+                ['当前类型', selectedAlgorithm.kind],
+              ]}
+              title="当前版本"
+            />
           </Drawer>
         ) : null}
       </div>
@@ -527,30 +385,361 @@ export function AlgorithmsPage({
   );
 }
 
+function AlgorithmDialog({
+  actionState,
+  algorithmId,
+  dsl,
+  form,
+  onAlgorithmIdChange,
+  onClose,
+  onSubmit,
+  setForm,
+}: {
+  actionState: 'idle' | 'assessing' | 'creating';
+  algorithmId: string;
+  dsl: AlgorithmDsl;
+  form: EditorForm;
+  onAlgorithmIdChange: (value: string) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+  setForm: Dispatch<SetStateAction<EditorForm>>;
+}) {
+  return (
+    <div className="modal-backdrop">
+      <form
+        aria-labelledby="algorithm-create-dialog-title"
+        className="modal-panel"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit();
+        }}
+        role="dialog"
+      >
+        <div className="modal-header">
+          <h3 id="algorithm-create-dialog-title">新建算法</h3>
+          <button
+            aria-label="关闭"
+            className="icon-button"
+            onClick={onClose}
+            type="button"
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+        <div className="form-grid">
+          <label>
+            <span>Algorithm ID</span>
+            <input
+              aria-label="新建 Algorithm ID"
+              required
+              value={algorithmId}
+              onChange={(event) => onAlgorithmIdChange(event.target.value)}
+            />
+          </label>
+        </div>
+        <AlgorithmEditor form={form} setForm={setForm} />
+        <DslPreview dsl={dsl} />
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onClose} type="button">
+            取消
+          </button>
+          <button
+            className="primary-button"
+            disabled={actionState === 'creating'}
+            type="submit"
+          >
+            {actionState === 'creating' ? '保存中' : '保存'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function AlgorithmEditor({
+  form,
+  setForm,
+}: {
+  form: EditorForm;
+  setForm: Dispatch<SetStateAction<EditorForm>>;
+}) {
+  return (
+    <>
+      <section className="drawer-section">
+        <h4>算法模板</h4>
+        <div className="editor-grid">
+          <label className="editor-control">
+            <span>算法版本</span>
+            <input
+              aria-label="算法版本"
+              value={form.version}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  version: event.target.value,
+                }))
+              }
+            />
+          </label>
+          <label className="editor-control">
+            <span>算法类型</span>
+            <select
+              aria-label="算法类型"
+              value={form.algorithmKind}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  algorithmKind: event.target.value as AlgorithmKind,
+                }))
+              }
+            >
+              {algorithmKindOptions.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </section>
+      <section className="drawer-section">
+        <h4>点位与参数</h4>
+        <div className="editor-grid">
+          <label className="editor-control">
+            <span>输入点位</span>
+            <input
+              aria-label="输入点位"
+              value={form.inputPoints}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  inputPoints: event.target.value,
+                }))
+              }
+            />
+          </label>
+          <label className="editor-control">
+            <span>输出虚拟点位</span>
+            <input
+              aria-label="输出虚拟点位"
+              value={form.outputPoint}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  outputPoint: event.target.value,
+                }))
+              }
+            />
+          </label>
+          <label className="editor-control">
+            <span>变化阈值</span>
+            <input
+              aria-label="变化阈值"
+              value={form.threshold}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  threshold: event.target.value,
+                }))
+              }
+            />
+          </label>
+          <label className="editor-control">
+            <span>窗口大小(ms)</span>
+            <input
+              aria-label="窗口大小(ms)"
+              value={form.windowMs}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  windowMs: event.target.value,
+                }))
+              }
+            />
+          </label>
+          <label className="editor-control">
+            <span>表达式</span>
+            <input
+              aria-label="表达式"
+              value={form.expression}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  expression: event.target.value,
+                }))
+              }
+            />
+          </label>
+          <label className="editor-control">
+            <span>上报模式</span>
+            <select
+              aria-label="上报模式"
+              value={form.reportMode}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  reportMode: event.target.value as AlgorithmReportPolicy['mode'],
+                }))
+              }
+            >
+              {reportModes.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="editor-control">
+            <span>MQTT Sink</span>
+            <input
+              aria-label="MQTT Sink"
+              value={form.sink}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  sink: event.target.value,
+                }))
+              }
+            />
+          </label>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function DslPreview({ dsl }: { dsl: AlgorithmDsl }) {
+  return (
+    <section className="drawer-section">
+      <h4>DSL 预览</h4>
+      <pre className="code-preview" aria-label="DSL 预览">
+        {JSON.stringify(dsl, null, 2)}
+      </pre>
+    </section>
+  );
+}
+
 interface EditorForm {
-  inputIds: string;
-  outputIds: string;
-  runtime: string;
+  algorithmKind: AlgorithmKind;
+  expression: string;
+  inputPoints: string;
+  outputPoint: string;
+  reportMode: AlgorithmReportPolicy['mode'];
+  sink: string;
+  threshold: string;
   version: string;
+  windowMs: string;
 }
 
 function algorithmToEditorForm(algorithm: AlgorithmResponse): EditorForm {
+  const firstStep = algorithm.dsl.steps[0];
   return {
-    inputIds: algorithm.inputIds?.length > 0 ? algorithm.inputIds.join(', ') : algorithm.inputs,
-    outputIds:
-      algorithm.outputIds?.length > 0 ? algorithm.outputIds.join(', ') : algorithm.outputs,
-    runtime: algorithm.runtime || inferRuntime(algorithm.kind),
+    algorithmKind: algorithm.algorithmKind || 'ChangeReport',
+    expression:
+      firstStep?.type === 'expression' ? firstStep.expr : inputAliases(algorithm.dsl).join(' + '),
+    inputPoints:
+      algorithm.dsl.inputs?.length > 0
+        ? algorithm.dsl.inputs.map((input) => input.pointId).join(', ')
+        : algorithm.inputs,
+    outputPoint:
+      algorithm.dsl.outputs?.[0]?.pointId ||
+      algorithm.outputIds?.[0] ||
+      algorithm.outputs ||
+      'algorithm.output',
+    reportMode: algorithm.dsl.report?.mode || 'OnChange',
+    sink: algorithm.dsl.report?.sink || 'velamq-main',
+    threshold:
+      firstStep?.type === 'changeFilter' || firstStep?.type === 'thresholdRule'
+        ? String(firstStep.threshold)
+        : '0.2',
     version: algorithm.version,
+    windowMs:
+      algorithm.dsl.trigger?.type === 'window'
+        ? String(algorithm.dsl.trigger.everyMs)
+        : '60000',
   };
 }
 
 function formToSaveRequest(form: EditorForm): SaveAlgorithmRequest {
   return {
+    algorithmKind: form.algorithmKind,
+    dsl: buildAlgorithmDsl(form),
     version: form.version.trim(),
-    runtime: form.runtime,
-    inputIds: splitCsv(form.inputIds),
-    outputIds: splitCsv(form.outputIds),
   };
+}
+
+function buildAlgorithmDsl(form: EditorForm): AlgorithmDsl {
+  const inputPoints = splitCsv(form.inputPoints);
+  const inputs = inputPoints.map((pointId, index) => ({
+    alias: inputPoints.length === 1 ? 'p' : String.fromCharCode(97 + index),
+    pointId,
+  }));
+  const source = inputs[0]?.alias || 'p';
+  const outputName = outputNameFromPoint(form.outputPoint);
+  const report = {
+    mode: form.reportMode,
+    sink: form.sink.trim() || 'velamq-main',
+  };
+
+  if (form.algorithmKind === 'WindowAggregate') {
+    return {
+      inputs,
+      trigger: { type: 'window', everyMs: parsePositiveInt(form.windowMs, 60000) },
+      steps: [
+        {
+          type: 'windowAggregate',
+          source,
+          functions: [{ function: 'avg', output: outputName }],
+        },
+      ],
+      outputs: [{ name: outputName, pointId: form.outputPoint.trim() }],
+      report: { ...report, mode: 'WindowResult' },
+    };
+  }
+
+  if (form.algorithmKind === 'ExpressionAggregate') {
+    return {
+      inputs,
+      trigger: { type: 'onAnyInput' },
+      steps: [{ type: 'expression', output: outputName, expr: form.expression.trim() }],
+      outputs: [{ name: outputName, pointId: form.outputPoint.trim() }],
+      report,
+    };
+  }
+
+  if (form.algorithmKind === 'ThresholdRule') {
+    return {
+      inputs,
+      trigger: { type: 'onSample' },
+      steps: [
+        {
+          type: 'thresholdRule',
+          source,
+          operator: 'Gt',
+          threshold: parseNumber(form.threshold, 0),
+          event: {
+            code: `${form.outputPoint.trim() || 'ALGORITHM'}_ALARM`.toUpperCase(),
+            severity: 'Warning',
+            message: '算法阈值告警',
+          },
+        },
+      ],
+      outputs: [{ name: outputName, pointId: form.outputPoint.trim() }],
+      report: { ...report, mode: 'EventOnly' },
+    };
+  }
+
+  return {
+    inputs,
+    trigger: { type: 'onSample' },
+    steps: [{ type: 'changeFilter', source, threshold: parseNumber(form.threshold, 0) }],
+    outputs: [{ name: outputName, pointId: form.outputPoint.trim() }],
+    report: { ...report, mode: 'OnChange' },
+  };
+}
+
+function inputAliases(dsl: AlgorithmDsl): string[] {
+  return dsl.inputs.map((input) => input.alias);
 }
 
 function splitCsv(value: string): string[] {
@@ -560,17 +749,19 @@ function splitCsv(value: string): string[] {
     .filter(Boolean);
 }
 
-function inferRuntime(kind: string): string {
-  if (kind.includes('WASM')) {
-    return 'Wasm';
-  }
-  if (kind.includes('Python')) {
-    return 'Python';
-  }
-  if (kind.includes('规则')) {
-    return 'Rule';
-  }
-  return 'Onnx';
+function outputNameFromPoint(pointId: string): string {
+  const parts = pointId.split('.');
+  return parts[parts.length - 1]?.trim() || 'output';
+}
+
+function parseNumber(value: string, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parsePositiveInt(value: string, fallback: number): number {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function saveStatusText(saveState: 'idle' | 'saving' | 'saved' | 'error') {

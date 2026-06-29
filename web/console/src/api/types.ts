@@ -186,6 +186,8 @@ export interface AlgorithmResponse {
   edgeId: string;
   algorithmId: string;
   version: string;
+  algorithmKind: AlgorithmKind;
+  dsl: AlgorithmDsl;
   runtime: string;
   kind: string;
   inputIds: string[];
@@ -196,19 +198,68 @@ export interface AlgorithmResponse {
   validation: string;
 }
 
-export interface SaveAlgorithmRequest {
-  version: string;
-  runtime: string;
-  inputIds: string[];
-  outputIds: string[];
+export type AlgorithmKind =
+  | 'ChangeReport'
+  | 'WindowAggregate'
+  | 'ExpressionAggregate'
+  | 'ThresholdRule'
+  | 'DurationRule'
+  | 'Deadband'
+  | 'Debounce'
+  | 'Statistics';
+
+export interface AlgorithmDsl {
+  inputs: AlgorithmInputBinding[];
+  trigger: AlgorithmTrigger;
+  steps: AlgorithmStep[];
+  outputs: AlgorithmOutput[];
+  report: AlgorithmReportPolicy;
 }
 
-export interface CreateAlgorithmRequest {
+export interface AlgorithmInputBinding {
+  alias: string;
+  pointId: string;
+}
+
+export type AlgorithmTrigger =
+  | { type: 'onSample' }
+  | { type: 'onAnyInput' }
+  | { type: 'window'; everyMs: number };
+
+export type AlgorithmStep =
+  | { type: 'changeFilter'; source: string; threshold: number }
+  | {
+      type: 'windowAggregate';
+      source: string;
+      functions: Array<{ function: 'avg' | 'min' | 'max' | 'sum' | 'count'; output: string }>;
+    }
+  | { type: 'expression'; output: string; expr: string }
+  | {
+      type: 'thresholdRule';
+      source: string;
+      operator: 'Gt' | 'Gte' | 'Lt' | 'Lte' | 'Eq' | 'Ne';
+      threshold: number;
+      event: { code: string; severity: 'Info' | 'Warning' | 'Critical'; message: string };
+    };
+
+export interface AlgorithmOutput {
+  name: string;
+  pointId: string;
+}
+
+export interface AlgorithmReportPolicy {
+  mode: 'OnOutput' | 'OnChange' | 'WindowResult' | 'EventOnly';
+  sink: string;
+}
+
+export interface SaveAlgorithmRequest {
+  version: string;
+  algorithmKind: AlgorithmKind;
+  dsl: AlgorithmDsl;
+}
+
+export interface CreateAlgorithmRequest extends SaveAlgorithmRequest {
   algorithmId?: string;
-  version?: string;
-  runtime: string;
-  inputIds: string[];
-  outputIds: string[];
 }
 
 export interface AuditRecordResponse {
