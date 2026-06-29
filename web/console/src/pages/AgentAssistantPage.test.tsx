@@ -9,7 +9,7 @@ describe('AgentAssistantPage', () => {
       suggestions: [
         {
           detail: '根据 pump@v1 模型发现缺少 flow_rate 映射',
-          state: '生成草稿',
+          state: '生成候选配置',
           title: '点位补全',
         },
       ],

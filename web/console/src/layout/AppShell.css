@@ -217,6 +217,12 @@
   padding: 0 9px;
 }
 
+.secondary-button.icon-only {
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+}
+
 .row-actions {
   display: flex;
   flex-wrap: wrap;

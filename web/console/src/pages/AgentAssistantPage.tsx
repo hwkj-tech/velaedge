@@ -6,7 +6,7 @@ import type { AgentActionResponse, AgentSuggestionResponse } from '../api/types'
 const fallbackSuggestions: AgentSuggestionResponse[] = [
   {
     detail: '根据 pump@v1 模型发现缺少 flow_rate 映射',
-    state: '生成草稿',
+    state: '生成候选配置',
     title: '点位补全',
   },
   {
@@ -78,7 +78,7 @@ export function AgentAssistantPage({
         <div>
           <h2>Agent 辅助管理</h2>
           <p>
-            Agent 用于解释状态、生成配置草稿和风险分析。它不能绕过校验、审批和发布确认。
+            Agent 用于解释状态、生成候选配置和风险分析。它不能绕过校验、审批和发布确认。
           </p>
         </div>
         <div className="toolbar">

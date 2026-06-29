@@ -107,7 +107,7 @@ export function AppShell({
             </span>
             <span className="status-pill">项目: demo-plant</span>
             <span className="status-pill">环境: staging</span>
-            <span className="status-pill warning">草稿 v2026.06.26-002</span>
+            <span className="status-pill warning">待发布 v2026.06.26-002</span>
           </div>
         </header>
 

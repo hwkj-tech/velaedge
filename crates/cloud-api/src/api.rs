@@ -425,7 +425,7 @@ async fn create_edge_node(
             request
                 .display_name
                 .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| "新边端注册草稿".to_string()),
+                .unwrap_or_else(|| "新边端待确认".to_string()),
         )
         .at_site(
             request
@@ -2264,7 +2264,7 @@ fn edge_node_response(
 ) -> EdgeNodeResponse {
     EdgeNodeResponse {
         edge_id: edge.edge_id.clone(),
-        display_name: edge.display_name.clone(),
+        display_name: edge_display_name(edge),
         site: edge.site.clone().unwrap_or_else(|| "-".to_string()),
         runtime_id: runtime
             .map(|snapshot| snapshot.runtime_id.clone())
@@ -2284,6 +2284,13 @@ fn edge_node_response(
             .map(|snapshot| format!("{} 秒前", snapshot.cloud_sync.last_sync_seconds_ago))
             .unwrap_or_else(|| "-".to_string()),
         capabilities: edge.capabilities.clone(),
+    }
+}
+
+fn edge_display_name(edge: &EdgeNode) -> String {
+    match edge.display_name.as_str() {
+        "" | "新边端注册草稿" => "新边端待确认".to_string(),
+        value => value.to_string(),
     }
 }
 

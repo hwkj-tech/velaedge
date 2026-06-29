@@ -406,7 +406,7 @@ describe('App cloud console write actions', () => {
       suggestions: [
         {
           detail: '根据 pump@v1 模型发现缺少 flow_rate 映射',
-          state: '生成草稿',
+          state: '生成候选配置',
           title: '点位补全',
         },
       ],
@@ -1019,11 +1019,11 @@ describe('App cloud console write actions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /点位配置/ }));
     expect(await screen.findByText('holding_register:40001')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '校验草稿' }));
+    fireEvent.click(screen.getByRole('button', { name: '校验配置' }));
     await waitFor(() => {
       expect(runConfigValidation).toHaveBeenCalledWith('edge-dev');
     });
-    expect(await screen.findByText('点位草稿校验 已通过')).toBeInTheDocument();
+    expect(await screen.findByText('点位配置校验 已通过')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /配置发布/ }));
     expect(
@@ -1035,11 +1035,11 @@ describe('App cloud console write actions', () => {
     });
     expect(await screen.findByText('配置差异摘要已生成')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '校验草稿' }));
+    fireEvent.click(screen.getByRole('button', { name: '校验配置' }));
     await waitFor(() => {
       expect(runConfigValidation).toHaveBeenCalledWith('edge-dev');
     });
-    expect(await screen.findByText('发布草稿校验 已通过')).toBeInTheDocument();
+    expect(await screen.findByText('发布配置校验 已通过')).toBeInTheDocument();
   });
 
   it('creates device model drafts and runs agent actions through API clients', async () => {

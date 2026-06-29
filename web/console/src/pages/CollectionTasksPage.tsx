@@ -9,6 +9,7 @@ import type {
   SaveCollectionTaskRequest,
 } from '../api/types';
 import { Drawer } from '../components/Drawer';
+import { PaginationBar } from '../components/PaginationBar';
 import './PointMappingsPage.css';
 
 const fallbackTasks: CollectionTaskResponse[] = [
@@ -69,6 +70,7 @@ export function CollectionTasksPage({
   const [selectedTaskId, setSelectedTaskId] = useState(
     () => tasks[0]?.taskId ?? fallbackTasks[0].taskId,
   );
+  const [page, setPage] = useState(1);
   const selectedTask =
     tasks.find((task) => task.taskId === selectedTaskId) ?? tasks[0] ?? fallbackTasks[0];
   const [form, setForm] = useState(() => taskToEditorForm(selectedTask));
@@ -88,6 +90,10 @@ export function CollectionTasksPage({
     'idle' | 'scheduling' | 'creating'
   >('idle');
   const isConfigureMode = mode === 'configure';
+  const pageSize = 10;
+  const totalPages = Math.max(1, Math.ceil(tasks.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const visibleTasks = tasks.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const activeEdge =
     edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
 
@@ -103,6 +109,10 @@ export function CollectionTasksPage({
       setSelectedTaskId(tasks[0].taskId);
     }
   }, [tasks, selectedTaskId]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [selectedEdgeId]);
 
   const handleSelectEdge = async (edgeId: string) => {
     setSaveState('idle');
@@ -355,7 +365,7 @@ export function CollectionTasksPage({
                 </tr>
               </thead>
               <tbody>
-                {tasks.map((task) => (
+                {visibleTasks.map((task) => (
                   <tr key={`${task.edgeId}:${task.taskId}`}>
                     <td>
                       {isConfigureMode ? (
@@ -385,11 +395,20 @@ export function CollectionTasksPage({
               </tbody>
             </table>
           </div>
+          {tasks.length > pageSize ? (
+            <PaginationBar
+              ariaLabel="采集任务分页"
+              currentPage={currentPage}
+              onNext={() => setPage((value) => Math.min(totalPages, value + 1))}
+              onPrevious={() => setPage((value) => Math.max(1, value - 1))}
+              totalPages={totalPages}
+            />
+          ) : null}
         </section>
 
         {isConfigureMode ? (
           <Drawer
-          subtitle="云端草稿，发布后边端 runtime 调度执行"
+          subtitle="保存后进入待发布配置，发布后边端 runtime 调度执行"
           title={`编辑任务 ${selectedTask.taskId}`}
           footer={
             <>

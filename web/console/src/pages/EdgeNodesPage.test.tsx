@@ -69,6 +69,42 @@ describe('EdgeNodesPage', () => {
     expect(await screen.findByText('维护模式已启用 维护中')).toBeInTheDocument();
   });
 
+  it('runs lifecycle actions for the selected edge row', async () => {
+    const onRotateCredentials = vi.fn().mockResolvedValue({
+      credentialVersion: 'credential-v-prod',
+    });
+    const onEnableMaintenance = vi.fn().mockResolvedValue({
+      status: '维护中',
+    });
+    const manyEdges = [
+      edges[0],
+      {
+        ...edges[0],
+        edgeId: 'edge-prod',
+        displayName: '产线边端',
+        runtimeId: 'runtime-prod',
+      },
+    ];
+
+    render(
+      <EdgeNodesPage
+        edges={manyEdges}
+        onEnableMaintenance={onEnableMaintenance}
+        onRotateCredentials={onRotateCredentials}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '轮换凭证 edge-prod' }));
+    await waitFor(() => {
+      expect(onRotateCredentials).toHaveBeenCalledWith('edge-prod');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '维护模式 edge-prod' }));
+    await waitFor(() => {
+      expect(onEnableMaintenance).toHaveBeenCalledWith('edge-prod');
+    });
+  });
+
   it('paginates edge rows locally', () => {
     const manyEdges = Array.from({ length: 12 }, (_, index) => ({
       ...edges[0],

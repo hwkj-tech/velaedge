@@ -7,6 +7,7 @@ import type {
   SaveDeviceModelRequest,
 } from '../api/types';
 import { Drawer } from '../components/Drawer';
+import { PaginationBar } from '../components/PaginationBar';
 import './PointMappingsPage.css';
 
 const fallbackDeviceModels: DeviceModelResponse[] = [
@@ -53,6 +54,7 @@ export function DeviceModelsPage({
   const [selectedDeviceType, setSelectedDeviceType] = useState(
     () => deviceModels[0]?.deviceType ?? fallbackDeviceModels[0].deviceType,
   );
+  const [page, setPage] = useState(1);
   const activeModel =
     deviceModels.find((model) => model.deviceType === selectedDeviceType) ??
     deviceModels[0] ??
@@ -69,6 +71,13 @@ export function DeviceModelsPage({
   const [editForm, setEditForm] = useState<SaveDeviceModelRequest>(() =>
     modelToSaveForm(activeModel),
   );
+  const pageSize = 10;
+  const totalPages = Math.max(1, Math.ceil(deviceModels.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const visibleDeviceModels = deviceModels.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize,
+  );
 
   useEffect(() => {
     if (
@@ -83,6 +92,10 @@ export function DeviceModelsPage({
     setEditForm(modelToSaveForm(activeModel));
     setSaveState((current) => (current === 'saving' || current === 'saved' ? current : 'idle'));
   }, [activeModel]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [deviceModels]);
 
   const handleCreateDeviceModel = async () => {
     setCreateState('creating');
@@ -176,7 +189,7 @@ export function DeviceModelsPage({
                 </tr>
               </thead>
               <tbody>
-                {deviceModels.map((model) => (
+                {visibleDeviceModels.map((model) => (
                   <tr key={`${model.deviceType}:${model.version}`}>
                     <td>
                       <button
@@ -199,10 +212,19 @@ export function DeviceModelsPage({
               </tbody>
             </table>
           </div>
+          {deviceModels.length > pageSize ? (
+            <PaginationBar
+              ariaLabel="设备模型分页"
+              currentPage={currentPage}
+              onNext={() => setPage((value) => Math.min(totalPages, value + 1))}
+              onPrevious={() => setPage((value) => Math.max(1, value - 1))}
+              totalPages={totalPages}
+            />
+          ) : null}
         </section>
 
         <Drawer
-          subtitle="模型保存后会写入云端草稿，发布后边端按语义点位匹配协议地址"
+          subtitle="模型保存后进入待发布配置，发布后边端按语义点位匹配协议地址"
           title={`编辑设备模型 ${activeModel.deviceType}`}
           footer={
             <>

@@ -79,10 +79,10 @@ describe('ReleasesPage', () => {
     });
     expect(await screen.findByText('配置差异摘要已生成')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '校验草稿' }));
+    fireEvent.click(screen.getByRole('button', { name: '校验配置' }));
     await waitFor(() => {
       expect(onValidateRelease).toHaveBeenCalledWith('edge-dev');
     });
-    expect(await screen.findByText('发布草稿校验 已通过')).toBeInTheDocument();
+    expect(await screen.findByText('发布配置校验 已通过')).toBeInTheDocument();
   });
 });

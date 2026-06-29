@@ -12,6 +12,7 @@ import type {
   SaveAlgorithmRequest,
 } from '../api/types';
 import { Drawer } from '../components/Drawer';
+import { PaginationBar } from '../components/PaginationBar';
 import './PointMappingsPage.css';
 
 const fallbackDsl: AlgorithmDsl = {
@@ -102,6 +103,7 @@ export function AlgorithmsPage({
   const [selectedAlgorithmId, setSelectedAlgorithmId] = useState(
     () => algorithms[0]?.algorithmId ?? fallbackAlgorithms[0].algorithmId,
   );
+  const [page, setPage] = useState(1);
   const selectedAlgorithm =
     algorithms.find((algorithm) => algorithm.algorithmId === selectedAlgorithmId) ??
     algorithms[0] ??
@@ -128,6 +130,13 @@ export function AlgorithmsPage({
     'idle' | 'assessing' | 'creating'
   >('idle');
   const isConfigureMode = mode === 'configure';
+  const pageSize = 10;
+  const totalPages = Math.max(1, Math.ceil(algorithms.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const visibleAlgorithms = algorithms.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize,
+  );
   const activeEdge =
     edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
   const dslPreview = useMemo(() => buildAlgorithmDsl(form), [form]);
@@ -148,6 +157,10 @@ export function AlgorithmsPage({
       setSelectedAlgorithmId(algorithms[0].algorithmId);
     }
   }, [algorithms, selectedAlgorithmId]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [selectedEdgeId]);
 
   const handleSelectEdge = async (edgeId: string) => {
     setSaveState('idle');
@@ -301,7 +314,7 @@ export function AlgorithmsPage({
                 </tr>
               </thead>
               <tbody>
-                {algorithms.map((algorithm) => (
+                {visibleAlgorithms.map((algorithm) => (
                   <tr key={`${algorithm.edgeId}:${algorithm.algorithmId}`}>
                     <td>
                       {isConfigureMode ? (
@@ -335,11 +348,20 @@ export function AlgorithmsPage({
               </tbody>
             </table>
           </div>
+          {algorithms.length > pageSize ? (
+            <PaginationBar
+              ariaLabel="算法分页"
+              currentPage={currentPage}
+              onNext={() => setPage((value) => Math.min(totalPages, value + 1))}
+              onPrevious={() => setPage((value) => Math.max(1, value - 1))}
+              totalPages={totalPages}
+            />
+          ) : null}
         </section>
 
         {isConfigureMode ? (
           <Drawer
-            subtitle="云端保存 DSL 草稿，发布后边端 runtime 按点位样本执行"
+            subtitle="保存后进入待发布配置，发布后边端 runtime 按点位样本执行"
             title={`编辑算法 ${selectedAlgorithm.algorithmId}`}
             footer={
               <>

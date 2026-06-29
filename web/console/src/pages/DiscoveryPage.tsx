@@ -44,7 +44,7 @@ export function DiscoveryPage({
         <div>
           <h2>串口点位探测</h2>
           <p>
-            由云端下发受控只读探测任务，runtime 上报采样证据，Agent 生成点位映射候选草稿。
+            由云端下发受控只读探测任务，runtime 上报采样证据，Agent 生成点位映射候选配置。
           </p>
         </div>
         <div className="toolbar">

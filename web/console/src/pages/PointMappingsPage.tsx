@@ -186,10 +186,10 @@ export function PointMappingsPage({
     try {
       const result = await onValidateDraft?.(selectedEdgeId);
       setToolbarMessage(
-        result?.status ? `点位草稿校验 ${result.status}` : '点位草稿校验已完成',
+        result?.status ? `点位配置校验 ${result.status}` : '点位配置校验已完成',
       );
     } catch {
-      setToolbarMessage('点位草稿校验失败');
+      setToolbarMessage('点位配置校验失败');
     } finally {
       setActionState('idle');
     }
@@ -270,7 +270,7 @@ export function PointMappingsPage({
                 type="button"
               >
                 <ShieldCheck size={15} aria-hidden="true" />
-                {actionState === 'validating' ? '校验中' : '校验草稿'}
+                {actionState === 'validating' ? '校验中' : '校验配置'}
               </button>
               <button
                 className="primary-button"
@@ -473,12 +473,18 @@ export function PointMappingsPage({
               {activeEdge.displayName} · {points.length} 个启用点位
             </span>
           </div>
-          <DataTable columns={columns} getRowKey={(row) => row.pointId} rows={points} />
+          <DataTable
+            ariaLabel="点位分页"
+            columns={columns}
+            getRowKey={(row) => row.pointId}
+            pageSize={10}
+            rows={points}
+          />
         </section>
 
         {isConfigureMode ? (
           <Drawer
-          subtitle="云端草稿，发布后边端 runtime 执行"
+          subtitle="保存后进入待发布配置，发布后边端 runtime 执行"
           title={`编辑点位 ${selectedPoint.pointId}`}
           footer={
             <>
@@ -508,7 +514,7 @@ export function PointMappingsPage({
         >
           <DrawerSection
             fields={[
-              ['Point ID', `${selectedPoint.pointId} / 草稿`],
+              ['Point ID', selectedPoint.pointId],
               ['显示名称', selectedPoint.pointName],
               ['设备 ID', selectedPoint.deviceId],
               ['设备模型', selectedPoint.deviceModel],

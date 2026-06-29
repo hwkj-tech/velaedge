@@ -22,7 +22,7 @@ export function AuditLogPage({
         <div>
           <h2>审计日志</h2>
           <p>
-            记录配置草稿、Agent 建议、人工审批、发布动作和边端回执，保证每次变更可追溯。
+            记录配置版本、Agent 建议、人工审批、发布动作和边端回执，保证每次变更可追溯。
           </p>
         </div>
       </section>

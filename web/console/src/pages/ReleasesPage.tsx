@@ -140,10 +140,10 @@ export function ReleasesPage({
     try {
       const result = await onValidateRelease?.(selectedEdgeId);
       setToolbarMessage(
-        result?.status ? `发布草稿校验 ${result.status}` : '发布草稿校验已通过',
+        result?.status ? `发布配置校验 ${result.status}` : '发布配置校验已通过',
       );
     } catch {
-      setToolbarMessage('发布草稿校验失败');
+      setToolbarMessage('发布配置校验失败');
     } finally {
       setActionState('idle');
     }
@@ -155,7 +155,7 @@ export function ReleasesPage({
         <div>
           <h2>配置发布</h2>
           <p>
-            将云端草稿打包成边端配置版本，经过校验、审批、灰度和回执确认后再扩大发布范围。
+            将待发布配置打包成边端配置版本，经过校验、审批、灰度和回执确认后再扩大发布范围。
           </p>
         </div>
         <div className="toolbar">
@@ -184,7 +184,7 @@ export function ReleasesPage({
             type="button"
           >
             <ShieldCheck size={15} aria-hidden="true" />
-            {actionState === 'validating' ? '校验中' : '校验草稿'}
+            {actionState === 'validating' ? '校验中' : '校验配置'}
           </button>
           <label className="release-edge-select">
             <span>发布边端</span>
@@ -220,7 +220,7 @@ export function ReleasesPage({
 
       <section className="release-step-list" aria-label="发布流程">
         <article className="release-step">
-          <span>草稿版本</span>
+          <span>待发布版本</span>
           <strong>{releaseList.draftVersion}</strong>
           <small>点位与采集任务已生成</small>
         </article>

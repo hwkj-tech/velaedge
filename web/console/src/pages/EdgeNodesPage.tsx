@@ -39,9 +39,9 @@ export function EdgeNodesPage({
   pageSize?: number;
 }) {
   const [toolbarMessage, setToolbarMessage] = useState('');
-  const [actionState, setActionState] = useState<'idle' | 'rotating' | 'maintenance'>(
-    'idle',
-  );
+  const [actionState, setActionState] = useState<
+    { type: 'idle' } | { type: 'rotating' | 'maintenance'; edgeId: string }
+  >({ type: 'idle' });
   const [page, setPage] = useState(1);
   const primaryEdgeId = edges[0]?.edgeId ?? fallbackEdges[0].edgeId;
   const totalPages = Math.max(1, Math.ceil(edges.length / pageSize));
@@ -49,37 +49,37 @@ export function EdgeNodesPage({
   const pageStart = (currentPage - 1) * pageSize;
   const visibleEdges = edges.slice(pageStart, pageStart + pageSize);
 
-  const handleRotateCredentials = async () => {
-    setActionState('rotating');
+  const handleRotateCredentials = async (edgeId = primaryEdgeId) => {
+    setActionState({ type: 'rotating', edgeId });
     setToolbarMessage('');
 
     try {
-      const result = await onRotateCredentials?.(primaryEdgeId);
+      const result = await onRotateCredentials?.(edgeId);
       setToolbarMessage(
         result?.credentialVersion
           ? `凭证已轮换 ${result.credentialVersion}`
-          : '凭证已轮换',
+          : `${edgeId} 凭证已轮换`,
       );
     } catch {
       setToolbarMessage('凭证轮换失败');
     } finally {
-      setActionState('idle');
+      setActionState({ type: 'idle' });
     }
   };
 
-  const handleEnableMaintenance = async () => {
-    setActionState('maintenance');
+  const handleEnableMaintenance = async (edgeId = primaryEdgeId) => {
+    setActionState({ type: 'maintenance', edgeId });
     setToolbarMessage('');
 
     try {
-      const result = await onEnableMaintenance?.(primaryEdgeId);
+      const result = await onEnableMaintenance?.(edgeId);
       setToolbarMessage(
         result?.status ? `维护模式已启用 ${result.status}` : '维护模式已启用',
       );
     } catch {
       setToolbarMessage('维护模式启用失败');
     } finally {
-      setActionState('idle');
+      setActionState({ type: 'idle' });
     }
   };
 
@@ -101,25 +101,31 @@ export function EdgeNodesPage({
           <span className="toolbar-status">runtime 连接后自动登记</span>
           <button
             className="secondary-button"
-            disabled={actionState === 'rotating'}
+            disabled={actionState.type === 'rotating' && actionState.edgeId === primaryEdgeId}
             onClick={() => {
               void handleRotateCredentials();
             }}
             type="button"
           >
             <KeyRound size={15} aria-hidden="true" />
-            {actionState === 'rotating' ? '轮换中' : '轮换凭证'}
+            {actionState.type === 'rotating' && actionState.edgeId === primaryEdgeId
+              ? '轮换中'
+              : '轮换凭证'}
           </button>
           <button
             className="secondary-button"
-            disabled={actionState === 'maintenance'}
+            disabled={
+              actionState.type === 'maintenance' && actionState.edgeId === primaryEdgeId
+            }
             onClick={() => {
               void handleEnableMaintenance();
             }}
             type="button"
           >
             <Wrench size={15} aria-hidden="true" />
-            {actionState === 'maintenance' ? '启用中' : '维护模式'}
+            {actionState.type === 'maintenance' && actionState.edgeId === primaryEdgeId
+              ? '启用中'
+              : '维护模式'}
           </button>
         </div>
       </section>
@@ -176,6 +182,35 @@ export function EdgeNodesPage({
                       >
                         <Activity size={14} aria-hidden="true" />
                         监控
+                      </button>
+                      <button
+                        aria-label={`轮换凭证 ${edge.edgeId}`}
+                        className="secondary-button compact icon-only"
+                        disabled={
+                          actionState.type === 'rotating' && actionState.edgeId === edge.edgeId
+                        }
+                        onClick={() => {
+                          void handleRotateCredentials(edge.edgeId);
+                        }}
+                        title="轮换凭证"
+                        type="button"
+                      >
+                        <KeyRound size={14} aria-hidden="true" />
+                      </button>
+                      <button
+                        aria-label={`维护模式 ${edge.edgeId}`}
+                        className="secondary-button compact icon-only"
+                        disabled={
+                          actionState.type === 'maintenance' &&
+                          actionState.edgeId === edge.edgeId
+                        }
+                        onClick={() => {
+                          void handleEnableMaintenance(edge.edgeId);
+                        }}
+                        title="维护模式"
+                        type="button"
+                      >
+                        <Wrench size={14} aria-hidden="true" />
                       </button>
                     </div>
                   </td>

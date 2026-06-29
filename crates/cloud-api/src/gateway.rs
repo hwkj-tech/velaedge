@@ -286,7 +286,10 @@ async fn persist_runtime_discovered_edge(
             EdgeNode::new(session.edge_id.clone(), session.edge_id.clone())
                 .at_site(format!("runtime/{}", session.runtime_id))
         });
-        if node.display_name.trim().is_empty() || node.display_name == "新边端注册草稿" {
+        if matches!(
+            node.display_name.as_str(),
+            "" | "新边端注册草稿" | "新边端待确认"
+        ) {
             node.display_name = session.edge_id.clone();
         }
         if node.site.as_deref().is_none() || node.site.as_deref() == Some("待分配") {

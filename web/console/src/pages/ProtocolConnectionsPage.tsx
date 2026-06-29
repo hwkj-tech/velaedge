@@ -9,6 +9,7 @@ import type {
   SaveProtocolConnectionRequest,
 } from '../api/types';
 import { Drawer } from '../components/Drawer';
+import { PaginationBar } from '../components/PaginationBar';
 import './PointMappingsPage.css';
 
 const fallbackConnections: ProtocolConnectionResponse[] = [
@@ -78,6 +79,7 @@ export function ProtocolConnectionsPage({
   const [selectedConnectionId, setSelectedConnectionId] = useState(
     () => connections[0]?.connectionId ?? fallbackConnections[0].connectionId,
   );
+  const [page, setPage] = useState(1);
   const selectedConnection =
     connections.find((connection) => connection.connectionId === selectedConnectionId) ??
     connections[0] ??
@@ -95,6 +97,13 @@ export function ProtocolConnectionsPage({
   const [validateState, setValidateState] = useState<'idle' | 'validating'>('idle');
   const [toolbarMessage, setToolbarMessage] = useState('');
   const isConfigureMode = mode === 'configure';
+  const pageSize = 10;
+  const totalPages = Math.max(1, Math.ceil(connections.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const visibleConnections = connections.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize,
+  );
   const activeEdge =
     edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
 
@@ -113,6 +122,10 @@ export function ProtocolConnectionsPage({
       setSelectedConnectionId(connections[0].connectionId);
     }
   }, [connections, selectedConnectionId]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [selectedEdgeId]);
 
   const handleSelectEdge = async (edgeId: string) => {
     setSaveState('idle');
@@ -336,7 +349,7 @@ export function ProtocolConnectionsPage({
                 </tr>
               </thead>
               <tbody>
-                {connections.map((connection) => (
+                {visibleConnections.map((connection) => (
                   <tr key={`${connection.edgeId}:${connection.connectionId}`}>
                     <td>
                       {isConfigureMode ? (
@@ -368,11 +381,20 @@ export function ProtocolConnectionsPage({
               </tbody>
             </table>
           </div>
+          {connections.length > pageSize ? (
+            <PaginationBar
+              ariaLabel="协议连接分页"
+              currentPage={currentPage}
+              onNext={() => setPage((value) => Math.min(totalPages, value + 1))}
+              onPrevious={() => setPage((value) => Math.max(1, value - 1))}
+              totalPages={totalPages}
+            />
+          ) : null}
         </section>
 
         {isConfigureMode ? (
           <Drawer
-          subtitle="云端草稿，发布后边端 runtime 重新建立协议会话"
+          subtitle="保存后进入待发布配置，发布后边端 runtime 重新建立协议会话"
           title={`编辑连接 ${selectedConnection.connectionId}`}
           footer={
             <>

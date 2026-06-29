@@ -194,7 +194,7 @@ export default function App() {
     await handleCreatePoint(edgeId);
     return {
       action: 'import_points',
-      details: ['已按云端模板导入 1 个点位草稿'],
+      details: ['已按云端模板导入 1 个点位配置'],
       message: '批量导入已完成',
       status: '已完成',
     };

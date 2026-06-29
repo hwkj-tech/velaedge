@@ -8,10 +8,11 @@ describe('PointMappingsPage', () => {
     render(<PointMappingsPage />);
 
     expect(screen.getByText('点位配置表')).toBeInTheDocument();
-    expect(screen.getByText('pressure')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '选择点位 pressure' })).toBeInTheDocument();
     expect(screen.getByText('holding_register:40001')).toBeInTheDocument();
     expect(screen.getByText('编辑点位 pressure')).toBeInTheDocument();
     expect(screen.getByText('采集周期')).toBeInTheDocument();
+    expect(screen.queryByText(/草稿/)).not.toBeInTheDocument();
   });
 
   it('saves edited point mapping drafts from the editor drawer', async () => {
@@ -144,11 +145,11 @@ describe('PointMappingsPage', () => {
     });
     expect(await screen.findByText('批量导入已完成')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '校验草稿' }));
+    fireEvent.click(screen.getByRole('button', { name: '校验配置' }));
     await waitFor(() => {
       expect(onValidateDraft).toHaveBeenCalledWith('edge-dev');
     });
-    expect(await screen.findByText('点位草稿校验 已通过')).toBeInTheDocument();
+    expect(await screen.findByText('点位配置校验 已通过')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '新建点位' }));
     const dialog = screen.getByRole('dialog', { name: '新建点位' });
@@ -188,5 +189,39 @@ describe('PointMappingsPage', () => {
       });
     });
     expect(await screen.findByText('已创建点位 point-draft-3')).toBeInTheDocument();
+  });
+
+  it('paginates large point tables locally', () => {
+    const points = Array.from({ length: 12 }, (_, index) => ({
+      edgeId: 'edge-dev',
+      pointId: `point-${index + 1}`,
+      pointName: `点位 ${index + 1}`,
+      deviceId: 'pump-1',
+      deviceModel: 'pump@v1',
+      semanticTelemetry: `pump.point_${index + 1}`,
+      protocol: 'Modbus RTU',
+      connection: 'modbus-line-a',
+      address: `holding_register:${40001 + index}`,
+      valueType: 'float32',
+      readWrite: 'read',
+      unit: '-',
+      scale: '1',
+      interval: '1000ms',
+      range: '-',
+      qualityRule: 'timeout->bad',
+      status: '启用',
+    }));
+
+    render(<PointMappingsPage points={points} selectedEdgeId="edge-dev" />);
+
+    expect(screen.getByText('第 1 / 2 页')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '选择点位 point-1' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '选择点位 point-11' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+
+    expect(screen.getByText('第 2 / 2 页')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '选择点位 point-11' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '选择点位 point-1' })).not.toBeInTheDocument();
   });
 });

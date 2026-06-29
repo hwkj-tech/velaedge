@@ -104,7 +104,7 @@ describe('ProtocolConnectionsPage', () => {
     const onValidateConnection = vi.fn().mockResolvedValue({
       action: 'validate_config',
       details: ['协议连接 1 个'],
-      message: '草稿校验已完成',
+      message: '配置校验已完成',
       status: '已通过',
     });
 
