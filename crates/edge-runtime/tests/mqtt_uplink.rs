@@ -5,9 +5,8 @@ use edge_core::{
     PointAddress, ProtocolConnection, TelemetryPointMapping, TelemetryType, TelemetryValue,
 };
 use edge_runtime::{
-    build_data_config_mqtt_publish_messages, build_mqtt_publish_messages,
-    parse_mqtt_broker_target, AppliedEdgeConfig, ConfiguredSimulatedRuntime,
-    RecordingMqttPublisher,
+    build_data_config_mqtt_publish_messages, build_mqtt_publish_messages, parse_mqtt_broker_target,
+    AppliedEdgeConfig, ConfiguredSimulatedRuntime, RecordingMqttPublisher,
 };
 
 fn package() -> EdgeConfigPackage {

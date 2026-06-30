@@ -38,10 +38,9 @@ pub use local_db::RocksEdgeRuntimeStore;
 pub use metrics::{CollectionRunStats, SimulatedRuntimeMetricsCollector};
 pub use modbus_rtu::{append_modbus_rtu_crc, ModbusRtuAdapter};
 pub use mqtt_uplink::{
-    build_data_config_mqtt_publish_messages, build_mqtt_publish_messages,
-    parse_mqtt_broker_target, publish_data_config_mqtt_samples, publish_mqtt_samples,
-    MqttBrokerTarget, MqttPublishMessage, MqttPublisher, RecordingMqttPublisher,
-    RumqttcMqttPublisher,
+    build_data_config_mqtt_publish_messages, build_mqtt_publish_messages, parse_mqtt_broker_target,
+    publish_data_config_mqtt_samples, publish_mqtt_samples, MqttBrokerTarget, MqttPublishMessage,
+    MqttPublisher, RecordingMqttPublisher, RumqttcMqttPublisher,
 };
 pub use protocol::{ProtocolAdapter, SimulatedProtocolAdapter};
 pub use reporting::{report_runtime_status_once, HttpRuntimeStatusReporter, RuntimeStatusReporter};

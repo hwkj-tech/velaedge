@@ -131,7 +131,10 @@ fn config_package_contains_data_configs_for_grouped_mqtt_publishing() {
         json["data_configs"][0]["publish"]["topic_template"],
         "factory/{site}/pump/{device_id}/status"
     );
-    assert_eq!(json["data_configs"][0]["points"][0]["json_field"], "pressure");
+    assert_eq!(
+        json["data_configs"][0]["points"][0]["json_field"],
+        "pressure"
+    );
 }
 
 #[test]

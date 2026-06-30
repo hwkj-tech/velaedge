@@ -11,8 +11,8 @@ pub mod shadow;
 pub use config::{
     CollectionTask, DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPayloadMode,
     DataConfigPoint, DataConfigPublish, DeviceInstance, DiscoveredPoint, DiscoveryReport,
-    EdgeConfigPackage, MqttUplinkConfig, PointAddress, PointMappingSuggestion,
-    ProtocolConnection, ProtocolType, SerialConnectionSettings, TelemetryPointMapping,
+    EdgeConfigPackage, MqttUplinkConfig, PointAddress, PointMappingSuggestion, ProtocolConnection,
+    ProtocolType, SerialConnectionSettings, TelemetryPointMapping,
 };
 pub use edgelink::{
     decode_edgelink_frame, encode_edgelink_frame, EdgeLinkAck, EdgeLinkCommandResult,

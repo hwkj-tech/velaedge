@@ -99,8 +99,14 @@ async fn configured_runtime_publishes_one_mqtt_message_per_data_config() {
     assert_eq!(report.collection.samples_collected, 6);
     assert_eq!(report.mqtt_messages_published, 2);
     assert_eq!(publisher.messages().len(), 2);
-    assert_eq!(publisher.messages()[0].topic, "velamq/edge-dev/meter-1/status");
-    assert_eq!(publisher.messages()[1].topic, "velamq/edge-dev/meter-1/energy");
+    assert_eq!(
+        publisher.messages()[0].topic,
+        "velamq/edge-dev/meter-1/status"
+    );
+    assert_eq!(
+        publisher.messages()[1].topic,
+        "velamq/edge-dev/meter-1/energy"
+    );
 
     let status_payload: serde_json::Value =
         serde_json::from_slice(&publisher.messages()[0].payload).unwrap();

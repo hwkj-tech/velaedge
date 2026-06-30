@@ -9,8 +9,8 @@ use edge_core::{
     DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish, DeviceInstance,
     DeviceSpec, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot,
     EventSeverity, EventSpec, LocalStoreMetrics, MqttUplinkConfig, NumberRange, PointAddress,
-    ProtocolConnection, ProtocolRuntimeMetrics, ProtocolType, SystemRuntimeMetrics,
-    TelemetryPoint, TelemetryPointMapping, TelemetryType,
+    ProtocolConnection, ProtocolRuntimeMetrics, ProtocolType, SystemRuntimeMetrics, TelemetryPoint,
+    TelemetryPointMapping, TelemetryType,
 };
 
 #[derive(Clone)]

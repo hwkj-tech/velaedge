@@ -828,10 +828,7 @@ async fn create_edge_data_config(
         package.data_configs.push(data_config);
         let response = data_config_response(
             &package,
-            package
-                .data_configs
-                .last()
-                .expect("new data config exists"),
+            package.data_configs.last().expect("new data config exists"),
         );
         store.upsert_config_package(package.clone());
         store.push_audit(AuditAction::UpdateConfig, edge_id);
@@ -2390,7 +2387,10 @@ fn build_data_config_from_request(
     {
         return Err(error(
             StatusCode::BAD_REQUEST,
-            format!("data config mqtt sink `{}` missing", request.publish.sink_id),
+            format!(
+                "data config mqtt sink `{}` missing",
+                request.publish.sink_id
+            ),
         ));
     }
     if request.points.is_empty() {

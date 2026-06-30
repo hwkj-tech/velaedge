@@ -324,7 +324,10 @@ fn build_data_config_payload(
         "config_id".to_string(),
         serde_json::json!(data_config.config_id),
     );
-    payload.insert("device_id".to_string(), serde_json::json!(data_config.device_id));
+    payload.insert(
+        "device_id".to_string(),
+        serde_json::json!(data_config.device_id),
+    );
     payload.insert(
         data_config.publish.payload.timestamp_field.clone(),
         serde_json::json!(timestamp),
@@ -335,7 +338,10 @@ fn build_data_config_payload(
             let mut values = serde_json::Map::new();
             let mut quality = serde_json::Map::new();
             for (point, sample) in selected {
-                values.insert(point.json_field.clone(), telemetry_value_to_json(&sample.value));
+                values.insert(
+                    point.json_field.clone(),
+                    telemetry_value_to_json(&sample.value),
+                );
                 quality.insert(
                     point.json_field.clone(),
                     serde_json::json!(quality_to_json_label(sample.quality)),
