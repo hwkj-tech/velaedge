@@ -2,7 +2,6 @@ import {
   Activity,
   Bot,
   Cpu,
-  Database,
   FileClock,
   GitBranch,
   LayoutDashboard,
@@ -24,8 +23,7 @@ export type PageKey =
   | 'edges'
   | 'deviceModels'
   | 'protocolConnections'
-  | 'pointMappings'
-  | 'collectionTasks'
+  | 'dataConfigs'
   | 'algorithms'
   | 'mqttUplink'
   | 'discovery'
@@ -45,10 +43,9 @@ export const navItems: NavItem[] = [
   { key: 'edges', label: '边端管理', icon: RadioTower },
   { key: 'deviceModels', label: '设备模型', icon: Cpu },
   { key: 'protocolConnections', label: '协议连接', icon: GitBranch },
-  { key: 'pointMappings', label: '点位配置', icon: Database },
-  { key: 'collectionTasks', label: '采集任务', icon: ListChecks },
+  { key: 'dataConfigs', label: '数据配置', icon: ListChecks },
   { key: 'algorithms', label: '算法配置', icon: Settings2 },
-  { key: 'mqttUplink', label: 'MQTT 上报', icon: Send },
+  { key: 'mqttUplink', label: 'MQTT Sink', icon: Send },
   { key: 'discovery', label: '点位探测', icon: Search },
   { key: 'releases', label: '配置发布', icon: FileClock },
   { key: 'runtimeStatus', label: '运行状态', icon: Activity },

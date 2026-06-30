@@ -3,12 +3,14 @@ import { useEffect, useState } from 'react';
 import {
   createAlgorithmDraft,
   createCollectionTaskDraft,
+  createEdgeDataConfig,
   createDeviceModelDraft,
   createPointMappingDraft,
   fetchAuditRecords,
   fetchDeviceModels,
   fetchEdgeAlgorithms,
   fetchEdgeCollectionTasks,
+  fetchEdgeDataConfigs,
   fetchEdgePointMappings,
   fetchEdgeProtocolConnections,
   fetchEdgeNodes,
@@ -24,12 +26,14 @@ import {
   runReleaseDiff,
   runDiscovery,
   saveMqttUplink,
+  deleteEdgeDataConfig,
   createEdgeProtocolConnection,
   saveDeviceModel,
   rotateEdgeCredentials,
   enableEdgeMaintenanceMode,
   saveEdgeAlgorithm,
   saveEdgeCollectionTask,
+  saveEdgeDataConfig,
   saveEdgePointMapping,
   saveEdgeProtocolConnection,
 } from './api/client';
@@ -44,6 +48,7 @@ import type {
   CreatePointMappingRequest,
   DiscoveryReportResponse,
   DeviceModelResponse,
+  DataConfigResponse,
   EdgeNodeActionResponse,
   EdgeNodeResponse,
   ManagementActionResponse,
@@ -56,6 +61,7 @@ import type {
   RuntimeStatusResponse,
   SaveAlgorithmRequest,
   SaveCollectionTaskRequest,
+  SaveDataConfigRequest,
   SaveDeviceModelRequest,
   CreateProtocolConnectionRequest,
   SavePointMappingRequest,
@@ -66,13 +72,12 @@ import { AppShell, type PageKey } from './layout/AppShell';
 import { AgentAssistantPage } from './pages/AgentAssistantPage';
 import { AlgorithmsPage } from './pages/AlgorithmsPage';
 import { AuditLogPage } from './pages/AuditLogPage';
-import { CollectionTasksPage } from './pages/CollectionTasksPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { DataConfigsPage } from './pages/DataConfigsPage';
 import { DeviceModelsPage } from './pages/DeviceModelsPage';
 import { DiscoveryPage } from './pages/DiscoveryPage';
 import { EdgeNodesPage } from './pages/EdgeNodesPage';
 import { MqttUplinkPage } from './pages/MqttUplinkPage';
-import { PointMappingsPage } from './pages/PointMappingsPage';
 import { ProtocolConnectionsPage } from './pages/ProtocolConnectionsPage';
 import { ReleasesPage } from './pages/ReleasesPage';
 import { RuntimeStatusPage } from './pages/RuntimeStatusPage';
@@ -87,8 +92,7 @@ type EdgeConfigurationMode = 'configure' | 'list';
 
 const configurationPages = new Set<PageKey>([
   'protocolConnections',
-  'pointMappings',
-  'collectionTasks',
+  'dataConfigs',
   'algorithms',
 ]);
 
@@ -96,6 +100,7 @@ interface ConsoleSnapshot {
   algorithms: AlgorithmResponse[];
   auditRecords: AuditRecordResponse[];
   collectionTasks: CollectionTaskResponse[];
+  dataConfigs: DataConfigResponse[];
   deviceModels: DeviceModelResponse[];
   edgeNodes: EdgeNodeResponse[];
   pointMappings: PointMappingResponse[];
@@ -119,6 +124,8 @@ export default function App() {
   const [selectedPointEdgeId, setSelectedPointEdgeId] = useState('edge-dev');
   const [collectionTasks, setCollectionTasks] = useState<CollectionTaskResponse[]>();
   const [selectedCollectionEdgeId, setSelectedCollectionEdgeId] = useState('edge-dev');
+  const [dataConfigs, setDataConfigs] = useState<DataConfigResponse[]>();
+  const [selectedDataConfigEdgeId, setSelectedDataConfigEdgeId] = useState('edge-dev');
   const [algorithms, setAlgorithms] = useState<AlgorithmResponse[]>();
   const [selectedAlgorithmEdgeId, setSelectedAlgorithmEdgeId] = useState('edge-dev');
   const [mqttUplink, setMqttUplink] = useState<MqttUplinkResponse>();
@@ -143,6 +150,7 @@ export default function App() {
     setDiscoverySuggestions(snapshot.discoverySuggestions);
     setPointMappings(snapshot.pointMappings);
     setCollectionTasks(snapshot.collectionTasks);
+    setDataConfigs(snapshot.dataConfigs);
     setAlgorithms(snapshot.algorithms);
     setReleaseList(snapshot.releaseList);
     setRuntimeStatus(snapshot.runtimeStatus);
@@ -291,6 +299,41 @@ export default function App() {
   const handleSelectCollectionEdge = async (edgeId: string) => {
     setSelectedCollectionEdgeId(edgeId);
     setCollectionTasks(await fetchEdgeCollectionTasks(edgeId));
+  };
+
+  const handleSaveDataConfig = async (
+    edgeId: string,
+    configId: string | null,
+    request: SaveDataConfigRequest,
+  ) => {
+    if (configId) {
+      await saveEdgeDataConfig(edgeId, configId, request);
+    } else {
+      await createEdgeDataConfig(edgeId, request);
+    }
+    const [nextDataConfigs, nextReleaseList] = await Promise.all([
+      fetchEdgeDataConfigs(edgeId),
+      fetchReleaseList(),
+    ]);
+    setDataConfigs(nextDataConfigs);
+    setReleaseList(nextReleaseList);
+    setSelectedDataConfigEdgeId(edgeId);
+  };
+
+  const handleDeleteDataConfig = async (edgeId: string, configId: string) => {
+    await deleteEdgeDataConfig(edgeId, configId);
+    const [nextDataConfigs, nextReleaseList] = await Promise.all([
+      fetchEdgeDataConfigs(edgeId),
+      fetchReleaseList(),
+    ]);
+    setDataConfigs(nextDataConfigs);
+    setReleaseList(nextReleaseList);
+    setSelectedDataConfigEdgeId(edgeId);
+  };
+
+  const handleSelectDataConfigEdge = async (edgeId: string) => {
+    setSelectedDataConfigEdgeId(edgeId);
+    setDataConfigs(await fetchEdgeDataConfigs(edgeId));
   };
 
   const handleSaveProtocolConnection = async (
@@ -453,23 +496,27 @@ export default function App() {
     setSelectedProtocolEdgeId(edgeId);
     setSelectedPointEdgeId(edgeId);
     setSelectedCollectionEdgeId(edgeId);
+    setSelectedDataConfigEdgeId(edgeId);
     setSelectedAlgorithmEdgeId(edgeId);
-    setActivePage('protocolConnections');
+    setActivePage('dataConfigs');
 
     const [
       nextProtocolConnections,
       nextPointMappings,
       nextCollectionTasks,
+      nextDataConfigs,
       nextAlgorithms,
     ] = await Promise.all([
       fetchEdgeProtocolConnections(edgeId),
       fetchEdgePointMappings(edgeId),
       fetchEdgeCollectionTasks(edgeId),
+      fetchEdgeDataConfigs(edgeId),
       fetchEdgeAlgorithms(edgeId),
     ]);
     setProtocolConnections(nextProtocolConnections);
     setPointMappings(nextPointMappings);
     setCollectionTasks(nextCollectionTasks);
+    setDataConfigs(nextDataConfigs);
     setAlgorithms(nextAlgorithms);
   };
 
@@ -548,6 +595,10 @@ export default function App() {
         handleSaveCollectionTask,
         handleSelectCollectionEdge,
         selectedCollectionEdgeId,
+        handleSaveDataConfig,
+        handleDeleteDataConfig,
+        handleSelectDataConfigEdge,
+        selectedDataConfigEdgeId,
         handleSaveProtocolConnection,
         handleCreateProtocolConnection,
         handleSelectProtocolEdge,
@@ -565,6 +616,7 @@ export default function App() {
         discoverySuggestions,
         pointMappings,
         collectionTasks,
+        dataConfigs,
         algorithms,
         releaseList,
         runtimeStatus,
@@ -584,6 +636,7 @@ async function loadConsoleSnapshot(): Promise<ConsoleSnapshot> {
     discoverySuggestions,
     pointMappings,
     collectionTasks,
+    dataConfigs,
     algorithms,
     releaseList,
     runtimeStatus,
@@ -597,6 +650,7 @@ async function loadConsoleSnapshot(): Promise<ConsoleSnapshot> {
     fetchDiscoverySuggestions(defaultConfigEdgeId),
     fetchEdgePointMappings(defaultConfigEdgeId),
     fetchEdgeCollectionTasks(defaultConfigEdgeId),
+    fetchEdgeDataConfigs(defaultConfigEdgeId),
     fetchEdgeAlgorithms(defaultConfigEdgeId),
     fetchReleaseList(),
     fetchRuntimeStatus(),
@@ -607,6 +661,7 @@ async function loadConsoleSnapshot(): Promise<ConsoleSnapshot> {
     algorithms,
     auditRecords,
     collectionTasks,
+    dataConfigs,
     deviceModels,
     edgeNodes,
     pointMappings,
@@ -697,6 +752,14 @@ function renderPage(
   ) => Promise<void>,
   onSelectCollectionEdge: (edgeId: string) => Promise<void>,
   selectedCollectionEdgeId: string,
+  onSaveDataConfig: (
+    edgeId: string,
+    configId: string | null,
+    request: SaveDataConfigRequest,
+  ) => Promise<void>,
+  onDeleteDataConfig: (edgeId: string, configId: string) => Promise<void>,
+  onSelectDataConfigEdge: (edgeId: string) => Promise<void>,
+  selectedDataConfigEdgeId: string,
   onSaveProtocolConnection: (
     edgeId: string,
     connectionId: string,
@@ -728,6 +791,7 @@ function renderPage(
   discoverySuggestions?: PointMappingSuggestionResponse[],
   pointMappings?: PointMappingResponse[],
   collectionTasks?: CollectionTaskResponse[],
+  dataConfigs?: DataConfigResponse[],
   algorithms?: AlgorithmResponse[],
   releaseList?: ReleaseListResponse,
   runtimeStatus?: RuntimeStatusResponse,
@@ -777,31 +841,17 @@ function renderPage(
           selectedEdgeId={selectedProtocolEdgeId}
         />
       );
-    case 'pointMappings':
+    case 'dataConfigs':
       return (
-        <PointMappingsPage
+        <DataConfigsPage
+          configs={dataConfigs}
           edges={edgeNodes}
-          mode={edgeConfigurationMode}
-          onCreatePoint={onCreatePoint}
-          onImportPoints={onImportPoints}
-          onSavePoint={onSavePoint}
-          onSelectEdge={onSelectPointEdge}
-          onValidateDraft={onValidateConfig}
-          points={pointMappings}
-          selectedEdgeId={selectedPointEdgeId}
-        />
-      );
-    case 'collectionTasks':
-      return (
-        <CollectionTasksPage
-          edges={edgeNodes}
-          mode={edgeConfigurationMode}
-          onCreateTask={onCreateCollectionTask}
-          onGenerateSchedule={onGenerateSchedule}
-          onSaveTask={onSaveCollectionTask}
-          onSelectEdge={onSelectCollectionEdge}
-          selectedEdgeId={selectedCollectionEdgeId}
-          tasks={collectionTasks}
+          mqttUplink={mqttUplink}
+          onDeleteConfig={onDeleteDataConfig}
+          onSaveConfig={onSaveDataConfig}
+          onSelectEdge={onSelectDataConfigEdge}
+          protocolConnections={protocolConnections}
+          selectedEdgeId={selectedDataConfigEdgeId}
         />
       );
     case 'algorithms':
