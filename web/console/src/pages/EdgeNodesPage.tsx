@@ -254,6 +254,7 @@ function EdgeConfigSelectionDialog({
   summary: EdgeConfigSummary;
 }) {
   const recommendation = buildConfigRecommendation(summary);
+  const completion = calculateConfigCompletion(summary);
   const rows: Array<{
     action: string;
     description: string;
@@ -328,6 +329,17 @@ function EdgeConfigSelectionDialog({
           <small>{edge.heartbeat}</small>
         </div>
 
+        <div className="edge-config-readiness">
+          <div>
+            <span>配置完整度</span>
+            <strong>{completion}%</strong>
+          </div>
+          <div className="readiness-track" aria-label="配置完整度">
+            <span style={{ width: `${completion}%` }} />
+          </div>
+          <small>{readinessText(completion)}</small>
+        </div>
+
         <div className="edge-agent-recommendation">
           <Sparkles size={16} aria-hidden="true" />
           <div>
@@ -372,6 +384,24 @@ function EdgeConfigSelectionDialog({
       </section>
     </div>
   );
+}
+
+function calculateConfigCompletion(summary: EdgeConfigSummary) {
+  const score = [
+    summary.protocolCount > 0,
+    summary.pointCount > 0,
+    summary.collectionTaskCount > 0,
+    summary.dataConfigCount > 0,
+    summary.mqttSinkId !== '未配置',
+    !summary.releaseStatus.includes('待'),
+  ].filter(Boolean).length;
+  return Math.round((score / 6) * 100);
+}
+
+function readinessText(completion: number) {
+  if (completion >= 84) return '采集、处理、上报和发布链路基本闭环';
+  if (completion >= 50) return '核心链路已具备，仍需补齐发布或上报配置';
+  return '建议先补齐采集连接、点位和任务配置';
 }
 
 function buildConfigRecommendation(summary: EdgeConfigSummary): {

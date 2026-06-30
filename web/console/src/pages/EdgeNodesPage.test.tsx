@@ -32,6 +32,7 @@ describe('EdgeNodesPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '选择边端配置 edge-dev' }));
     expect(screen.getByRole('dialog', { name: '选择边端配置' })).toBeInTheDocument();
+    expect(screen.getByText('配置完整度')).toBeInTheDocument();
     expect(screen.getByText('建议先补齐采集连接')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '打开配置总览' }));
     fireEvent.click(screen.getByRole('button', { name: '运行监控 edge-dev' }));
@@ -63,6 +64,7 @@ describe('EdgeNodesPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '选择边端配置 edge-dev' }));
     expect(screen.getByText('建议创建数据上报配置')).toBeInTheDocument();
+    expect(screen.getByText('67%')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '选择上报' }));
 
     expect(onConfigureEdge).toHaveBeenCalledWith('edge-dev', 'reports');
