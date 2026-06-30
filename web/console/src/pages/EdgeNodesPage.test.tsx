@@ -31,10 +31,41 @@ describe('EdgeNodesPage', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: '选择边端配置 edge-dev' }));
+    expect(screen.getByRole('dialog', { name: '选择边端配置' })).toBeInTheDocument();
+    expect(screen.getByText('建议先补齐采集连接')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '打开配置总览' }));
     fireEvent.click(screen.getByRole('button', { name: '运行监控 edge-dev' }));
 
-    expect(onConfigureEdge).toHaveBeenCalledWith('edge-dev');
+    expect(onConfigureEdge).toHaveBeenCalledWith('edge-dev', 'overview');
     expect(onMonitorEdge).toHaveBeenCalledWith('edge-dev');
+  });
+
+  it('opens a selected configuration section from the smart binding dialog', () => {
+    const onConfigureEdge = vi.fn();
+
+    render(
+      <EdgeNodesPage
+        configSummaries={[
+          {
+            collectionTaskCount: 1,
+            dataConfigCount: 0,
+            edgeId: 'edge-dev',
+            mqttSinkId: 'velamq-main',
+            pointCount: 4,
+            protocolCount: 1,
+            releaseStatus: '待发布',
+          },
+        ]}
+        edges={edges}
+        onConfigureEdge={onConfigureEdge}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '选择边端配置 edge-dev' }));
+    expect(screen.getByText('建议创建数据上报配置')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '选择上报' }));
+
+    expect(onConfigureEdge).toHaveBeenCalledWith('edge-dev', 'reports');
   });
 
   it('opens and saves per-edge mqtt configuration', async () => {

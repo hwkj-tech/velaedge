@@ -6,6 +6,8 @@ import {
   Radio,
   Save,
   Settings2,
+  SlidersHorizontal,
+  Sparkles,
   X,
 } from 'lucide-react';
 
@@ -24,7 +26,27 @@ const fallbackEdges: EdgeNodeResponse[] = [
   },
 ];
 
+export type EdgeConfigTabKey =
+  | 'overview'
+  | 'protocol'
+  | 'points'
+  | 'collection'
+  | 'reports'
+  | 'mqtt'
+  | 'release';
+
+export interface EdgeConfigSummary {
+  collectionTaskCount: number;
+  dataConfigCount: number;
+  edgeId: string;
+  mqttSinkId: string;
+  pointCount: number;
+  protocolCount: number;
+  releaseStatus: string;
+}
+
 export function EdgeNodesPage({
+  configSummaries = [],
   edges = fallbackEdges,
   mqttUplink,
   onConfigureEdge,
@@ -32,14 +54,16 @@ export function EdgeNodesPage({
   onMonitorEdge,
   pageSize = 10,
 }: {
+  configSummaries?: EdgeConfigSummary[];
   edges?: EdgeNodeResponse[];
   mqttUplink?: MqttUplinkResponse;
-  onConfigureEdge?: (edgeId: string) => void;
+  onConfigureEdge?: (edgeId: string, tab?: EdgeConfigTabKey) => void;
   onSaveMqttUplink?: (edgeId: string, request: MqttUplinkResponse) => Promise<MqttUplinkResponse> | MqttUplinkResponse;
   onMonitorEdge?: (edgeId: string) => void;
   pageSize?: number;
 }) {
   const [page, setPage] = useState(1);
+  const [configDialog, setConfigDialog] = useState<EdgeNodeResponse>();
   const [mqttDialog, setMqttDialog] = useState<{ edgeId: string; form: MqttUplinkResponse }>();
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const totalPages = Math.max(1, Math.ceil(edges.length / pageSize));
@@ -96,7 +120,7 @@ export function EdgeNodesPage({
                       <button
                         aria-label={`选择边端配置 ${edge.edgeId}`}
                         className="secondary-button compact"
-                        onClick={() => onConfigureEdge?.(edge.edgeId)}
+                        onClick={() => setConfigDialog(edge)}
                         type="button"
                       >
                         <Settings2 size={14} aria-hidden="true" />
@@ -159,6 +183,17 @@ export function EdgeNodesPage({
           </div>
         </div>
       </section>
+      {configDialog ? (
+        <EdgeConfigSelectionDialog
+          edge={configDialog}
+          onClose={() => setConfigDialog(undefined)}
+          onOpen={(tab) => {
+            onConfigureEdge?.(configDialog.edgeId, tab);
+            setConfigDialog(undefined);
+          }}
+          summary={findConfigSummary(configSummaries, configDialog.edgeId)}
+        />
+      ) : null}
       {mqttDialog ? (
         <div className="modal-backdrop">
           <form
@@ -204,6 +239,201 @@ export function EdgeNodesPage({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function EdgeConfigSelectionDialog({
+  edge,
+  onClose,
+  onOpen,
+  summary,
+}: {
+  edge: EdgeNodeResponse;
+  onClose: () => void;
+  onOpen: (tab: EdgeConfigTabKey) => void;
+  summary: EdgeConfigSummary;
+}) {
+  const recommendation = buildConfigRecommendation(summary);
+  const rows: Array<{
+    action: string;
+    description: string;
+    label: string;
+    status: string;
+    tab: EdgeConfigTabKey;
+  }> = [
+    {
+      action: '选择连接',
+      description: '串口总线、Modbus RTU/TCP、DL/T645 等南向采集通道',
+      label: '协议连接',
+      status: `${summary.protocolCount} 个连接`,
+      tab: 'protocol',
+    },
+    {
+      action: '选择点位',
+      description: '协议地址到语义点位的映射',
+      label: '点位配置',
+      status: `${summary.pointCount} 个点位`,
+      tab: 'points',
+    },
+    {
+      action: '选择任务',
+      description: '采集周期、点位批次、超时重试和缓存策略',
+      label: '采集任务',
+      status: `${summary.collectionTaskCount} 个任务`,
+      tab: 'collection',
+    },
+    {
+      action: '选择上报',
+      description: '点位组合、DSL 算法、JSON 结构和 MQTT topic',
+      label: '数据上报',
+      status: `${summary.dataConfigCount} 套配置`,
+      tab: 'reports',
+    },
+    {
+      action: '选择 MQTT',
+      description: 'velaMQ broker、clientId、QoS 和批量策略',
+      label: 'MQTT 上报',
+      status: summary.mqttSinkId,
+      tab: 'mqtt',
+    },
+    {
+      action: '选择发布',
+      description: '配置差异、校验结果和 runtime 应用状态',
+      label: '配置发布',
+      status: summary.releaseStatus,
+      tab: 'release',
+    },
+  ];
+
+  return (
+    <div className="modal-backdrop">
+      <section
+        aria-label="选择边端配置"
+        className="modal-panel edge-config-select-modal"
+        role="dialog"
+      >
+        <div className="modal-header">
+          <div>
+            <h3>选择边端配置</h3>
+            <p>{edge.displayName} · {edge.edgeId} · {edge.runtimeId}</p>
+          </div>
+          <button aria-label="关闭" className="icon-button" onClick={onClose} type="button">
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="edge-config-select-summary">
+          <span className={edge.status === '健康' ? 'tag ok' : 'tag warn'}>{edge.status}</span>
+          <strong>{edge.resources}</strong>
+          <small>{edge.heartbeat}</small>
+        </div>
+
+        <div className="edge-agent-recommendation">
+          <Sparkles size={16} aria-hidden="true" />
+          <div>
+            <strong>{recommendation.title}</strong>
+            <p>{recommendation.detail}</p>
+          </div>
+          <button
+            className="secondary-button compact"
+            onClick={() => onOpen(recommendation.tab)}
+            type="button"
+          >
+            {recommendation.action}
+          </button>
+        </div>
+
+        <div className="binding-matrix">
+          {rows.map((row) => (
+            <div className="binding-row" key={row.label}>
+              <div>
+                <strong>{row.label}</strong>
+                <p>{row.description}</p>
+              </div>
+              <span className="binding-status">{row.status}</span>
+              <button
+                className="secondary-button compact"
+                onClick={() => onOpen(row.tab)}
+                type="button"
+              >
+                {row.action}
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="drawer-footer">
+          <button className="secondary-button" onClick={onClose} type="button">取消</button>
+          <button className="primary-button" onClick={() => onOpen('overview')} type="button">
+            <SlidersHorizontal size={15} aria-hidden="true" />
+            打开配置总览
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function buildConfigRecommendation(summary: EdgeConfigSummary): {
+  action: string;
+  detail: string;
+  tab: EdgeConfigTabKey;
+  title: string;
+} {
+  if (summary.protocolCount === 0) {
+    return {
+      action: '去选择连接',
+      detail: '该边端还没有南向采集连接，建议先维护串口或 Modbus 连接。',
+      tab: 'protocol',
+      title: '建议先补齐采集连接',
+    };
+  }
+  if (summary.pointCount === 0) {
+    return {
+      action: '去选择点位',
+      detail: '已有连接但还没有语义点位，建议先导入或维护点位映射。',
+      tab: 'points',
+      title: '建议生成点位映射',
+    };
+  }
+  if (summary.dataConfigCount === 0) {
+    return {
+      action: '去选择上报',
+      detail: '点位和采集链路已具备，下一步可以组合点位、算法和 MQTT topic。',
+      tab: 'reports',
+      title: '建议创建数据上报配置',
+    };
+  }
+  if (summary.releaseStatus.includes('待') || summary.releaseStatus.includes('下发')) {
+    return {
+      action: '去发布',
+      detail: '配置已具备，建议校验差异并发布到 runtime。',
+      tab: 'release',
+      title: '建议校验并发布配置',
+    };
+  }
+  return {
+    action: '看总览',
+    detail: '采集、处理和上报链路已形成闭环，可从总览继续检查绑定关系。',
+    tab: 'overview',
+    title: '配置链路状态良好',
+  };
+}
+
+function findConfigSummary(
+  summaries: EdgeConfigSummary[],
+  edgeId: string,
+): EdgeConfigSummary {
+  return (
+    summaries.find((summary) => summary.edgeId === edgeId) ?? {
+      collectionTaskCount: 0,
+      dataConfigCount: 0,
+      edgeId,
+      mqttSinkId: '未配置',
+      pointCount: 0,
+      protocolCount: 0,
+      releaseStatus: '待发布',
+    }
   );
 }
 

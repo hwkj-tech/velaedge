@@ -72,7 +72,11 @@ import { DashboardPage } from './pages/DashboardPage';
 import { DataConfigsPage } from './pages/DataConfigsPage';
 import { DeviceModelsPage } from './pages/DeviceModelsPage';
 import { DiscoveryPage } from './pages/DiscoveryPage';
-import { EdgeNodesPage } from './pages/EdgeNodesPage';
+import {
+  EdgeNodesPage,
+  type EdgeConfigSummary,
+  type EdgeConfigTabKey,
+} from './pages/EdgeNodesPage';
 import { CollectionTasksPage } from './pages/CollectionTasksPage';
 import { MqttUplinkPage } from './pages/MqttUplinkPage';
 import { PointMappingsPage } from './pages/PointMappingsPage';
@@ -135,6 +139,8 @@ export default function App() {
   const [auditRecords, setAuditRecords] = useState<AuditRecordResponse[]>();
   const [edgeConfigurationMode, setEdgeConfigurationMode] =
     useState<EdgeConfigurationMode>('list');
+  const [edgeConfigInitialTab, setEdgeConfigInitialTab] =
+    useState<EdgeConfigTabKey>('overview');
   const [focusedRuntimeEdgeId, setFocusedRuntimeEdgeId] = useState<string>();
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>(
     'loading',
@@ -473,8 +479,12 @@ export default function App() {
     }
   };
 
-  const handleConfigureEdge = async (edgeId: string) => {
+  const handleConfigureEdge = async (
+    edgeId: string,
+    tab: EdgeConfigTabKey = 'overview',
+  ) => {
     setEdgeConfigurationMode('configure');
+    setEdgeConfigInitialTab(tab);
     setFocusedRuntimeEdgeId(undefined);
     setSelectedProtocolEdgeId(edgeId);
     setSelectedPointEdgeId(edgeId);
@@ -563,6 +573,7 @@ export default function App() {
         loadState,
         edgeConfigurationMode,
         focusedRuntimeEdgeId,
+        edgeConfigInitialTab,
         handleAgentSafetyCheck,
         handleAssessAlgorithmRisk,
         handleConfigureEdge,
@@ -684,15 +695,45 @@ function uniqueSuggestions(suggestions: PointMappingSuggestionResponse[]) {
   });
 }
 
+function buildEdgeConfigSummaries(
+  edges: EdgeNodeResponse[] = [],
+  protocolConnections: ProtocolConnectionResponse[] = [],
+  pointMappings: PointMappingResponse[] = [],
+  collectionTasks: CollectionTaskResponse[] = [],
+  dataConfigs: DataConfigResponse[] = [],
+  mqttUplink?: MqttUplinkResponse,
+  releaseList?: ReleaseListResponse,
+): EdgeConfigSummary[] {
+  return edges.map((edge) => {
+    const releaseResult = releaseList?.applyResults.find(
+      (result) => result.edgeId === edge.edgeId,
+    );
+    return {
+      collectionTaskCount: collectionTasks.filter((task) => task.edgeId === edge.edgeId)
+        .length,
+      dataConfigCount: dataConfigs.filter((config) => config.edgeId === edge.edgeId)
+        .length,
+      edgeId: edge.edgeId,
+      mqttSinkId: mqttUplink?.sinkId ?? '未配置',
+      pointCount: pointMappings.filter((point) => point.edgeId === edge.edgeId).length,
+      protocolCount: protocolConnections.filter(
+        (connection) => connection.edgeId === edge.edgeId,
+      ).length,
+      releaseStatus: formatReleaseBindingStatus(releaseResult),
+    };
+  });
+}
+
 function renderPage(
   activePage: PageKey,
   summary: SummaryResponse,
   loadState: 'loading' | 'ready' | 'error',
   edgeConfigurationMode: EdgeConfigurationMode,
   focusedRuntimeEdgeId: string | undefined,
+  edgeConfigInitialTab: EdgeConfigTabKey,
   onAgentSafetyCheck: () => Promise<AgentActionResponse>,
   onAssessAlgorithmRisk: (edgeId: string) => Promise<ManagementActionResponse>,
-  onConfigureEdge: (edgeId: string) => Promise<void>,
+  onConfigureEdge: (edgeId: string, tab?: EdgeConfigTabKey) => Promise<void>,
   onCreateAlgorithm: (
     edgeId: string,
     request: CreateAlgorithmRequest,
@@ -783,10 +824,19 @@ function renderPage(
     case 'edges':
       return (
         <EdgeNodesPage
+          configSummaries={buildEdgeConfigSummaries(
+            edgeNodes,
+            protocolConnections,
+            pointMappings,
+            collectionTasks,
+            dataConfigs,
+            mqttUplink,
+            releaseList,
+          )}
           edges={edgeNodes}
           mqttUplink={mqttUplink}
-          onConfigureEdge={(edgeId) => {
-            void onConfigureEdge(edgeId);
+          onConfigureEdge={(edgeId, tab) => {
+            void onConfigureEdge(edgeId, tab);
           }}
           onMonitorEdge={onMonitorEdge}
           onSaveMqttUplink={onSaveMqttUplink}
@@ -801,6 +851,7 @@ function renderPage(
           discoverySuggestions={discoverySuggestions}
           edgeId={selectedProtocolEdgeId}
           edges={edgeNodes}
+          initialTab={edgeConfigInitialTab}
           mqttUplink={mqttUplink}
           onCreateCollectionTask={onCreateCollectionTask}
           onCreatePoint={onCreatePoint}
@@ -910,6 +961,7 @@ function EdgeConfigWorkspace({
   discoverySuggestions,
   edgeId,
   edges,
+  initialTab,
   mqttUplink,
   onCreateCollectionTask,
   onCreatePoint,
@@ -936,6 +988,7 @@ function EdgeConfigWorkspace({
   discoverySuggestions?: PointMappingSuggestionResponse[];
   edgeId: string;
   edges?: EdgeNodeResponse[];
+  initialTab: EdgeConfigTabKey;
   mqttUplink?: MqttUplinkResponse;
   onCreateCollectionTask: (
     edgeId: string,
@@ -987,7 +1040,7 @@ function EdgeConfigWorkspace({
   protocolConnections?: ProtocolConnectionResponse[];
   releaseList?: ReleaseListResponse;
 }) {
-  const [activeTab, setActiveTab] = useState<EdgeConfigTab>('overview');
+  const [activeTab, setActiveTab] = useState<EdgeConfigTab>(initialTab);
   const edge = edges?.find((item) => item.edgeId === edgeId);
   const tabs: Array<{ key: EdgeConfigTab; label: string }> = [
     { key: 'overview', label: '配置总览' },
@@ -999,6 +1052,10 @@ function EdgeConfigWorkspace({
     { key: 'discovery', label: '点位探测' },
     { key: 'release', label: '配置发布' },
   ];
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [edgeId, initialTab]);
 
   return (
     <div className="edge-config-workspace">
