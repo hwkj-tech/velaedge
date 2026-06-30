@@ -30,7 +30,7 @@ describe('EdgeNodesPage', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '配置边端 edge-dev' }));
+    fireEvent.click(screen.getByRole('button', { name: '选择边端配置 edge-dev' }));
     fireEvent.click(screen.getByRole('button', { name: '运行监控 edge-dev' }));
 
     expect(onConfigureEdge).toHaveBeenCalledWith('edge-dev');

@@ -17,7 +17,7 @@ describe('ReleasesPage', () => {
     expect(screen.getByText('已创建发布，等待 runtime 回报')).toBeInTheDocument();
   });
 
-  it('publishes to the selected edge node', async () => {
+  it('does not expose a global edge selector for publishing', async () => {
     const onPublish = vi.fn().mockResolvedValue(undefined);
 
     render(
@@ -48,13 +48,11 @@ describe('ReleasesPage', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText('发布边端'), {
-      target: { value: 'edge-lab' },
-    });
+    expect(screen.queryByLabelText('发布边端')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '创建发布' }));
 
     await waitFor(() => {
-      expect(onPublish).toHaveBeenCalledWith('edge-lab');
+      expect(onPublish).toHaveBeenCalledWith('edge-dev');
     });
   });
 

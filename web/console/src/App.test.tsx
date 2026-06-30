@@ -814,7 +814,7 @@ describe('App cloud console write actions', () => {
     fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
     expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '配置边端 edge-dev' }));
+    fireEvent.click(screen.getByRole('button', { name: '选择边端配置 edge-dev' }));
 
     expect(await screen.findByRole('heading', { name: '研发实验室边端' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: '协议连接' })).toHaveAttribute('aria-selected', 'true');
@@ -1242,7 +1242,7 @@ describe('App cloud console write actions', () => {
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
-    fireEvent.click(screen.getByRole('button', { name: '配置边端 edge-dev' }));
+    fireEvent.click(screen.getByRole('button', { name: '选择边端配置 edge-dev' }));
     expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('tab', { name: '数据上报' }));
@@ -1266,7 +1266,7 @@ describe('App cloud console write actions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
     expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '配置边端 edge-dev' }));
+    fireEvent.click(screen.getByRole('button', { name: '选择边端配置 edge-dev' }));
 
     await waitFor(() => {
       expect(fetchEdgeProtocolConnections).toHaveBeenCalledWith('edge-dev');
@@ -1281,7 +1281,7 @@ describe('App cloud console write actions', () => {
 async function openEdgeConfiguration() {
   fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
   expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: '配置边端 edge-dev' }));
+  fireEvent.click(screen.getByRole('button', { name: '选择边端配置 edge-dev' }));
   expect(await screen.findByRole('heading', { name: '研发实验室边端' })).toBeInTheDocument();
   expect(screen.getByRole('tab', { name: '协议连接' })).toHaveAttribute('aria-selected', 'true');
 }

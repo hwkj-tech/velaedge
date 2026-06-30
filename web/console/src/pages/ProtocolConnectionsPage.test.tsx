@@ -53,7 +53,7 @@ describe('ProtocolConnectionsPage', () => {
     expect(screen.getByText('已保存')).toBeInTheDocument();
   });
 
-  it('shows the bound edge context without switching edges in the page', () => {
+  it('does not render edge selection context inside the page toolbar', () => {
     render(
       <ProtocolConnectionsPage
         edges={[
@@ -82,7 +82,7 @@ describe('ProtocolConnectionsPage', () => {
       />,
     );
 
-    expect(screen.getByLabelText('当前边端')).toHaveTextContent('研发实验室边端 / edge-dev');
+    expect(screen.queryByLabelText('当前边端')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('配置边端')).not.toBeInTheDocument();
   });
 

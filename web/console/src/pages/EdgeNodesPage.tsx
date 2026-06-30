@@ -94,13 +94,13 @@ export function EdgeNodesPage({
                   <td>
                     <div className="row-actions">
                       <button
-                        aria-label={`配置边端 ${edge.edgeId}`}
+                        aria-label={`选择边端配置 ${edge.edgeId}`}
                         className="secondary-button compact"
                         onClick={() => onConfigureEdge?.(edge.edgeId)}
                         type="button"
                       >
                         <Settings2 size={14} aria-hidden="true" />
-                        配置
+                        选择配置
                       </button>
                       <button
                         aria-label={`运行监控 ${edge.edgeId}`}

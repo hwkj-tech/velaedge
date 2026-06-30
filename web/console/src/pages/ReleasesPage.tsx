@@ -81,7 +81,6 @@ const applyColumns: Array<DataTableColumn<ReleaseListResponse['applyResults'][nu
 
 export function ReleasesPage({
   edges = fallbackEdges,
-  embedded = false,
   onPublish,
   onShowDiff,
   onValidateRelease,
@@ -89,7 +88,6 @@ export function ReleasesPage({
   selectedEdgeId: controlledEdgeId,
 }: {
   edges?: EdgeNodeResponse[];
-  embedded?: boolean;
   onPublish?: (edgeId: string) => Promise<void> | void;
   onShowDiff?: (
     edgeId: string,
@@ -100,10 +98,7 @@ export function ReleasesPage({
   releaseList?: ReleaseListResponse;
   selectedEdgeId?: string;
 }) {
-  const [localSelectedEdgeId, setLocalSelectedEdgeId] = useState(
-    () => edges[0]?.edgeId ?? 'edge-dev',
-  );
-  const selectedEdgeId = controlledEdgeId ?? localSelectedEdgeId;
+  const selectedEdgeId = controlledEdgeId ?? edges[0]?.edgeId ?? 'edge-dev';
   const [publishState, setPublishState] = useState<
     'idle' | 'publishing' | 'published' | 'error'
   >('idle');
@@ -191,25 +186,6 @@ export function ReleasesPage({
             <ShieldCheck size={15} aria-hidden="true" />
             {actionState === 'validating' ? '校验中' : '校验配置'}
           </button>
-          {!embedded ? (
-            <label className="release-edge-select">
-              <span>发布边端</span>
-              <select
-                value={selectedEdgeId}
-                onChange={(event) => {
-                  setLocalSelectedEdgeId(event.target.value);
-                  setPublishState('idle');
-                  setToolbarMessage('');
-                }}
-              >
-                {edges.map((edge) => (
-                  <option key={edge.edgeId} value={edge.edgeId}>
-                    {edge.edgeId}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
           <span className={`release-status ${publishState}`} role="status">
             {publishStatusText(publishState)}
           </span>

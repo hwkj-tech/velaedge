@@ -136,7 +136,7 @@ export function RuntimeStatusPage({
         <Metric
           label="平均采集延迟"
           value={`${averageCollectionLatencyMs}ms`}
-          hint={focusedEdgeId ? '当前边端' : '所有在线边端'}
+          hint={focusedEdgeId ? '选中边端' : '所有在线边端'}
         />
         <Metric label="本地缓冲" value={String(bufferedRecords)} hint="待回传记录" />
         <Metric label="待上传" value={String(pendingUploads)} hint="云端同步队列" />

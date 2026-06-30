@@ -89,6 +89,11 @@ const defaultConfigEdgeId = 'edge-dev';
 type EdgeConfigurationMode = 'configure' | 'list';
 
 const configurationPages = new Set<PageKey>(['edgeConfig']);
+const deprecatedGlobalConfigurationPages = new Set<PageKey>([
+  'protocolConnections',
+  'dataConfigs',
+  'releases',
+]);
 
 interface ConsoleSnapshot {
   algorithms: AlgorithmResponse[];
@@ -213,7 +218,7 @@ export default function App() {
     if (importableSuggestions.length === 0) {
       return {
         action: 'import_points',
-        details: ['当前边端没有可导入的候选点位'],
+        details: ['没有可导入的候选点位'],
         message: '没有可导入的候选点位',
         status: '未变更',
       };
@@ -522,6 +527,13 @@ export default function App() {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (deprecatedGlobalConfigurationPages.has(activePage)) {
+      setEdgeConfigurationMode('list');
+      setActivePage('edges');
+    }
+  }, [activePage]);
 
   useEffect(() => {
     let mounted = true;
@@ -1087,7 +1099,6 @@ function EdgeConfigWorkspace({
         {activeTab === 'release' ? (
           <ReleasesPage
             edges={edges}
-            embedded
             onPublish={onPublish}
             onShowDiff={onReleaseDiff}
             onValidateRelease={onValidateConfig}

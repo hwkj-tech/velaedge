@@ -91,7 +91,6 @@ export function DataConfigsPage({
   const activeConfigs = configs.filter((config) => config.edgeId === selectedEdgeId);
   const activeAlgorithms = algorithms.filter((algorithm) => algorithm.edgeId === selectedEdgeId);
   const activePointMappings = pointMappings.filter((point) => point.edgeId === selectedEdgeId);
-  const edge = edges.find((item) => item.edgeId === selectedEdgeId);
   const columns = useMemo<Array<DataTableColumn<DataConfigResponse>>>(
     () => [
       {
@@ -263,12 +262,6 @@ export function DataConfigsPage({
           <p>定义数据上报流水线：选择边端已配置点位，拖入算法节点汇聚处理，再组装 JSON 上报到 MQTT topic。</p>
         </div>
         <div className="toolbar">
-          {!embedded ? (
-            <div className="edge-context-pill" aria-label="当前边端">
-              <span>当前边端</span>
-              <strong>{edge?.displayName ?? selectedEdgeId} / {selectedEdgeId}</strong>
-            </div>
-          ) : null}
           {status ? <span className="toolbar-status" role="status">{status}</span> : null}
           <button className="primary-button" onClick={openCreate} type="button">
             <Plus size={15} aria-hidden="true" />
@@ -570,7 +563,7 @@ function VisualReportBuilder({
               <span>{algorithm.algorithmId}</span>
               <small>{algorithm.algorithmKind}</small>
             </button>
-          )) : <p className="palette-empty">当前边端暂无算法，可直接上报原始点位。</p>}
+          )) : <p className="palette-empty">暂无算法，可直接上报原始点位。</p>}
         </div>
       </aside>
       <section

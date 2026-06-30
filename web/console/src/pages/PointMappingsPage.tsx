@@ -223,12 +223,6 @@ export function PointMappingsPage({
           </p>
         </div>
         <div className="toolbar">
-          {isConfigureMode && !embedded ? (
-            <div className="edge-context-pill" aria-label="当前边端">
-              <span>当前边端</span>
-              <strong>{activeEdge.displayName} / {activeEdge.edgeId}</strong>
-            </div>
-          ) : null}
           {toolbarMessage ? (
             <span className="toolbar-status" role="status">
               {toolbarMessage}
