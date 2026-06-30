@@ -1096,6 +1096,8 @@ function EdgeConfigWorkspace({
             dataConfigs={dataConfigs}
             edgeId={edgeId}
             mqttUplink={mqttUplink}
+            onPublish={onPublish}
+            onValidateConfig={onValidateConfig}
             pointMappings={pointMappings}
             protocolConnections={protocolConnections}
             releaseList={releaseList}
@@ -1187,6 +1189,8 @@ function EdgeConfigOverview({
   dataConfigs = [],
   edgeId,
   mqttUplink,
+  onPublish,
+  onValidateConfig,
   pointMappings = [],
   protocolConnections = [],
   releaseList,
@@ -1196,12 +1200,24 @@ function EdgeConfigOverview({
   dataConfigs?: DataConfigResponse[];
   edgeId: string;
   mqttUplink?: MqttUplinkResponse;
+  onPublish: (edgeId: string) => Promise<void>;
+  onValidateConfig: (edgeId?: string) => Promise<ManagementActionResponse>;
   pointMappings?: PointMappingResponse[];
   protocolConnections?: ProtocolConnectionResponse[];
   releaseList?: ReleaseListResponse;
   setActiveTab: (tab: EdgeConfigTab) => void;
 }) {
+  const [actionMessage, setActionMessage] = useState('');
+  const [actionState, setActionState] = useState<'idle' | 'validating' | 'publishing'>('idle');
   const releaseResult = releaseList?.applyResults.find((result) => result.edgeId === edgeId);
+  const readiness = calculateOverviewReadiness({
+    collectionTasks,
+    dataConfigs,
+    mqttUplink,
+    pointMappings,
+    protocolConnections,
+    releaseResult,
+  });
   const summaryCards = [
     { label: '协议连接', value: protocolConnections.length, tab: 'protocol' as const },
     { label: '点位配置', value: pointMappings.length, tab: 'points' as const },
@@ -1259,6 +1275,32 @@ function EdgeConfigOverview({
     },
   ];
 
+  const handleValidate = async () => {
+    setActionState('validating');
+    setActionMessage('');
+    try {
+      const result = await onValidateConfig(edgeId);
+      setActionMessage(result.message || `校验${result.status ? ` ${result.status}` : '完成'}`);
+    } catch {
+      setActionMessage('配置校验失败');
+    } finally {
+      setActionState('idle');
+    }
+  };
+
+  const handlePublish = async () => {
+    setActionState('publishing');
+    setActionMessage('');
+    try {
+      await onPublish(edgeId);
+      setActionMessage('已发布到 runtime 待应用');
+    } catch {
+      setActionMessage('发布失败');
+    } finally {
+      setActionState('idle');
+    }
+  };
+
   return (
     <div className="edge-config-overview">
       <section className="page-intro">
@@ -1267,6 +1309,44 @@ function EdgeConfigOverview({
           <p>
             这里展示该边端已选择的采集、处理、上报和发布配置。新增配置后，从这里进入对应配置项维护并发布到 runtime。
           </p>
+        </div>
+      </section>
+
+      <section className="overview-command-strip" aria-label="边端配置发布状态">
+        <div className="overview-readiness">
+          <span>配置完整度</span>
+          <strong>{readiness}%</strong>
+          <div className="readiness-track">
+            <span style={{ width: `${readiness}%` }} />
+          </div>
+          <small>{readiness >= 84 ? '可发布到 runtime' : '建议先补齐连接、点位、上报和 MQTT'}</small>
+        </div>
+        <div className="overview-release-state">
+          <span>当前发布状态</span>
+          <strong>{formatReleaseBindingStatus(releaseResult)}</strong>
+          {actionMessage ? <small role="status">{actionMessage}</small> : null}
+        </div>
+        <div className="overview-actions">
+          <button
+            className="secondary-button"
+            disabled={actionState !== 'idle'}
+            onClick={() => {
+              void handleValidate();
+            }}
+            type="button"
+          >
+            {actionState === 'validating' ? '校验中' : '校验配置'}
+          </button>
+          <button
+            className="primary-button"
+            disabled={actionState !== 'idle'}
+            onClick={() => {
+              void handlePublish();
+            }}
+            type="button"
+          >
+            {actionState === 'publishing' ? '发布中' : '发布到 runtime'}
+          </button>
         </div>
       </section>
 
@@ -1310,6 +1390,32 @@ function EdgeConfigOverview({
       </section>
     </div>
   );
+}
+
+function calculateOverviewReadiness({
+  collectionTasks,
+  dataConfigs,
+  mqttUplink,
+  pointMappings,
+  protocolConnections,
+  releaseResult,
+}: {
+  collectionTasks: CollectionTaskResponse[];
+  dataConfigs: DataConfigResponse[];
+  mqttUplink?: MqttUplinkResponse;
+  pointMappings: PointMappingResponse[];
+  protocolConnections: ProtocolConnectionResponse[];
+  releaseResult: ReleaseListResponse['applyResults'][number] | undefined;
+}) {
+  const completed = [
+    protocolConnections.length > 0,
+    pointMappings.length > 0,
+    collectionTasks.length > 0,
+    dataConfigs.length > 0,
+    Boolean(mqttUplink?.sinkId),
+    Boolean(releaseResult && !releaseResult.result.includes('待')),
+  ].filter(Boolean).length;
+  return Math.round((completed / 6) * 100);
 }
 
 function formatReleaseBindingStatus(

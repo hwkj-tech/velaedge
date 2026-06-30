@@ -330,7 +330,7 @@ export function ProtocolConnectionsPage({
                     <td>
                       {isConfigureMode ? (
                         <button
-                          aria-label={`选择连接 ${connection.connectionId}`}
+                          aria-label={`编辑连接 ${connection.connectionId}`}
                           aria-pressed={
                             connection.connectionId === selectedConnection.connectionId
                           }

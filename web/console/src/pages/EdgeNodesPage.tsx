@@ -118,13 +118,13 @@ export function EdgeNodesPage({
                   <td>
                     <div className="row-actions">
                       <button
-                        aria-label={`选择边端配置 ${edge.edgeId}`}
+                        aria-label={`配置 ${edge.edgeId}`}
                         className="secondary-button compact"
                         onClick={() => setConfigDialog(edge)}
                         type="button"
                       >
                         <Settings2 size={14} aria-hidden="true" />
-                        选择配置
+                        配置
                       </button>
                       <button
                         aria-label={`运行监控 ${edge.edgeId}`}
@@ -263,42 +263,42 @@ function EdgeConfigSelectionDialog({
     tab: EdgeConfigTabKey;
   }> = [
     {
-      action: '选择连接',
+      action: '配置连接',
       description: '串口总线、Modbus RTU/TCP、DL/T645 等南向采集通道',
       label: '协议连接',
       status: `${summary.protocolCount} 个连接`,
       tab: 'protocol',
     },
     {
-      action: '选择点位',
+      action: '配置点位',
       description: '协议地址到语义点位的映射',
       label: '点位配置',
       status: `${summary.pointCount} 个点位`,
       tab: 'points',
     },
     {
-      action: '选择任务',
+      action: '配置任务',
       description: '采集周期、点位批次、超时重试和缓存策略',
       label: '采集任务',
       status: `${summary.collectionTaskCount} 个任务`,
       tab: 'collection',
     },
     {
-      action: '选择上报',
+      action: '配置上报',
       description: '点位组合、DSL 算法、JSON 结构和 MQTT topic',
       label: '数据上报',
       status: `${summary.dataConfigCount} 套配置`,
       tab: 'reports',
     },
     {
-      action: '选择 MQTT',
+      action: '配置 MQTT',
       description: 'velaMQ broker、clientId、QoS 和批量策略',
       label: 'MQTT 上报',
       status: summary.mqttSinkId,
       tab: 'mqtt',
     },
     {
-      action: '选择发布',
+      action: '配置发布',
       description: '配置差异、校验结果和 runtime 应用状态',
       label: '配置发布',
       status: summary.releaseStatus,
@@ -309,13 +309,13 @@ function EdgeConfigSelectionDialog({
   return (
     <div className="modal-backdrop">
       <section
-        aria-label="选择边端配置"
+        aria-label="配置边端"
         className="modal-panel edge-config-select-modal"
         role="dialog"
       >
         <div className="modal-header">
           <div>
-            <h3>选择边端配置</h3>
+            <h3>配置边端</h3>
             <p>{edge.displayName} · {edge.edgeId} · {edge.runtimeId}</p>
           </div>
           <button aria-label="关闭" className="icon-button" onClick={onClose} type="button">
@@ -412,7 +412,7 @@ function buildConfigRecommendation(summary: EdgeConfigSummary): {
 } {
   if (summary.protocolCount === 0) {
     return {
-      action: '去选择连接',
+      action: '去配置连接',
       detail: '该边端还没有南向采集连接，建议先维护串口或 Modbus 连接。',
       tab: 'protocol',
       title: '建议先补齐采集连接',
@@ -420,7 +420,7 @@ function buildConfigRecommendation(summary: EdgeConfigSummary): {
   }
   if (summary.pointCount === 0) {
     return {
-      action: '去选择点位',
+      action: '去配置点位',
       detail: '已有连接但还没有语义点位，建议先导入或维护点位映射。',
       tab: 'points',
       title: '建议生成点位映射',
@@ -428,7 +428,7 @@ function buildConfigRecommendation(summary: EdgeConfigSummary): {
   }
   if (summary.dataConfigCount === 0) {
     return {
-      action: '去选择上报',
+      action: '去配置上报',
       detail: '点位和采集链路已具备，下一步可以组合点位、算法和 MQTT topic。',
       tab: 'reports',
       title: '建议创建数据上报配置',

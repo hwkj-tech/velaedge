@@ -623,7 +623,7 @@ function pointColumns(
       render: (row) =>
         isConfigureMode ? (
           <button
-            aria-label={`选择点位 ${row.pointId}`}
+            aria-label={`编辑点位 ${row.pointId}`}
             aria-pressed={row.pointId === selectedPointId}
             className="point-id-button"
             onClick={() => onSelectPoint(row.pointId)}

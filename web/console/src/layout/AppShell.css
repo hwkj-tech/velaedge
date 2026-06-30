@@ -283,6 +283,55 @@
   gap: 16px;
 }
 
+.overview-command-strip {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.15fr) minmax(240px, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid #c9d7ea;
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, #ffffff 0%, #f8fbff 48%, #f3f7fb 100%);
+  padding: 14px;
+}
+
+.overview-readiness,
+.overview-release-state {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.overview-readiness span,
+.overview-release-state span {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.overview-readiness strong,
+.overview-release-state strong {
+  color: var(--color-text);
+  font-size: 20px;
+  line-height: 1.1;
+}
+
+.overview-readiness small,
+.overview-release-state small {
+  color: #42526b;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.overview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .binding-summary-grid {
   display: grid;
   gap: 10px;

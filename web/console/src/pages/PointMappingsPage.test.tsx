@@ -8,9 +8,9 @@ describe('PointMappingsPage', () => {
     render(<PointMappingsPage />);
 
     expect(screen.getByText('点位配置表')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '选择点位 pressure' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '编辑点位 pressure' })).toBeInTheDocument();
     expect(screen.getByText('holding_register:40001')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '选择点位 pressure' }));
+    fireEvent.click(screen.getByRole('button', { name: '编辑点位 pressure' }));
     expect(screen.getByText('编辑点位 pressure')).toBeInTheDocument();
     expect(screen.getByText('采集周期')).toBeInTheDocument();
     expect(screen.queryByText(/草稿/)).not.toBeInTheDocument();
@@ -21,7 +21,7 @@ describe('PointMappingsPage', () => {
 
     render(<PointMappingsPage selectedEdgeId="edge-dev" onSavePoint={onSavePoint} />);
 
-    fireEvent.click(screen.getByRole('button', { name: '选择点位 pressure' }));
+    fireEvent.click(screen.getByRole('button', { name: '编辑点位 pressure' }));
     fireEvent.change(screen.getByLabelText('地址值'), {
       target: { value: '40002' },
     });
@@ -50,7 +50,7 @@ describe('PointMappingsPage', () => {
 
     render(<PointMappingsPage selectedEdgeId="edge-dev" onSavePoint={onSavePoint} />);
 
-    fireEvent.click(screen.getByRole('button', { name: '选择点位 running' }));
+    fireEvent.click(screen.getByRole('button', { name: '编辑点位 running' }));
     expect(screen.getByText('编辑点位 running')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('地址值'), {
@@ -209,13 +209,13 @@ describe('PointMappingsPage', () => {
     render(<PointMappingsPage points={points} selectedEdgeId="edge-dev" />);
 
     expect(screen.getByText('第 1 / 2 页')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '选择点位 point-1' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '选择点位 point-11' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '编辑点位 point-1' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '编辑点位 point-11' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '下一页' }));
 
     expect(screen.getByText('第 2 / 2 页')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '选择点位 point-11' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '选择点位 point-1' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '编辑点位 point-11' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '编辑点位 point-1' })).not.toBeInTheDocument();
   });
 });

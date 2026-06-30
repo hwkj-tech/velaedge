@@ -347,7 +347,7 @@ export function CollectionTasksPage({
                     <td>
                       {isConfigureMode ? (
                         <button
-                          aria-label={`选择任务 ${task.taskId}`}
+                          aria-label={`编辑任务 ${task.taskId}`}
                           aria-pressed={task.taskId === selectedTask.taskId}
                           className="point-id-button"
                           onClick={() => {
