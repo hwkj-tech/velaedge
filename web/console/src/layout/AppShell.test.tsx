@@ -17,9 +17,9 @@ describe('AppShell', () => {
       'page',
     );
     expect(screen.getByRole('button', { name: /边端管理/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /数据配置/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /数据上报/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /算法配置/ })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /MQTT Sink/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /MQTT Sink/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /配置发布/ })).toBeInTheDocument();
     expect(screen.getAllByText('Dashboard').length).toBeGreaterThan(0);
   });

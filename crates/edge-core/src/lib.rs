@@ -9,8 +9,9 @@ pub mod policy;
 pub mod shadow;
 
 pub use config::{
-    CollectionTask, DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPayloadMode,
-    DataConfigPoint, DataConfigPublish, DeviceInstance, DiscoveredPoint, DiscoveryReport,
+    CollectionTask, DataConfig, DataConfigCollection, DataConfigGraphEdge, DataConfigGraphNode,
+    DataConfigGraphNodeKind, DataConfigPayload, DataConfigPayloadMode, DataConfigPoint,
+    DataConfigPublish, DataConfigVisualGraph, DeviceInstance, DiscoveredPoint, DiscoveryReport,
     EdgeConfigPackage, MqttUplinkConfig, PointAddress, PointMappingSuggestion, ProtocolConnection,
     ProtocolType, SerialConnectionSettings, TelemetryPointMapping,
 };

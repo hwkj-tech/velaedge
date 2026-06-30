@@ -196,6 +196,28 @@ export interface DataConfigPublish {
   payload: DataConfigPayload;
 }
 
+export type DataConfigGraphNodeKind = 'point' | 'algorithm' | 'json' | 'mqtt';
+
+export interface DataConfigGraphNode {
+  nodeId: string;
+  kind: DataConfigGraphNodeKind;
+  label: string;
+  refId?: string | null;
+  x: number;
+  y: number;
+}
+
+export interface DataConfigGraphEdge {
+  edgeId: string;
+  from: string;
+  to: string;
+}
+
+export interface DataConfigVisualGraph {
+  nodes: DataConfigGraphNode[];
+  edges: DataConfigGraphEdge[];
+}
+
 export interface DataConfigResponse {
   edgeId: string;
   configId: string;
@@ -206,11 +228,13 @@ export interface DataConfigResponse {
   collection: DataConfigCollection;
   points: DataConfigPoint[];
   algorithmIds: string[];
+  visualGraph: DataConfigVisualGraph;
   publish: DataConfigPublish;
 }
 
-export type SaveDataConfigRequest = Omit<DataConfigResponse, 'edgeId' | 'algorithmIds'> & {
+export type SaveDataConfigRequest = Omit<DataConfigResponse, 'edgeId' | 'algorithmIds' | 'visualGraph'> & {
   algorithmIds?: string[];
+  visualGraph?: DataConfigVisualGraph;
 };
 
 export interface SaveCollectionTaskRequest {

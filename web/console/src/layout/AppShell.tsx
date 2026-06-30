@@ -9,7 +9,6 @@ import {
   RadioTower,
   Search,
   ScrollText,
-  Send,
   ShieldCheck,
   type LucideIcon,
 } from 'lucide-react';
@@ -23,7 +22,6 @@ export type PageKey =
   | 'deviceModels'
   | 'protocolConnections'
   | 'dataConfigs'
-  | 'mqttUplink'
   | 'discovery'
   | 'releases'
   | 'runtimeStatus'
@@ -41,8 +39,7 @@ export const navItems: NavItem[] = [
   { key: 'edges', label: '边端管理', icon: RadioTower },
   { key: 'deviceModels', label: '设备模型', icon: Cpu },
   { key: 'protocolConnections', label: '协议连接', icon: GitBranch },
-  { key: 'dataConfigs', label: '数据配置', icon: ListChecks },
-  { key: 'mqttUplink', label: 'MQTT Sink', icon: Send },
+  { key: 'dataConfigs', label: '数据上报', icon: ListChecks },
   { key: 'discovery', label: '点位探测', icon: Search },
   { key: 'releases', label: '配置发布', icon: FileClock },
   { key: 'runtimeStatus', label: '运行状态', icon: Activity },

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { EdgeNodeResponse } from '../api/types';
@@ -37,13 +37,42 @@ describe('EdgeNodesPage', () => {
     expect(onMonitorEdge).toHaveBeenCalledWith('edge-dev');
   });
 
+  it('opens and saves per-edge mqtt configuration', async () => {
+    const onSaveMqttUplink = vi.fn().mockResolvedValue({
+      batchSize: 100,
+      broker: 'mqtts://velamq.prod:8883',
+      clientId: 'edge-dev-runtime',
+      flushIntervalMs: 1000,
+      qos: 1,
+      sinkId: 'velamq-main',
+      topicTemplate: 'edge/{edge_id}/device/{device_id}/telemetry',
+    });
+
+    render(<EdgeNodesPage edges={edges} onSaveMqttUplink={onSaveMqttUplink} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'MQTT 配置 edge-dev' }));
+    const dialog = screen.getByRole('dialog', { name: '边端 MQTT 配置' });
+    fireEvent.change(screen.getByLabelText('Broker 地址'), {
+      target: { value: 'mqtts://velamq.prod:8883' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(onSaveMqttUplink).toHaveBeenCalledWith(
+        'edge-dev',
+        expect.objectContaining({ broker: 'mqtts://velamq.prod:8883' }),
+      );
+    });
+    expect(dialog).toBeInTheDocument();
+  });
+
   it('does not expose manual registration, credential, or maintenance actions', () => {
     render(<EdgeNodesPage edges={edges} />);
 
     expect(screen.queryByRole('button', { name: '注册边端' })).not.toBeInTheDocument();
     expect(
       screen.getByText(
-        '边端由 runtime 通过 EdgeLink 主动连接后自动登记。云端只负责查看运行状态和进入该边端的数据配置。',
+        '边端由 runtime 通过 EdgeLink 主动连接后自动登记。云端负责查看运行状态、进入边端配置，并维护该边端的 MQTT 上报连接。',
       ),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '轮换凭证' })).not.toBeInTheDocument();

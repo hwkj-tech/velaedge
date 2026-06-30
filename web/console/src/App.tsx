@@ -73,7 +73,6 @@ import { DataConfigsPage } from './pages/DataConfigsPage';
 import { DeviceModelsPage } from './pages/DeviceModelsPage';
 import { DiscoveryPage } from './pages/DiscoveryPage';
 import { EdgeNodesPage } from './pages/EdgeNodesPage';
-import { MqttUplinkPage } from './pages/MqttUplinkPage';
 import { ProtocolConnectionsPage } from './pages/ProtocolConnectionsPage';
 import { ReleasesPage } from './pages/ReleasesPage';
 import { RuntimeStatusPage } from './pages/RuntimeStatusPage';
@@ -777,10 +776,12 @@ function renderPage(
       return (
         <EdgeNodesPage
           edges={edgeNodes}
+          mqttUplink={mqttUplink}
           onConfigureEdge={(edgeId) => {
             void onConfigureEdge(edgeId);
           }}
           onMonitorEdge={onMonitorEdge}
+          onSaveMqttUplink={onSaveMqttUplink}
         />
       );
     case 'deviceModels':
@@ -814,16 +815,9 @@ function renderPage(
           onDeleteConfig={onDeleteDataConfig}
           onSaveConfig={onSaveDataConfig}
           onSelectEdge={onSelectDataConfigEdge}
+          pointMappings={pointMappings}
           protocolConnections={protocolConnections}
           selectedEdgeId={selectedDataConfigEdgeId}
-        />
-      );
-    case 'mqttUplink':
-      return (
-        <MqttUplinkPage
-          onSave={onSaveMqttUplink}
-          selectedEdgeId={defaultConfigEdgeId}
-          uplink={mqttUplink}
         />
       );
     case 'discovery':

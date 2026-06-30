@@ -29,8 +29,8 @@ describe('DataConfigsPage', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '新建数据配置' }));
-    const dialog = screen.getByRole('dialog', { name: '新建数据配置' });
+    fireEvent.click(screen.getByRole('button', { name: '新建数据上报' }));
+    const dialog = screen.getByRole('dialog', { name: '新建数据上报' });
 
     fireEvent.change(within(dialog).getByLabelText('配置 ID'), {
       target: { value: 'pump_status' },
@@ -40,21 +40,9 @@ describe('DataConfigsPage', () => {
     });
     fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
 
-    fireEvent.change(within(dialog).getByLabelText('采集周期(ms)'), {
-      target: { value: '1000' },
-    });
-    fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
-
-    fireEvent.change(within(dialog).getByLabelText('Point ID'), {
-      target: { value: 'pressure' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('地址值'), {
-      target: { value: '40001' },
-    });
-    fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
-
     expect(within(dialog).getByText('pressure-change-report')).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByLabelText('pressure-change-report'));
+    expect(within(dialog).getByLabelText('数据上报画布')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: /pressure-change-report/ }));
     fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
 
     fireEvent.change(within(dialog).getByLabelText('MQTT Topic'), {
@@ -75,6 +63,13 @@ describe('DataConfigsPage', () => {
         collection: expect.objectContaining({ periodMs: 1000 }),
         configId: 'pump_status',
         algorithmIds: ['pressure-change-report'],
+        visualGraph: expect.objectContaining({
+          nodes: expect.arrayContaining([
+            expect.objectContaining({ kind: 'algorithm', refId: 'pressure-change-report' }),
+            expect.objectContaining({ kind: 'json' }),
+            expect.objectContaining({ kind: 'mqtt' }),
+          ]),
+        }),
         publish: expect.objectContaining({
           topicTemplate: 'factory/{edge_id}/{device_id}/status',
         }),

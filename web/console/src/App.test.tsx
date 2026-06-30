@@ -294,6 +294,17 @@ const dataConfigs: DataConfigResponse[] = [
       sinkId: 'velamq-main',
       topicTemplate: 'factory/{edge_id}/{device_id}/status',
     },
+    visualGraph: {
+      edges: [
+        { edgeId: 'point-pressure-to-json', from: 'point-pressure', to: 'json-payload' },
+        { edgeId: 'json-to-mqtt', from: 'json-payload', to: 'mqtt-output' },
+      ],
+      nodes: [
+        { kind: 'point', label: 'pressure', nodeId: 'point-pressure', refId: 'pressure', x: 56, y: 56 },
+        { kind: 'json', label: 'JSON Payload', nodeId: 'json-payload', refId: null, x: 520, y: 96 },
+        { kind: 'mqtt', label: 'MQTT Topic', nodeId: 'mqtt-output', refId: 'factory/{edge_id}/{device_id}/status', x: 720, y: 96 },
+      ],
+    },
   },
 ];
 
@@ -646,26 +657,29 @@ describe('App cloud console write actions', () => {
 
     await openEdgeConfiguration();
     fireEvent.click(screen.getByRole('button', { name: 'pump_status' }));
-    const dialog = screen.getByRole('dialog', { name: '编辑数据配置' });
+    const dialog = screen.getByRole('dialog', { name: '编辑数据上报' });
     fireEvent.change(within(dialog).getByLabelText('配置名称'), {
       target: { value: '泵状态' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
     fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
     fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
-    fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
-    fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
     fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
 
-    const { edgeId: _edgeId, ...expectedRequest }: DataConfigResponse = {
-      ...dataConfigs[0],
-      name: '泵状态',
-    };
     await waitFor(() => {
       expect(saveEdgeDataConfig).toHaveBeenCalledWith(
         'edge-dev',
         'pump_status',
-        expectedRequest satisfies SaveDataConfigRequest,
+        expect.objectContaining({
+          configId: 'pump_status',
+          name: '泵状态',
+          visualGraph: expect.objectContaining({
+            nodes: expect.arrayContaining([
+              expect.objectContaining({ kind: 'json' }),
+              expect.objectContaining({ kind: 'mqtt' }),
+            ]),
+          }),
+        } satisfies Partial<SaveDataConfigRequest>),
       );
     });
     expect(await screen.findByText('泵状态')).toBeInTheDocument();
@@ -760,18 +774,18 @@ describe('App cloud console write actions', () => {
     expect(screen.queryByRole('button', { name: '保存草稿' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '关闭' }));
 
-    fireEvent.click(screen.getByRole('button', { name: /数据配置/ }));
+    fireEvent.click(screen.getByRole('button', { name: /数据上报/ }));
     expect(await screen.findByRole('button', { name: 'pump_status' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '新建数据配置' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '新建数据上报' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'pump_status' }));
-    expect(screen.getByText('编辑数据配置 pump_status')).toBeInTheDocument();
+    expect(screen.getByText('编辑数据上报 pump_status')).toBeInTheDocument();
     expect(screen.getByLabelText('配置边端')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '关闭' }));
 
     expect(screen.queryByRole('button', { name: /算法配置/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'pump_status' }));
-    const dataConfigDialog = screen.getByRole('dialog', { name: '编辑数据配置' });
-    fireEvent.click(within(dataConfigDialog).getByRole('button', { name: '4. 算法处理' }));
+    const dataConfigDialog = screen.getByRole('dialog', { name: '编辑数据上报' });
+    fireEvent.click(within(dataConfigDialog).getByRole('button', { name: '2. 可视化编排' }));
     expect(within(dataConfigDialog).getByText('pump-anomaly-v1')).toBeInTheDocument();
   });
 
@@ -798,7 +812,7 @@ describe('App cloud console write actions', () => {
     fireEvent.click(screen.getByRole('button', { name: '配置边端 edge-dev' }));
 
     expect(await screen.findByRole('button', { name: 'pump_status' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '新建数据配置' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '新建数据上报' })).toBeInTheDocument();
     await waitFor(() => {
       expect(fetchEdgeDataConfigs).toHaveBeenCalledWith('edge-dev');
     });
@@ -825,7 +839,7 @@ describe('App cloud console write actions', () => {
     expect(screen.queryByRole('button', { name: '注册边端' })).not.toBeInTheDocument();
     expect(
       screen.getByText(
-        '边端由 runtime 通过 EdgeLink 主动连接后自动登记。云端只负责查看运行状态和进入该边端的数据配置。',
+        '边端由 runtime 通过 EdgeLink 主动连接后自动登记。云端负责查看运行状态、进入边端配置，并维护该边端的 MQTT 上报连接。',
       ),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '轮换凭证 edge-dev' })).not.toBeInTheDocument();
@@ -1029,9 +1043,9 @@ describe('App cloud console write actions', () => {
     });
     expect(await screen.findByText('task-draft-2')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /数据配置/ }));
+    fireEvent.click(screen.getByRole('button', { name: /数据上报/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'pump_status' }));
-    fireEvent.click(screen.getByRole('button', { name: '4. 算法处理' }));
+    fireEvent.click(screen.getByRole('button', { name: '2. 可视化编排' }));
     expect(screen.getByText('pump-anomaly-v1')).toBeInTheDocument();
   });
 
@@ -1221,7 +1235,7 @@ describe('App cloud console write actions', () => {
     fireEvent.click(screen.getByRole('button', { name: /协议连接/ }));
     expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /数据配置/ }));
+    fireEvent.click(screen.getByRole('button', { name: /数据上报/ }));
     expect(await screen.findByRole('button', { name: 'pump_status' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /审计日志/ }));

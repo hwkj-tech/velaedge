@@ -9,8 +9,9 @@ use cloud_control::{AuditAction, EdgeNode, ReleaseService, ReleaseStatus};
 use edge_core::{
     AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
     AlgorithmReportPolicy, AlgorithmRuntime, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger,
-    CollectionTask, DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPayloadMode,
-    DataConfigPoint, DataConfigPublish, DeviceSpec, DiscoveredPoint, DiscoveryReport,
+    CollectionTask, DataConfig, DataConfigCollection, DataConfigGraphEdge, DataConfigGraphNode,
+    DataConfigGraphNodeKind, DataConfigPayload, DataConfigPayloadMode, DataConfigPoint,
+    DataConfigPublish, DataConfigVisualGraph, DeviceSpec, DiscoveredPoint, DiscoveryReport,
     EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, MqttUplinkConfig,
     NumberRange, PointAddress, PointMappingSuggestion, ProtocolConnection, ProtocolType,
     TelemetryPoint, TelemetryPointMapping, TelemetryType,
@@ -1835,6 +1836,7 @@ pub struct DataConfigResponse {
     pub collection: DataConfigCollectionDto,
     pub points: Vec<DataConfigPointDto>,
     pub algorithm_ids: Vec<String>,
+    pub visual_graph: DataConfigVisualGraphDto,
     pub publish: DataConfigPublishDto,
 }
 
@@ -1873,6 +1875,34 @@ pub struct DataConfigPayloadDto {
     pub mode: String,
     pub timestamp_field: String,
     pub include_quality: bool,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataConfigVisualGraphDto {
+    #[serde(default)]
+    pub nodes: Vec<DataConfigGraphNodeDto>,
+    #[serde(default)]
+    pub edges: Vec<DataConfigGraphEdgeDto>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataConfigGraphNodeDto {
+    pub node_id: String,
+    pub kind: String,
+    pub label: String,
+    pub ref_id: Option<String>,
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataConfigGraphEdgeDto {
+    pub edge_id: String,
+    pub from: String,
+    pub to: String,
 }
 
 #[derive(Serialize)]
@@ -2052,6 +2082,8 @@ pub struct SaveDataConfigRequest {
     pub points: Vec<DataConfigPointDto>,
     #[serde(default)]
     pub algorithm_ids: Vec<String>,
+    #[serde(default)]
+    pub visual_graph: DataConfigVisualGraphDto,
     pub publish: DataConfigPublishDto,
 }
 
@@ -2448,6 +2480,7 @@ fn build_data_config_from_request(
     );
     data_config.enabled = request.enabled;
     data_config.algorithm_ids = algorithm_ids;
+    data_config.visual_graph = data_config_visual_graph_from_request(request.visual_graph)?;
 
     for point in request.points {
         let mut data_point = DataConfigPoint::new(
@@ -2467,6 +2500,46 @@ fn build_data_config_from_request(
     }
 
     Ok(data_config)
+}
+
+fn data_config_visual_graph_from_request(
+    graph: DataConfigVisualGraphDto,
+) -> Result<DataConfigVisualGraph, (StatusCode, Json<ErrorResponse>)> {
+    let mut nodes = Vec::new();
+    for node in graph.nodes {
+        nodes.push(DataConfigGraphNode {
+            node_id: non_empty_field(node.node_id, "visualGraph.nodes.nodeId")?,
+            kind: parse_data_config_graph_node_kind(&node.kind)?,
+            label: non_empty_field(node.label, "visualGraph.nodes.label")?,
+            ref_id: non_empty_optional(node.ref_id),
+            x: node.x,
+            y: node.y,
+        });
+    }
+    let mut edges = Vec::new();
+    for edge in graph.edges {
+        edges.push(DataConfigGraphEdge {
+            edge_id: non_empty_field(edge.edge_id, "visualGraph.edges.edgeId")?,
+            from: non_empty_field(edge.from, "visualGraph.edges.from")?,
+            to: non_empty_field(edge.to, "visualGraph.edges.to")?,
+        });
+    }
+    Ok(DataConfigVisualGraph { nodes, edges })
+}
+
+fn parse_data_config_graph_node_kind(
+    kind: &str,
+) -> Result<DataConfigGraphNodeKind, (StatusCode, Json<ErrorResponse>)> {
+    match kind {
+        "point" | "Point" => Ok(DataConfigGraphNodeKind::Point),
+        "algorithm" | "Algorithm" => Ok(DataConfigGraphNodeKind::Algorithm),
+        "json" | "Json" | "JSON" => Ok(DataConfigGraphNodeKind::Json),
+        "mqtt" | "Mqtt" | "MQTT" => Ok(DataConfigGraphNodeKind::Mqtt),
+        _ => Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("unsupported data config graph node kind `{kind}`"),
+        )),
+    }
 }
 
 fn build_algorithm_from_create_request(
@@ -2805,6 +2878,7 @@ fn data_config_response(
             retry_count: data_config.collection.retry_count,
         },
         algorithm_ids: data_config.algorithm_ids.clone(),
+        visual_graph: data_config_visual_graph_response(&data_config.visual_graph),
         points: data_config
             .points
             .iter()
@@ -2828,6 +2902,41 @@ fn data_config_response(
                 include_quality: data_config.publish.payload.include_quality,
             },
         },
+    }
+}
+
+fn data_config_visual_graph_response(graph: &DataConfigVisualGraph) -> DataConfigVisualGraphDto {
+    DataConfigVisualGraphDto {
+        nodes: graph
+            .nodes
+            .iter()
+            .map(|node| DataConfigGraphNodeDto {
+                node_id: node.node_id.clone(),
+                kind: format_data_config_graph_node_kind(node.kind).to_string(),
+                label: node.label.clone(),
+                ref_id: node.ref_id.clone(),
+                x: node.x,
+                y: node.y,
+            })
+            .collect(),
+        edges: graph
+            .edges
+            .iter()
+            .map(|edge| DataConfigGraphEdgeDto {
+                edge_id: edge.edge_id.clone(),
+                from: edge.from.clone(),
+                to: edge.to.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn format_data_config_graph_node_kind(kind: DataConfigGraphNodeKind) -> &'static str {
+    match kind {
+        DataConfigGraphNodeKind::Point => "point",
+        DataConfigGraphNodeKind::Algorithm => "algorithm",
+        DataConfigGraphNodeKind::Json => "json",
+        DataConfigGraphNodeKind::Mqtt => "mqtt",
     }
 }
 

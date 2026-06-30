@@ -215,6 +215,8 @@ pub struct DataConfig {
     pub points: Vec<DataConfigPoint>,
     #[serde(default)]
     pub algorithm_ids: Vec<String>,
+    #[serde(default)]
+    pub visual_graph: DataConfigVisualGraph,
     pub publish: DataConfigPublish,
 }
 
@@ -236,6 +238,7 @@ impl DataConfig {
             collection,
             points: Vec::new(),
             algorithm_ids: Vec::new(),
+            visual_graph: DataConfigVisualGraph::default(),
             publish,
         }
     }
@@ -254,6 +257,39 @@ impl DataConfig {
         self.enabled = false;
         self
     }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DataConfigVisualGraph {
+    #[serde(default)]
+    pub nodes: Vec<DataConfigGraphNode>,
+    #[serde(default)]
+    pub edges: Vec<DataConfigGraphEdge>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DataConfigGraphNode {
+    pub node_id: String,
+    pub kind: DataConfigGraphNodeKind,
+    pub label: String,
+    pub ref_id: Option<String>,
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DataConfigGraphNodeKind {
+    Point,
+    Algorithm,
+    Json,
+    Mqtt,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DataConfigGraphEdge {
+    pub edge_id: String,
+    pub from: String,
+    pub to: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
