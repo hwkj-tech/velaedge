@@ -894,6 +894,7 @@ function renderPage(
 }
 
 type EdgeConfigTab =
+  | 'overview'
   | 'protocol'
   | 'points'
   | 'collection'
@@ -986,9 +987,10 @@ function EdgeConfigWorkspace({
   protocolConnections?: ProtocolConnectionResponse[];
   releaseList?: ReleaseListResponse;
 }) {
-  const [activeTab, setActiveTab] = useState<EdgeConfigTab>('protocol');
+  const [activeTab, setActiveTab] = useState<EdgeConfigTab>('overview');
   const edge = edges?.find((item) => item.edgeId === edgeId);
   const tabs: Array<{ key: EdgeConfigTab; label: string }> = [
+    { key: 'overview', label: '配置总览' },
     { key: 'protocol', label: '协议连接' },
     { key: 'points', label: '点位配置' },
     { key: 'collection', label: '采集任务' },
@@ -1031,6 +1033,18 @@ function EdgeConfigWorkspace({
       </nav>
 
       <section className="workspace-tab-panel" role="tabpanel">
+        {activeTab === 'overview' ? (
+          <EdgeConfigOverview
+            collectionTasks={collectionTasks}
+            dataConfigs={dataConfigs}
+            edgeId={edgeId}
+            mqttUplink={mqttUplink}
+            pointMappings={pointMappings}
+            protocolConnections={protocolConnections}
+            releaseList={releaseList}
+            setActiveTab={setActiveTab}
+          />
+        ) : null}
         {activeTab === 'protocol' ? (
           <ProtocolConnectionsPage
             connections={protocolConnections}
@@ -1109,4 +1123,147 @@ function EdgeConfigWorkspace({
       </section>
     </div>
   );
+}
+
+function EdgeConfigOverview({
+  collectionTasks = [],
+  dataConfigs = [],
+  edgeId,
+  mqttUplink,
+  pointMappings = [],
+  protocolConnections = [],
+  releaseList,
+  setActiveTab,
+}: {
+  collectionTasks?: CollectionTaskResponse[];
+  dataConfigs?: DataConfigResponse[];
+  edgeId: string;
+  mqttUplink?: MqttUplinkResponse;
+  pointMappings?: PointMappingResponse[];
+  protocolConnections?: ProtocolConnectionResponse[];
+  releaseList?: ReleaseListResponse;
+  setActiveTab: (tab: EdgeConfigTab) => void;
+}) {
+  const releaseResult = releaseList?.applyResults.find((result) => result.edgeId === edgeId);
+  const summaryCards = [
+    { label: '协议连接', value: protocolConnections.length, tab: 'protocol' as const },
+    { label: '点位配置', value: pointMappings.length, tab: 'points' as const },
+    { label: '采集任务', value: collectionTasks.length, tab: 'collection' as const },
+    { label: '数据上报', value: dataConfigs.length, tab: 'reports' as const },
+  ];
+  const bindingRows: Array<{
+    action: string;
+    description: string;
+    label: string;
+    status: string;
+    tab: EdgeConfigTab;
+  }> = [
+    {
+      action: '维护连接',
+      description: '串口总线、Modbus RTU/TCP、DL/T645 等采集通道',
+      label: '协议连接',
+      status: `${protocolConnections.length} 个连接`,
+      tab: 'protocol',
+    },
+    {
+      action: '维护点位',
+      description: '协议地址到语义点位的映射，发布后由 runtime 执行采集',
+      label: '点位配置',
+      status: `${pointMappings.length} 个点位`,
+      tab: 'points',
+    },
+    {
+      action: '维护任务',
+      description: '采集周期、点位批次、超时重试和缓存策略',
+      label: '采集任务',
+      status: `${collectionTasks.length} 个任务`,
+      tab: 'collection',
+    },
+    {
+      action: '维护上报',
+      description: '点位组合、DSL 算法、JSON 结构和 MQTT topic',
+      label: '数据上报',
+      status: `${dataConfigs.length} 套配置`,
+      tab: 'reports',
+    },
+    {
+      action: '维护 MQTT',
+      description: 'velaMQ broker、clientId、QoS、批量和刷新策略',
+      label: 'MQTT 上报',
+      status: mqttUplink ? mqttUplink.sinkId : '未配置',
+      tab: 'mqtt',
+    },
+    {
+      action: '发布配置',
+      description: '校验配置差异，将选中的边端配置包发布到 runtime',
+      label: '配置发布',
+      status: formatReleaseBindingStatus(releaseResult),
+      tab: 'release',
+    },
+  ];
+
+  return (
+    <div className="edge-config-overview">
+      <section className="page-intro">
+        <div>
+          <h2>配置绑定总览</h2>
+          <p>
+            这里展示该边端已选择的采集、处理、上报和发布配置。新增配置后，从这里进入对应配置项维护并发布到 runtime。
+          </p>
+        </div>
+      </section>
+
+      <div className="binding-summary-grid" aria-label="边端配置绑定统计">
+        {summaryCards.map((card) => (
+          <button
+            className="binding-summary-card"
+            key={card.label}
+            onClick={() => setActiveTab(card.tab)}
+            type="button"
+          >
+            <span>{card.label}</span>
+            <strong>{card.value}</strong>
+          </button>
+        ))}
+      </div>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h3>配置绑定清单</h3>
+          <span>选择后维护该边端配置</span>
+        </div>
+        <div className="binding-matrix">
+          {bindingRows.map((row) => (
+            <div className="binding-row" key={row.label}>
+              <div>
+                <strong>{row.label}</strong>
+                <p>{row.description}</p>
+              </div>
+              <span className="binding-status">{row.status}</span>
+              <button
+                className="secondary-button compact"
+                onClick={() => setActiveTab(row.tab)}
+                type="button"
+              >
+                {row.action}
+              </button>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function formatReleaseBindingStatus(
+  releaseResult: ReleaseListResponse['applyResults'][number] | undefined,
+) {
+  if (!releaseResult) {
+    return '待发布';
+  }
+  const version =
+    releaseResult.reportedVersion && releaseResult.reportedVersion !== '-'
+      ? releaseResult.reportedVersion
+      : releaseResult.desiredVersion;
+  return version && version !== '-' ? `${releaseResult.result} · ${version}` : releaseResult.result;
 }

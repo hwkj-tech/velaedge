@@ -278,6 +278,87 @@
   min-width: 0;
 }
 
+.edge-config-overview {
+  display: grid;
+  gap: 16px;
+}
+
+.binding-summary-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.binding-summary-card {
+  display: grid;
+  min-height: 86px;
+  align-content: center;
+  gap: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #42526b;
+  cursor: pointer;
+  padding: 14px;
+  text-align: left;
+}
+
+.binding-summary-card:hover {
+  border-color: #a9c8f5;
+  background: #f7fbff;
+}
+
+.binding-summary-card span {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.binding-summary-card strong {
+  color: var(--color-text);
+  font-size: 26px;
+  line-height: 1;
+}
+
+.binding-matrix {
+  display: grid;
+}
+
+.binding-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px auto;
+  align-items: center;
+  gap: 14px;
+  border-top: 1px solid var(--color-border);
+  padding: 14px 0;
+}
+
+.binding-row:first-child {
+  border-top: 0;
+}
+
+.binding-row strong {
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.binding-row p {
+  margin: 4px 0 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.binding-status {
+  color: #42526b;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-align: right;
+}
+
 .primary-button,
 .secondary-button {
   display: inline-flex;
