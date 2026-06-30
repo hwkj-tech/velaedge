@@ -573,11 +573,9 @@ export default function App() {
         selectedCollectionEdgeId,
         handleSaveDataConfig,
         handleDeleteDataConfig,
-        handleSelectDataConfigEdge,
         selectedDataConfigEdgeId,
         handleSaveProtocolConnection,
         handleCreateProtocolConnection,
-        handleSelectProtocolEdge,
         selectedProtocolEdgeId,
         handleSaveMqttUplink,
         handlePublishLatestRelease,
@@ -729,7 +727,6 @@ function renderPage(
     request: SaveDataConfigRequest,
   ) => Promise<void>,
   onDeleteDataConfig: (edgeId: string, configId: string) => Promise<void>,
-  onSelectDataConfigEdge: (edgeId: string) => Promise<void>,
   selectedDataConfigEdgeId: string,
   onSaveProtocolConnection: (
     edgeId: string,
@@ -740,7 +737,6 @@ function renderPage(
     edgeId: string,
     request: CreateProtocolConnectionRequest,
   ) => Promise<ProtocolConnectionResponse>,
-  onSelectProtocolEdge: (edgeId: string) => Promise<void>,
   selectedProtocolEdgeId: string,
   onSaveMqttUplink: (
     edgeId: string,
@@ -800,7 +796,6 @@ function renderPage(
           mode={edgeConfigurationMode}
           onCreateConnection={onCreateProtocolConnection}
           onSaveConnection={onSaveProtocolConnection}
-          onSelectEdge={onSelectProtocolEdge}
           onValidateConnection={onValidateConfig}
           selectedEdgeId={selectedProtocolEdgeId}
         />
@@ -814,7 +809,6 @@ function renderPage(
           mqttUplink={mqttUplink}
           onDeleteConfig={onDeleteDataConfig}
           onSaveConfig={onSaveDataConfig}
-          onSelectEdge={onSelectDataConfigEdge}
           pointMappings={pointMappings}
           protocolConnections={protocolConnections}
           selectedEdgeId={selectedDataConfigEdgeId}

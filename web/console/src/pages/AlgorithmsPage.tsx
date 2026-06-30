@@ -79,7 +79,6 @@ export function AlgorithmsPage({
   onAssessRisk,
   onCreateAlgorithm,
   onSaveAlgorithm,
-  onSelectEdge,
   selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
 }: {
   algorithms?: AlgorithmResponse[];
@@ -97,7 +96,6 @@ export function AlgorithmsPage({
     algorithmId: string,
     request: SaveAlgorithmRequest,
   ) => Promise<void> | void;
-  onSelectEdge?: (edgeId: string) => Promise<void> | void;
   selectedEdgeId?: string;
 }) {
   const [selectedAlgorithmId, setSelectedAlgorithmId] = useState(
@@ -163,12 +161,6 @@ export function AlgorithmsPage({
     setPage(1);
   }, [selectedEdgeId]);
 
-  const handleSelectEdge = async (edgeId: string) => {
-    setSaveState('idle');
-    setToolbarMessage('');
-    await onSelectEdge?.(edgeId);
-  };
-
   const handleSave = async () => {
     setSaveState('saving');
 
@@ -231,22 +223,10 @@ export function AlgorithmsPage({
         </div>
         <div className="toolbar">
           {isConfigureMode ? (
-            <label className="release-edge-select">
-              <span>配置边端</span>
-              <select
-                aria-label="配置边端"
-                value={selectedEdgeId}
-                onChange={(event) => {
-                  void handleSelectEdge(event.target.value);
-                }}
-              >
-                {edges.map((edge) => (
-                  <option key={edge.edgeId} value={edge.edgeId}>
-                    {edge.displayName} / {edge.edgeId}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="edge-context-pill" aria-label="当前边端">
+              <span>当前边端</span>
+              <strong>{activeEdge.displayName} / {activeEdge.edgeId}</strong>
+            </div>
           ) : null}
           {toolbarMessage ? (
             <span className="toolbar-status" role="status">

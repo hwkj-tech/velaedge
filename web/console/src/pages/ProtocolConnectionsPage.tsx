@@ -54,7 +54,6 @@ export function ProtocolConnectionsPage({
   mode = 'configure',
   onCreateConnection,
   onSaveConnection,
-  onSelectEdge,
   onValidateConnection,
   selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
 }: {
@@ -70,7 +69,6 @@ export function ProtocolConnectionsPage({
     connectionId: string,
     request: SaveProtocolConnectionRequest,
   ) => Promise<void> | void;
-  onSelectEdge?: (edgeId: string) => Promise<void> | void;
   onValidateConnection?: (
     edgeId: string,
   ) => Promise<ManagementActionResponse> | ManagementActionResponse;
@@ -127,13 +125,6 @@ export function ProtocolConnectionsPage({
   useEffect(() => {
     setPage(1);
   }, [selectedEdgeId]);
-
-  const handleSelectEdge = async (edgeId: string) => {
-    setSaveState('idle');
-    setCreateState('idle');
-    setToolbarMessage('');
-    await onSelectEdge?.(edgeId);
-  };
 
   const handleSave = async () => {
     setSaveState('saving');
@@ -205,22 +196,10 @@ export function ProtocolConnectionsPage({
         </div>
         <div className="toolbar">
           {isConfigureMode ? (
-            <label className="release-edge-select">
-              <span>配置边端</span>
-              <select
-                aria-label="配置边端"
-                value={selectedEdgeId}
-                onChange={(event) => {
-                  void handleSelectEdge(event.target.value);
-                }}
-              >
-                {edges.map((edge) => (
-                  <option key={edge.edgeId} value={edge.edgeId}>
-                    {edge.displayName} / {edge.edgeId}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="edge-context-pill" aria-label="当前边端">
+              <span>当前边端</span>
+              <strong>{activeEdge.displayName} / {activeEdge.edgeId}</strong>
+            </div>
           ) : null}
           {toolbarMessage ? (
             <span className="toolbar-status" role="status">

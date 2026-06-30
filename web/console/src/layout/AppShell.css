@@ -184,6 +184,32 @@
   padding: 0 10px;
 }
 
+.edge-context-pill {
+  display: grid;
+  min-height: 40px;
+  align-content: center;
+  gap: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #42526b;
+  padding: 6px 12px;
+}
+
+.edge-context-pill span {
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.edge-context-pill strong {
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
 .primary-button,
 .secondary-button {
   display: inline-flex;

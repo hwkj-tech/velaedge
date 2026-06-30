@@ -72,9 +72,7 @@ describe('PointMappingsPage', () => {
     });
   });
 
-  it('switches the active edge before editing point mappings', async () => {
-    const onSelectEdge = vi.fn().mockResolvedValue(undefined);
-
+  it('shows the bound edge context without switching edges in the page', () => {
     render(
       <PointMappingsPage
         edges={[
@@ -100,17 +98,11 @@ describe('PointMappingsPage', () => {
           },
         ]}
         selectedEdgeId="edge-dev"
-        onSelectEdge={onSelectEdge}
       />,
     );
 
-    fireEvent.change(screen.getByLabelText('配置边端'), {
-      target: { value: 'edge-prod' },
-    });
-
-    await waitFor(() => {
-      expect(onSelectEdge).toHaveBeenCalledWith('edge-prod');
-    });
+    expect(screen.getByLabelText('当前边端')).toHaveTextContent('研发实验室边端 / edge-dev');
+    expect(screen.queryByLabelText('配置边端')).not.toBeInTheDocument();
   });
 
   it('hides the edge selector in sidebar list mode', () => {

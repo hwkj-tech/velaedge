@@ -770,7 +770,8 @@ describe('App cloud console write actions', () => {
     expect(screen.getByRole('button', { name: '新建连接' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '选择连接 modbus-line-a' }));
     expect(screen.getByText('编辑连接 modbus-line-a')).toBeInTheDocument();
-    expect(screen.getByLabelText('配置边端')).toBeInTheDocument();
+    expect(screen.getByLabelText('当前边端')).toHaveTextContent('研发实验室边端 / edge-dev');
+    expect(screen.queryByLabelText('配置边端')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '保存草稿' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '关闭' }));
 
@@ -779,7 +780,8 @@ describe('App cloud console write actions', () => {
     expect(screen.getByRole('button', { name: '新建数据上报' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'pump_status' }));
     expect(screen.getByText('编辑数据上报 pump_status')).toBeInTheDocument();
-    expect(screen.getByLabelText('配置边端')).toBeInTheDocument();
+    expect(screen.getByLabelText('当前边端')).toHaveTextContent('研发实验室边端 / edge-dev');
+    expect(screen.queryByLabelText('配置边端')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '关闭' }));
 
     expect(screen.queryByRole('button', { name: /算法配置/ })).not.toBeInTheDocument();

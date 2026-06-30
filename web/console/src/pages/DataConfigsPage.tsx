@@ -63,7 +63,6 @@ export function DataConfigsPage({
   mqttUplink,
   onDeleteConfig,
   onSaveConfig,
-  onSelectEdge,
   pointMappings = [],
   protocolConnections = [],
   selectedEdgeId = configs[0]?.edgeId ?? 'edge-dev',
@@ -78,7 +77,6 @@ export function DataConfigsPage({
     configId: string | null,
     request: SaveDataConfigRequest,
   ) => Promise<void> | void;
-  onSelectEdge?: (edgeId: string) => Promise<void> | void;
   pointMappings?: PointMappingResponse[];
   protocolConnections?: ProtocolConnectionResponse[];
   selectedEdgeId?: string;
@@ -263,22 +261,10 @@ export function DataConfigsPage({
           <p>定义数据上报流水线：选择边端已配置点位，拖入算法节点汇聚处理，再组装 JSON 上报到 MQTT topic。</p>
         </div>
         <div className="toolbar">
-          <label className="release-edge-select">
-            <span>配置边端</span>
-            <select
-              aria-label="配置边端"
-              value={selectedEdgeId}
-              onChange={(event) => {
-                void onSelectEdge?.(event.target.value);
-              }}
-            >
-              {(edges.length ? edges : [{ edgeId: selectedEdgeId, displayName: edge?.displayName ?? selectedEdgeId } as EdgeNodeResponse]).map((item) => (
-                <option key={item.edgeId} value={item.edgeId}>
-                  {item.displayName} / {item.edgeId}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="edge-context-pill" aria-label="当前边端">
+            <span>当前边端</span>
+            <strong>{edge?.displayName ?? selectedEdgeId} / {selectedEdgeId}</strong>
+          </div>
           {status ? <span className="toolbar-status" role="status">{status}</span> : null}
           <button className="primary-button" onClick={openCreate} type="button">
             <Plus size={15} aria-hidden="true" />
