@@ -824,7 +824,11 @@ describe('App cloud console write actions', () => {
     expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
 
     expect(screen.queryByRole('button', { name: '注册边端' })).not.toBeInTheDocument();
-    expect(screen.getByText('runtime 连接后自动登记')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '边端由 runtime 通过 EdgeLink 主动连接后自动登记。配置、监控、凭证轮换和维护模式都在具体边端行内执行。',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('runs credential rotation and maintenance mode through edge APIs', async () => {
@@ -838,13 +842,19 @@ describe('App cloud console write actions', () => {
     fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
     expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '轮换凭证' }));
+    fireEvent.click(screen.getByRole('button', { name: '轮换凭证 edge-dev' }));
+    const credentialsDialog = screen.getByRole('dialog', { name: '轮换边端凭证' });
+    expect(within(credentialsDialog).getByDisplayValue('edge-dev')).toBeInTheDocument();
+    fireEvent.click(within(credentialsDialog).getByRole('button', { name: '确认轮换' }));
     await waitFor(() => {
       expect(rotateEdgeCredentials).toHaveBeenCalledWith('edge-dev');
     });
     expect(await screen.findByText('凭证已轮换 credential-v2')).toBeInTheDocument();
+    fireEvent.click(within(credentialsDialog).getByRole('button', { name: '关闭' }));
 
-    fireEvent.click(screen.getByRole('button', { name: '维护模式' }));
+    fireEvent.click(screen.getByRole('button', { name: '维护模式 edge-dev' }));
+    const maintenanceDialog = screen.getByRole('dialog', { name: '启用维护模式' });
+    fireEvent.click(within(maintenanceDialog).getByRole('button', { name: '确认维护' }));
     await waitFor(() => {
       expect(enableEdgeMaintenanceMode).toHaveBeenCalledWith('edge-dev');
     });

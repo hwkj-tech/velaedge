@@ -265,6 +265,10 @@
   padding: 18px;
 }
 
+.modal-panel.compact-modal {
+  width: min(560px, 100%);
+}
+
 .modal-header,
 .modal-actions {
   display: flex;
@@ -329,6 +333,17 @@
 
 .form-wide {
   grid-column: 1 / -1;
+}
+
+.info-panel {
+  border: 1px solid #c7d1df;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #42526b;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.55;
+  padding: 12px;
 }
 
 .metric-grid {

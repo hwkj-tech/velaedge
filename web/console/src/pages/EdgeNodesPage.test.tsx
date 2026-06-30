@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { EdgeNodeResponse } from '../api/types';
@@ -37,7 +37,20 @@ describe('EdgeNodesPage', () => {
     expect(onMonitorEdge).toHaveBeenCalledWith('edge-dev');
   });
 
-  it('runs lifecycle toolbar actions through handlers', async () => {
+  it('keeps lifecycle status read-only in the toolbar', () => {
+    render(<EdgeNodesPage edges={edges} />);
+
+    expect(screen.queryByRole('button', { name: '注册边端' })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '边端由 runtime 通过 EdgeLink 主动连接后自动登记。配置、监控、凭证轮换和维护模式都在具体边端行内执行。',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '轮换凭证' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '维护模式' })).not.toBeInTheDocument();
+  });
+
+  it('confirms lifecycle actions in dialogs before calling handlers', async () => {
     const onRotateCredentials = vi.fn().mockResolvedValue({
       credentialVersion: 'credential-v2',
     });
@@ -53,16 +66,22 @@ describe('EdgeNodesPage', () => {
       />,
     );
 
-    expect(screen.queryByRole('button', { name: '注册边端' })).not.toBeInTheDocument();
-    expect(screen.getByText('runtime 连接后自动登记')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '轮换凭证 edge-dev' }));
+    const credentialsDialog = screen.getByRole('dialog', { name: '轮换边端凭证' });
+    expect(within(credentialsDialog).getByDisplayValue('edge-dev')).toBeInTheDocument();
+    expect(onRotateCredentials).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: '轮换凭证' }));
+    fireEvent.click(within(credentialsDialog).getByRole('button', { name: '确认轮换' }));
     await waitFor(() => {
       expect(onRotateCredentials).toHaveBeenCalledWith('edge-dev');
     });
     expect(await screen.findByText('凭证已轮换 credential-v2')).toBeInTheDocument();
+    fireEvent.click(within(credentialsDialog).getByRole('button', { name: '关闭' }));
 
-    fireEvent.click(screen.getByRole('button', { name: '维护模式' }));
+    fireEvent.click(screen.getByRole('button', { name: '维护模式 edge-dev' }));
+    const maintenanceDialog = screen.getByRole('dialog', { name: '启用维护模式' });
+    expect(onEnableMaintenance).not.toHaveBeenCalled();
+    fireEvent.click(within(maintenanceDialog).getByRole('button', { name: '确认维护' }));
     await waitFor(() => {
       expect(onEnableMaintenance).toHaveBeenCalledWith('edge-dev');
     });
@@ -95,11 +114,14 @@ describe('EdgeNodesPage', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: '轮换凭证 edge-prod' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认轮换' }));
     await waitFor(() => {
       expect(onRotateCredentials).toHaveBeenCalledWith('edge-prod');
     });
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
 
     fireEvent.click(screen.getByRole('button', { name: '维护模式 edge-prod' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认维护' }));
     await waitFor(() => {
       expect(onEnableMaintenance).toHaveBeenCalledWith('edge-prod');
     });
