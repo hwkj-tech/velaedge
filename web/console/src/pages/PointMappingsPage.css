@@ -145,7 +145,8 @@
 }
 
 .editor-control input,
-.editor-control select {
+.editor-control select,
+.editor-control textarea {
   width: 100%;
   min-width: 0;
   border: 1px solid #c7d1df;
@@ -159,9 +160,50 @@
 }
 
 .editor-control input:focus,
-.editor-control select:focus {
+.editor-control select:focus,
+.editor-control textarea:focus {
   border-color: #2f6fed;
   outline: 2px solid rgba(47, 111, 237, 0.18);
+}
+
+.editor-control textarea {
+  min-height: 220px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre;
+}
+
+.data-config-modal {
+  width: min(920px, calc(100vw - 40px));
+}
+
+.step-tabs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.step-tab {
+  min-height: 36px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--color-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.step-tab.active {
+  border-color: #2f6fed;
+  background: #eef4ff;
+  color: #245fc7;
+}
+
+.preview-field {
+  min-height: 280px;
 }
 
 .drawer-footer {
