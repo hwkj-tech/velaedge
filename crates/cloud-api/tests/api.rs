@@ -4,7 +4,10 @@ use axum::{
 };
 use cloud_api::{app, AppState};
 use cloud_control::{EdgeNode, SqliteCloudStore};
-use edge_core::{EdgeConfigPackage, ProtocolConnection};
+use edge_core::{
+    CollectionTask, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, PointAddress,
+    ProtocolConnection, TelemetryPointMapping, TelemetryType,
+};
 use serde_json::json;
 use tower::ServiceExt;
 
@@ -1228,6 +1231,90 @@ async fn sqlite_app_state_backfills_missing_mqtt_uplink_for_legacy_edges() {
     assert_eq!(
         config["package"]["mqtt_uplinks"][0]["sink_id"],
         "velamq-main"
+    );
+}
+
+#[tokio::test]
+async fn sqlite_app_state_backfills_default_data_config_for_legacy_edges() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let database_url = format!("sqlite://{}", tempdir.path().join("cloud.db").display());
+    let sqlite_store = SqliteCloudStore::connect(&database_url).await.unwrap();
+    sqlite_store
+        .upsert_edge_node(EdgeNode::new("edge-legacy", "历史边端"))
+        .await
+        .unwrap();
+    sqlite_store
+        .upsert_config_package(
+            EdgeConfigPackage::new("edge-legacy", "2026.06.26-legacy")
+                .with_device(DeviceInstance::new("pump-1", "pump"))
+                .with_protocol_connection(ProtocolConnection::simulated("sim-main"))
+                .with_mqtt_uplink(MqttUplinkConfig::velamq(
+                    "velamq-main",
+                    "mqtts://velamq.local:8883",
+                    "edge-legacy-runtime-dev",
+                ))
+                .with_point_mapping(
+                    TelemetryPointMapping::new(
+                        "pump.pressure",
+                        "pump-1",
+                        "pump.pressure",
+                        "sim-main",
+                        PointAddress::simulated("pressure"),
+                        TelemetryType::Float,
+                    )
+                    .with_unit("MPa")
+                    .with_interval_ms(1000),
+                )
+                .with_point_mapping(TelemetryPointMapping::new(
+                    "pump-running",
+                    "pump-1",
+                    "pump.running",
+                    "sim-main",
+                    PointAddress::simulated("running"),
+                    TelemetryType::Boolean,
+                ))
+                .with_collection_task(CollectionTask::interval(
+                    "pump-main",
+                    "pump-1",
+                    vec!["pump.pressure".to_string(), "pump-running".to_string()],
+                    2000,
+                )),
+        )
+        .await
+        .unwrap();
+
+    let router = app(AppState::with_sqlite(&database_url).await.unwrap());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::get("/api/edges/edge-legacy/data-configs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let data_configs: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(data_configs[0]["configId"], "default_telemetry");
+    assert_eq!(data_configs[0]["collection"]["periodMs"], 2000);
+    assert_eq!(data_configs[0]["points"][0]["jsonField"], "pump_pressure");
+    assert_eq!(data_configs[0]["points"][1]["jsonField"], "pump_running");
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-legacy/desired-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        config["package"]["data_configs"][0]["config_id"],
+        "default_telemetry"
     );
 }
 

@@ -31,6 +31,7 @@ impl AppState {
             persist_store_snapshot(&sqlite_store, &store).await?;
         } else {
             ensure_default_mqtt_uplinks(&sqlite_store, &mut store).await?;
+            ensure_default_data_configs(&sqlite_store, &mut store).await?;
         }
 
         Ok(Self {
@@ -323,6 +324,123 @@ async fn ensure_default_mqtt_uplinks(
     }
 
     Ok(())
+}
+
+async fn ensure_default_data_configs(
+    sqlite_store: &SqliteCloudStore,
+    store: &mut CloudControlStore,
+) -> Result<()> {
+    let edge_ids = store
+        .edge_nodes()
+        .map(|edge| edge.edge_id.clone())
+        .collect::<Vec<_>>();
+
+    for edge_id in edge_ids {
+        let Some(mut package) = store.latest_config_package_for_edge(&edge_id).cloned() else {
+            continue;
+        };
+
+        if !package.data_configs.is_empty() {
+            continue;
+        }
+
+        let Some(data_config) = default_data_config_from_package(&package) else {
+            continue;
+        };
+
+        package.data_configs.push(data_config);
+        store.upsert_config_package(package.clone());
+        sqlite_store.upsert_config_package(package).await?;
+    }
+
+    Ok(())
+}
+
+fn default_data_config_from_package(package: &EdgeConfigPackage) -> Option<DataConfig> {
+    let task = package
+        .collection_tasks
+        .iter()
+        .find(|task| task.enabled && !task.point_ids.is_empty());
+    let device_id = task.map(|task| task.device_id.clone()).or_else(|| {
+        package
+            .point_mappings
+            .first()
+            .map(|point| point.device_id.clone())
+    })?;
+    let interval_ms = task.map(|task| task.interval_ms).unwrap_or(1000);
+    let point_ids = task.map(|task| task.point_ids.clone()).unwrap_or_else(|| {
+        package
+            .point_mappings
+            .iter()
+            .filter(|point| point.device_id == device_id)
+            .map(|point| point.point_id.clone())
+            .collect()
+    });
+
+    let points = point_ids
+        .iter()
+        .filter_map(|point_id| {
+            package
+                .point_mappings
+                .iter()
+                .find(|point| point.point_id == *point_id && point.device_id == device_id)
+        })
+        .collect::<Vec<_>>();
+    let first_point = points.first()?;
+    let sink = package.mqtt_uplinks.first()?;
+
+    let mut data_config = DataConfig::new(
+        "default_telemetry",
+        "默认遥测上报",
+        device_id,
+        first_point.protocol_connection_id.clone(),
+        DataConfigCollection::new(interval_ms),
+        DataConfigPublish::new(
+            sink.sink_id.clone(),
+            "factory/{edge_id}/{device_id}/telemetry",
+            DataConfigPayload::object(),
+        )
+        .with_qos(sink.qos),
+    );
+
+    for point in points {
+        data_config = data_config.with_point(
+            DataConfigPoint::new(
+                point.point_id.clone(),
+                point.semantic_id.clone(),
+                point.address.clone(),
+                point.value_type,
+                default_json_field(&point.point_id),
+            )
+            .with_unit(point.unit.clone().unwrap_or_default()),
+        );
+        if data_config.points.last().is_some_and(|point| {
+            point
+                .unit
+                .as_ref()
+                .is_some_and(|unit| unit.trim().is_empty())
+        }) {
+            if let Some(point) = data_config.points.last_mut() {
+                point.unit = None;
+            }
+        }
+    }
+
+    if data_config.points.is_empty() {
+        return None;
+    }
+
+    Some(data_config)
+}
+
+fn default_json_field(point_id: &str) -> String {
+    point_id
+        .chars()
+        .map(|character| match character {
+            '.' | '-' | ' ' => '_',
+            _ => character,
+        })
+        .collect()
 }
 
 fn default_mqtt_uplink(edge_id: &str) -> MqttUplinkConfig {
