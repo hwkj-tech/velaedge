@@ -10,7 +10,6 @@ import {
   Search,
   ScrollText,
   Send,
-  Settings2,
   ShieldCheck,
   type LucideIcon,
 } from 'lucide-react';
@@ -24,7 +23,6 @@ export type PageKey =
   | 'deviceModels'
   | 'protocolConnections'
   | 'dataConfigs'
-  | 'algorithms'
   | 'mqttUplink'
   | 'discovery'
   | 'releases'
@@ -44,7 +42,6 @@ export const navItems: NavItem[] = [
   { key: 'deviceModels', label: '设备模型', icon: Cpu },
   { key: 'protocolConnections', label: '协议连接', icon: GitBranch },
   { key: 'dataConfigs', label: '数据配置', icon: ListChecks },
-  { key: 'algorithms', label: '算法配置', icon: Settings2 },
   { key: 'mqttUplink', label: 'MQTT Sink', icon: Send },
   { key: 'discovery', label: '点位探测', icon: Search },
   { key: 'releases', label: '配置发布', icon: FileClock },

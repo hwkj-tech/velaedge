@@ -230,7 +230,8 @@ fn demo_store() -> CloudControlStore {
                 },
                 TelemetryType::Boolean,
                 "running",
-            )),
+            ))
+            .with_algorithm("pump-anomaly-v1"),
         );
     package.device_models.push(pump_model.clone());
     package.algorithms.push(AlgorithmSpec {

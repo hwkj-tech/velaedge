@@ -1834,6 +1834,7 @@ pub struct DataConfigResponse {
     pub protocol_connection_id: String,
     pub collection: DataConfigCollectionDto,
     pub points: Vec<DataConfigPointDto>,
+    pub algorithm_ids: Vec<String>,
     pub publish: DataConfigPublishDto,
 }
 
@@ -2049,6 +2050,8 @@ pub struct SaveDataConfigRequest {
     pub protocol_connection_id: String,
     pub collection: DataConfigCollectionDto,
     pub points: Vec<DataConfigPointDto>,
+    #[serde(default)]
+    pub algorithm_ids: Vec<String>,
     pub publish: DataConfigPublishDto,
 }
 
@@ -2399,6 +2402,23 @@ fn build_data_config_from_request(
             "data config must include at least one point",
         ));
     }
+    let mut algorithm_ids = Vec::new();
+    for algorithm_id in request.algorithm_ids {
+        let algorithm_id = non_empty_field(algorithm_id, "algorithmIds")?;
+        if !package
+            .algorithms
+            .iter()
+            .any(|algorithm| algorithm.id == algorithm_id)
+        {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!("data config algorithm `{algorithm_id}` missing"),
+            ));
+        }
+        if !algorithm_ids.contains(&algorithm_id) {
+            algorithm_ids.push(algorithm_id);
+        }
+    }
 
     let collection = DataConfigCollection {
         period_ms: request.collection.period_ms.max(100),
@@ -2427,6 +2447,7 @@ fn build_data_config_from_request(
         publish,
     );
     data_config.enabled = request.enabled;
+    data_config.algorithm_ids = algorithm_ids;
 
     for point in request.points {
         let mut data_point = DataConfigPoint::new(
@@ -2783,6 +2804,7 @@ fn data_config_response(
             timeout_ms: data_config.collection.timeout_ms,
             retry_count: data_config.collection.retry_count,
         },
+        algorithm_ids: data_config.algorithm_ids.clone(),
         points: data_config
             .points
             .iter()

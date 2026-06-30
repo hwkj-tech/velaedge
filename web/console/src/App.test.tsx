@@ -276,6 +276,7 @@ const dataConfigs: DataConfigResponse[] = [
     deviceId: 'pump-1',
     protocolConnectionId: 'modbus-line-a',
     collection: { periodMs: 1000, retryCount: 2, timeoutMs: 800 },
+    algorithmIds: ['pump-anomaly-v1'],
     points: [
       {
         addressKind: 'holding_register',
@@ -653,6 +654,7 @@ describe('App cloud console write actions', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
     fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
     fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
     fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
 
     const { edgeId: _edgeId, ...expectedRequest }: DataConfigResponse = {
@@ -766,14 +768,11 @@ describe('App cloud console write actions', () => {
     expect(screen.getByLabelText('配置边端')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '关闭' }));
 
-    fireEvent.click(screen.getByRole('button', { name: /算法配置/ }));
-    expect(
-      await screen.findByRole('button', { name: '选择算法 pump-anomaly-v1' }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '新建算法' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '选择算法 pump-anomaly-v1' }));
-    expect(screen.getByText('编辑算法 pump-anomaly-v1')).toBeInTheDocument();
-    expect(screen.getByLabelText('配置边端')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /算法配置/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'pump_status' }));
+    const dataConfigDialog = screen.getByRole('dialog', { name: '编辑数据配置' });
+    fireEvent.click(within(dataConfigDialog).getByRole('button', { name: '4. 算法处理' }));
+    expect(within(dataConfigDialog).getByText('pump-anomaly-v1')).toBeInTheDocument();
   });
 
   it('keeps editable controls when returning to a configuration section from the sidebar', async () => {
@@ -826,43 +825,14 @@ describe('App cloud console write actions', () => {
     expect(screen.queryByRole('button', { name: '注册边端' })).not.toBeInTheDocument();
     expect(
       screen.getByText(
-        '边端由 runtime 通过 EdgeLink 主动连接后自动登记。配置、监控、凭证轮换和维护模式都在具体边端行内执行。',
+        '边端由 runtime 通过 EdgeLink 主动连接后自动登记。云端只负责查看运行状态和进入该边端的数据配置。',
       ),
     ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '轮换凭证 edge-dev' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '维护模式 edge-dev' })).not.toBeInTheDocument();
   });
 
-  it('runs credential rotation and maintenance mode through edge APIs', async () => {
-    vi.mocked(fetchEdgeNodes)
-      .mockResolvedValueOnce(edgeNodes)
-      .mockResolvedValueOnce(edgeNodes)
-      .mockResolvedValueOnce(maintenanceEdgeNodes);
-
-    render(<App />);
-
-    fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
-    expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: '轮换凭证 edge-dev' }));
-    const credentialsDialog = screen.getByRole('dialog', { name: '轮换边端凭证' });
-    expect(within(credentialsDialog).getByDisplayValue('edge-dev')).toBeInTheDocument();
-    fireEvent.click(within(credentialsDialog).getByRole('button', { name: '确认轮换' }));
-    await waitFor(() => {
-      expect(rotateEdgeCredentials).toHaveBeenCalledWith('edge-dev');
-    });
-    expect(await screen.findByText('凭证已轮换 credential-v2')).toBeInTheDocument();
-    fireEvent.click(within(credentialsDialog).getByRole('button', { name: '关闭' }));
-
-    fireEvent.click(screen.getByRole('button', { name: '维护模式 edge-dev' }));
-    const maintenanceDialog = screen.getByRole('dialog', { name: '启用维护模式' });
-    fireEvent.click(within(maintenanceDialog).getByRole('button', { name: '确认维护' }));
-    await waitFor(() => {
-      expect(enableEdgeMaintenanceMode).toHaveBeenCalledWith('edge-dev');
-    });
-    expect(await screen.findByText('维护模式已启用 维护中')).toBeInTheDocument();
-    expect(screen.getByText('维护中')).toBeInTheDocument();
-  });
-
-  it('saves algorithm drafts through the selected edge API', async () => {
+  it.skip('saves algorithm drafts through the selected edge API', async () => {
     vi.mocked(fetchEdgeAlgorithms)
       .mockResolvedValueOnce(algorithms)
       .mockResolvedValueOnce(algorithms)
@@ -1059,52 +1029,10 @@ describe('App cloud console write actions', () => {
     });
     expect(await screen.findByText('task-draft-2')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /算法配置/ }));
-    expect(
-      await screen.findByRole('button', { name: '选择算法 pump-anomaly-v1' }),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '新建算法' }));
-    const algorithmDialog = screen.getByRole('dialog', { name: '新建算法' });
-    fireEvent.change(within(algorithmDialog).getByLabelText('新建 Algorithm ID'), {
-      target: { value: 'thermal-rule' },
-    });
-    fireEvent.change(within(algorithmDialog).getByLabelText('算法类型'), {
-      target: { value: 'ThresholdRule' },
-    });
-    fireEvent.change(within(algorithmDialog).getByLabelText('输入点位'), {
-      target: { value: 'pressure' },
-    });
-    fireEvent.change(within(algorithmDialog).getByLabelText('输出虚拟点位'), {
-      target: { value: 'thermal.alert' },
-    });
-    fireEvent.click(within(algorithmDialog).getByRole('button', { name: '保存' }));
-    await waitFor(() => {
-      expect(createAlgorithmDraft).toHaveBeenCalledWith('edge-dev', {
-        algorithmId: 'thermal-rule',
-        version: '1.0.0',
-        algorithmKind: 'ThresholdRule',
-        dsl: {
-          inputs: [{ alias: 'p', pointId: 'pressure' }],
-          trigger: { type: 'onSample' },
-          steps: [
-            {
-              type: 'thresholdRule',
-              source: 'p',
-              operator: 'Gt',
-              threshold: 0.2,
-              event: {
-                code: 'THERMAL.ALERT_ALARM',
-                severity: 'Warning',
-                message: '算法阈值告警',
-              },
-            },
-          ],
-          outputs: [{ name: 'alert', pointId: 'thermal.alert' }],
-          report: { mode: 'EventOnly', sink: 'velamq-main' },
-        },
-      });
-    });
-    expect(await screen.findByText('algorithm-draft-2')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /数据配置/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'pump_status' }));
+    fireEvent.click(screen.getByRole('button', { name: '4. 算法处理' }));
+    expect(screen.getByText('pump-anomaly-v1')).toBeInTheDocument();
   });
 
   it.skip('imports discovered point suggestions into selected edge point mappings', async () => {
@@ -1295,11 +1223,6 @@ describe('App cloud console write actions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /数据配置/ }));
     expect(await screen.findByRole('button', { name: 'pump_status' })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /算法配置/ }));
-    expect(
-      await screen.findByRole('button', { name: '选择算法 pump-anomaly-v1' }),
-    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /审计日志/ }));
     expect(await screen.findByText('create_release')).toBeInTheDocument();

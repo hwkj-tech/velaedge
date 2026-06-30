@@ -28,6 +28,11 @@ impl ConfigValidator {
             .iter()
             .map(|uplink| uplink.sink_id.as_str())
             .collect::<BTreeSet<_>>();
+        let algorithms = package
+            .algorithms
+            .iter()
+            .map(|algorithm| algorithm.id.as_str())
+            .collect::<BTreeSet<_>>();
 
         for mapping in &package.point_mappings {
             if !connections.contains(mapping.protocol_connection_id.as_str()) {
@@ -122,6 +127,16 @@ impl ConfigValidator {
                         message: format!(
                             "data config `{}` point `{}` json field is required",
                             data_config.config_id, point.point_id
+                        ),
+                    });
+                }
+            }
+            for algorithm_id in &data_config.algorithm_ids {
+                if !algorithms.contains(algorithm_id.as_str()) {
+                    errors.push(ValidationError {
+                        message: format!(
+                            "data config `{}` references missing algorithm `{}`",
+                            data_config.config_id, algorithm_id
                         ),
                     });
                 }

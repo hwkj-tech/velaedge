@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Edit3, Plus, Trash2, X } from 'lucide-react';
 
 import type {
+  AlgorithmResponse,
   DataConfigPoint,
   DataConfigResponse,
   EdgeNodeResponse,
@@ -31,6 +32,7 @@ const fallbackConfig: DataConfigResponse = {
   protocolConnectionId: 'modbus-line-a',
   collection: { periodMs: 1000, retryCount: 2, timeoutMs: 800 },
   points: [emptyPoint],
+  algorithmIds: ['pump-anomaly-v1'],
   publish: {
     payload: { includeQuality: true, mode: 'object', timestampField: 'ts' },
     qos: 1,
@@ -40,6 +42,7 @@ const fallbackConfig: DataConfigResponse = {
 };
 
 export function DataConfigsPage({
+  algorithms = [],
   configs = [fallbackConfig],
   edges = [],
   mqttUplink,
@@ -49,6 +52,7 @@ export function DataConfigsPage({
   protocolConnections = [],
   selectedEdgeId = configs[0]?.edgeId ?? 'edge-dev',
 }: {
+  algorithms?: AlgorithmResponse[];
   configs?: DataConfigResponse[];
   edges?: EdgeNodeResponse[];
   mqttUplink?: MqttUplinkResponse | null;
@@ -68,6 +72,7 @@ export function DataConfigsPage({
   const [step, setStep] = useState(0);
   const [status, setStatus] = useState('');
   const activeConfigs = configs.filter((config) => config.edgeId === selectedEdgeId);
+  const activeAlgorithms = algorithms.filter((algorithm) => algorithm.edgeId === selectedEdgeId);
   const edge = edges.find((item) => item.edgeId === selectedEdgeId);
   const columns = useMemo<Array<DataTableColumn<DataConfigResponse>>>(
     () => [
@@ -90,6 +95,12 @@ export function DataConfigsPage({
         key: 'collection',
         header: '采集',
         render: (config) => `${config.collection.periodMs}ms / ${config.points.length} 点`,
+      },
+      {
+        key: 'algorithms',
+        header: '算法',
+        render: (config) =>
+          config.algorithmIds?.length ? config.algorithmIds.join(', ') : '未启用',
       },
       {
         key: 'mqtt',
@@ -313,8 +324,10 @@ export function DataConfigsPage({
               updateCollection={updateCollection}
               updateFirstPoint={updateFirstPoint}
               updateForm={updateForm}
+              updateAlgorithmIds={(algorithmIds) => updateForm({ algorithmIds })}
               updatePayload={updatePayload}
               updatePublish={updatePublish}
+              algorithms={activeAlgorithms}
             />
             <div className="drawer-footer">
               <span className="editor-status">{status}</span>
@@ -335,9 +348,10 @@ export function DataConfigsPage({
   );
 }
 
-const steps = ['基础信息', '采集设置', '点位映射', 'MQTT 上报', 'JSON 预览'];
+const steps = ['基础信息', '采集设置', '点位映射', '算法处理', 'MQTT 上报', 'JSON 预览'];
 
 function DataConfigStep({
+  algorithms,
   form,
   mqttUplink,
   protocolConnections,
@@ -345,9 +359,11 @@ function DataConfigStep({
   updateCollection,
   updateFirstPoint,
   updateForm,
+  updateAlgorithmIds,
   updatePayload,
   updatePublish,
 }: {
+  algorithms: AlgorithmResponse[];
   form: SaveDataConfigRequest;
   mqttUplink?: MqttUplinkResponse | null;
   protocolConnections: ProtocolConnectionResponse[];
@@ -355,6 +371,7 @@ function DataConfigStep({
   updateCollection: (patch: Partial<SaveDataConfigRequest['collection']>) => void;
   updateFirstPoint: (patch: Partial<DataConfigPoint>) => void;
   updateForm: (patch: Partial<SaveDataConfigRequest>) => void;
+  updateAlgorithmIds: (algorithmIds: string[]) => void;
   updatePayload: (patch: Partial<SaveDataConfigRequest['publish']['payload']>) => void;
   updatePublish: (patch: Partial<SaveDataConfigRequest['publish']>) => void;
 }) {
@@ -408,6 +425,43 @@ function DataConfigStep({
   }
   if (step === 3) {
     return (
+      <div className="algorithm-choice-list">
+        {algorithms.length ? (
+          algorithms.map((algorithm) => {
+            const currentAlgorithmIds = form.algorithmIds ?? [];
+            const checked = currentAlgorithmIds.includes(algorithm.algorithmId);
+            return (
+              <label className="algorithm-choice" key={algorithm.algorithmId}>
+                <input
+                  aria-label={algorithm.algorithmId}
+                  checked={checked}
+                  onChange={(event) => {
+                    updateAlgorithmIds(
+                      event.target.checked
+                        ? [...currentAlgorithmIds, algorithm.algorithmId]
+                        : currentAlgorithmIds.filter((id) => id !== algorithm.algorithmId),
+                    );
+                  }}
+                  type="checkbox"
+                />
+                <span>
+                  <strong>{algorithm.algorithmId}</strong>
+                  <small>
+                    {algorithm.algorithmKind} · 输入 {algorithm.inputIds.join(', ') || '-'} · 输出{' '}
+                    {algorithm.outputIds.join(', ') || '-'}
+                  </small>
+                </span>
+              </label>
+            );
+          })
+        ) : (
+          <div className="info-panel">当前边端还没有算法。保存数据配置后可先无算法上报原始点位。</div>
+        )}
+      </div>
+    );
+  }
+  if (step === 4) {
+    return (
       <div className="form-grid">
         <TextField label="MQTT Sink" value={form.publish.sinkId || mqttUplink?.sinkId || ''} onChange={(sinkId) => updatePublish({ sinkId })} />
         <TextField label="MQTT Topic" value={form.publish.topicTemplate} onChange={(topicTemplate) => updatePublish({ topicTemplate })} />
@@ -450,6 +504,7 @@ function createDefaultForm(
     configId: `${edgeId}_data_${Date.now().toString().slice(-4)}`,
     deviceId: 'pump-1',
     enabled: true,
+    algorithmIds: [],
     name: '新数据配置',
     points: [emptyPoint],
     protocolConnectionId: protocolConnections[0]?.connectionId ?? 'modbus-line-a',
@@ -464,12 +519,13 @@ function createDefaultForm(
 
 function responseToSave(config: DataConfigResponse): SaveDataConfigRequest {
   const { edgeId: _edgeId, ...request } = config;
-  return request;
+  return { ...request, algorithmIds: request.algorithmIds ?? [] };
 }
 
 function sanitizeForm(form: SaveDataConfigRequest): SaveDataConfigRequest {
   return {
     ...form,
+    algorithmIds: form.algorithmIds ?? [],
     collection: {
       periodMs: Math.max(Number(form.collection.periodMs) || 1000, 100),
       retryCount: Math.max(Number(form.collection.retryCount) || 0, 0),
@@ -492,6 +548,7 @@ function buildPreview(form: SaveDataConfigRequest) {
   return {
     config_id: form.configId,
     device_id: form.deviceId,
+    algorithms: form.algorithmIds ?? [],
     [form.publish.payload.timestampField]: '2026-06-30T00:00:00Z',
     quality: form.publish.payload.includeQuality ? quality : undefined,
     values,

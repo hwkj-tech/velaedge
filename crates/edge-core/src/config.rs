@@ -213,6 +213,8 @@ pub struct DataConfig {
     pub protocol_connection_id: String,
     pub collection: DataConfigCollection,
     pub points: Vec<DataConfigPoint>,
+    #[serde(default)]
+    pub algorithm_ids: Vec<String>,
     pub publish: DataConfigPublish,
 }
 
@@ -233,12 +235,18 @@ impl DataConfig {
             protocol_connection_id: protocol_connection_id.into(),
             collection,
             points: Vec::new(),
+            algorithm_ids: Vec::new(),
             publish,
         }
     }
 
     pub fn with_point(mut self, point: DataConfigPoint) -> Self {
         self.points.push(point);
+        self
+    }
+
+    pub fn with_algorithm(mut self, algorithm_id: impl Into<String>) -> Self {
+        self.algorithm_ids.push(algorithm_id.into());
         self
     }
 

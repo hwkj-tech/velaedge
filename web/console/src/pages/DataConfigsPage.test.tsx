@@ -13,6 +13,15 @@ describe('DataConfigsPage', () => {
         edges={[{ edgeId: 'edge-dev', displayName: '研发实验室边端' } as any]}
         mqttUplink={{ sinkId: 'velamq-main', qos: 1 } as any}
         onSaveConfig={onSave}
+        algorithms={[
+          {
+            algorithmId: 'pressure-change-report',
+            algorithmKind: 'ChangeReport',
+            edgeId: 'edge-dev',
+            inputIds: ['pressure'],
+            outputIds: ['pressure_changed'],
+          } as any,
+        ]}
         protocolConnections={[
           { connectionId: 'modbus-line-a', protocol: 'Modbus RTU' } as any,
         ]}
@@ -44,6 +53,10 @@ describe('DataConfigsPage', () => {
     });
     fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
 
+    expect(within(dialog).getByText('pressure-change-report')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByLabelText('pressure-change-report'));
+    fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
+
     fireEvent.change(within(dialog).getByLabelText('MQTT Topic'), {
       target: { value: 'factory/{edge_id}/{device_id}/status' },
     });
@@ -61,6 +74,7 @@ describe('DataConfigsPage', () => {
       expect.objectContaining({
         collection: expect.objectContaining({ periodMs: 1000 }),
         configId: 'pump_status',
+        algorithmIds: ['pressure-change-report'],
         publish: expect.objectContaining({
           topicTemplate: 'factory/{edge_id}/{device_id}/status',
         }),

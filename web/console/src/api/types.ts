@@ -205,10 +205,13 @@ export interface DataConfigResponse {
   protocolConnectionId: string;
   collection: DataConfigCollection;
   points: DataConfigPoint[];
+  algorithmIds: string[];
   publish: DataConfigPublish;
 }
 
-export type SaveDataConfigRequest = Omit<DataConfigResponse, 'edgeId'>;
+export type SaveDataConfigRequest = Omit<DataConfigResponse, 'edgeId' | 'algorithmIds'> & {
+  algorithmIds?: string[];
+};
 
 export interface SaveCollectionTaskRequest {
   deviceId: string;

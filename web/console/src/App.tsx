@@ -29,8 +29,6 @@ import {
   deleteEdgeDataConfig,
   createEdgeProtocolConnection,
   saveDeviceModel,
-  rotateEdgeCredentials,
-  enableEdgeMaintenanceMode,
   saveEdgeAlgorithm,
   saveEdgeCollectionTask,
   saveEdgeDataConfig,
@@ -49,7 +47,6 @@ import type {
   DiscoveryReportResponse,
   DeviceModelResponse,
   DataConfigResponse,
-  EdgeNodeActionResponse,
   EdgeNodeResponse,
   ManagementActionResponse,
   MqttUplinkResponse,
@@ -70,7 +67,6 @@ import type {
 } from './api/types';
 import { AppShell, type PageKey } from './layout/AppShell';
 import { AgentAssistantPage } from './pages/AgentAssistantPage';
-import { AlgorithmsPage } from './pages/AlgorithmsPage';
 import { AuditLogPage } from './pages/AuditLogPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { DataConfigsPage } from './pages/DataConfigsPage';
@@ -93,7 +89,6 @@ type EdgeConfigurationMode = 'configure' | 'list';
 const configurationPages = new Set<PageKey>([
   'protocolConnections',
   'dataConfigs',
-  'algorithms',
 ]);
 
 interface ConsoleSnapshot {
@@ -466,22 +461,6 @@ export default function App() {
     return report;
   };
 
-  const handleRotateCredentials = async (
-    edgeId: string,
-  ): Promise<EdgeNodeActionResponse> => {
-    const result = await rotateEdgeCredentials(edgeId);
-    setEdgeNodes(await fetchEdgeNodes());
-    return result;
-  };
-
-  const handleEnableMaintenance = async (
-    edgeId: string,
-  ): Promise<EdgeNodeActionResponse> => {
-    const result = await enableEdgeMaintenanceMode(edgeId);
-    setEdgeNodes(await fetchEdgeNodes());
-    return result;
-  };
-
   const handleNavigate = (page: PageKey) => {
     setActivePage(page);
     setEdgeConfigurationMode(configurationPages.has(page) ? 'configure' : 'list');
@@ -581,14 +560,12 @@ export default function App() {
         handleCreateDeviceModel,
         handleSaveDeviceModel,
         handleCreatePoint,
-        handleEnableMaintenance,
         handleGenerateAgentSuggestions,
         handleRunDiscovery,
         handleGenerateSchedule,
         handleImportPoints,
         handleMonitorEdge,
         handleReleaseDiff,
-        handleRotateCredentials,
         handleSavePoint,
         handleSelectPointEdge,
         selectedPointEdgeId,
@@ -603,9 +580,6 @@ export default function App() {
         handleCreateProtocolConnection,
         handleSelectProtocolEdge,
         selectedProtocolEdgeId,
-        handleSaveAlgorithm,
-        handleSelectAlgorithmEdge,
-        selectedAlgorithmEdgeId,
         handleSaveMqttUplink,
         handlePublishLatestRelease,
         handleValidateConfig,
@@ -727,7 +701,6 @@ function renderPage(
     edgeId?: string,
     request?: CreatePointMappingRequest,
   ) => Promise<PointMappingResponse>,
-  onEnableMaintenance: (edgeId: string) => Promise<EdgeNodeActionResponse>,
   onGenerateAgentSuggestions: () => Promise<AgentActionResponse>,
   onRunDiscovery: (
     edgeId: string,
@@ -737,7 +710,6 @@ function renderPage(
   onImportPoints: (edgeId: string) => Promise<ManagementActionResponse>,
   onMonitorEdge: (edgeId: string) => void,
   onReleaseDiff: (edgeId: string) => Promise<ManagementActionResponse>,
-  onRotateCredentials: (edgeId: string) => Promise<EdgeNodeActionResponse>,
   onSavePoint: (
     edgeId: string,
     pointId: string,
@@ -771,13 +743,6 @@ function renderPage(
   ) => Promise<ProtocolConnectionResponse>,
   onSelectProtocolEdge: (edgeId: string) => Promise<void>,
   selectedProtocolEdgeId: string,
-  onSaveAlgorithm: (
-    edgeId: string,
-    algorithmId: string,
-    request: SaveAlgorithmRequest,
-  ) => Promise<void>,
-  onSelectAlgorithmEdge: (edgeId: string) => Promise<void>,
-  selectedAlgorithmEdgeId: string,
   onSaveMqttUplink: (
     edgeId: string,
     request: MqttUplinkResponse,
@@ -815,9 +780,7 @@ function renderPage(
           onConfigureEdge={(edgeId) => {
             void onConfigureEdge(edgeId);
           }}
-          onEnableMaintenance={onEnableMaintenance}
           onMonitorEdge={onMonitorEdge}
-          onRotateCredentials={onRotateCredentials}
         />
       );
     case 'deviceModels':
@@ -844,6 +807,7 @@ function renderPage(
     case 'dataConfigs':
       return (
         <DataConfigsPage
+          algorithms={algorithms}
           configs={dataConfigs}
           edges={edgeNodes}
           mqttUplink={mqttUplink}
@@ -852,19 +816,6 @@ function renderPage(
           onSelectEdge={onSelectDataConfigEdge}
           protocolConnections={protocolConnections}
           selectedEdgeId={selectedDataConfigEdgeId}
-        />
-      );
-    case 'algorithms':
-      return (
-        <AlgorithmsPage
-          algorithms={algorithms}
-          edges={edgeNodes}
-          mode={edgeConfigurationMode}
-          onAssessRisk={onAssessAlgorithmRisk}
-          onCreateAlgorithm={onCreateAlgorithm}
-          onSaveAlgorithm={onSaveAlgorithm}
-          onSelectEdge={onSelectAlgorithmEdge}
-          selectedEdgeId={selectedAlgorithmEdgeId}
         />
       );
     case 'mqttUplink':

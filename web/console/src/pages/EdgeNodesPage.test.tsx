@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { EdgeNodeResponse } from '../api/types';
@@ -37,94 +37,19 @@ describe('EdgeNodesPage', () => {
     expect(onMonitorEdge).toHaveBeenCalledWith('edge-dev');
   });
 
-  it('keeps lifecycle status read-only in the toolbar', () => {
+  it('does not expose manual registration, credential, or maintenance actions', () => {
     render(<EdgeNodesPage edges={edges} />);
 
     expect(screen.queryByRole('button', { name: '注册边端' })).not.toBeInTheDocument();
     expect(
       screen.getByText(
-        '边端由 runtime 通过 EdgeLink 主动连接后自动登记。配置、监控、凭证轮换和维护模式都在具体边端行内执行。',
+        '边端由 runtime 通过 EdgeLink 主动连接后自动登记。云端只负责查看运行状态和进入该边端的数据配置。',
       ),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '轮换凭证' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '维护模式' })).not.toBeInTheDocument();
-  });
-
-  it('confirms lifecycle actions in dialogs before calling handlers', async () => {
-    const onRotateCredentials = vi.fn().mockResolvedValue({
-      credentialVersion: 'credential-v2',
-    });
-    const onEnableMaintenance = vi.fn().mockResolvedValue({
-      status: '维护中',
-    });
-
-    render(
-      <EdgeNodesPage
-        edges={edges}
-        onEnableMaintenance={onEnableMaintenance}
-        onRotateCredentials={onRotateCredentials}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: '轮换凭证 edge-dev' }));
-    const credentialsDialog = screen.getByRole('dialog', { name: '轮换边端凭证' });
-    expect(within(credentialsDialog).getByDisplayValue('edge-dev')).toBeInTheDocument();
-    expect(onRotateCredentials).not.toHaveBeenCalled();
-
-    fireEvent.click(within(credentialsDialog).getByRole('button', { name: '确认轮换' }));
-    await waitFor(() => {
-      expect(onRotateCredentials).toHaveBeenCalledWith('edge-dev');
-    });
-    expect(await screen.findByText('凭证已轮换 credential-v2')).toBeInTheDocument();
-    fireEvent.click(within(credentialsDialog).getByRole('button', { name: '关闭' }));
-
-    fireEvent.click(screen.getByRole('button', { name: '维护模式 edge-dev' }));
-    const maintenanceDialog = screen.getByRole('dialog', { name: '启用维护模式' });
-    expect(onEnableMaintenance).not.toHaveBeenCalled();
-    fireEvent.click(within(maintenanceDialog).getByRole('button', { name: '确认维护' }));
-    await waitFor(() => {
-      expect(onEnableMaintenance).toHaveBeenCalledWith('edge-dev');
-    });
-    expect(await screen.findByText('维护模式已启用 维护中')).toBeInTheDocument();
-  });
-
-  it('runs lifecycle actions for the selected edge row', async () => {
-    const onRotateCredentials = vi.fn().mockResolvedValue({
-      credentialVersion: 'credential-v-prod',
-    });
-    const onEnableMaintenance = vi.fn().mockResolvedValue({
-      status: '维护中',
-    });
-    const manyEdges = [
-      edges[0],
-      {
-        ...edges[0],
-        edgeId: 'edge-prod',
-        displayName: '产线边端',
-        runtimeId: 'runtime-prod',
-      },
-    ];
-
-    render(
-      <EdgeNodesPage
-        edges={manyEdges}
-        onEnableMaintenance={onEnableMaintenance}
-        onRotateCredentials={onRotateCredentials}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: '轮换凭证 edge-prod' }));
-    fireEvent.click(screen.getByRole('button', { name: '确认轮换' }));
-    await waitFor(() => {
-      expect(onRotateCredentials).toHaveBeenCalledWith('edge-prod');
-    });
-    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
-
-    fireEvent.click(screen.getByRole('button', { name: '维护模式 edge-prod' }));
-    fireEvent.click(screen.getByRole('button', { name: '确认维护' }));
-    await waitFor(() => {
-      expect(onEnableMaintenance).toHaveBeenCalledWith('edge-prod');
-    });
+    expect(screen.queryByRole('button', { name: '轮换凭证 edge-dev' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '维护模式 edge-dev' })).not.toBeInTheDocument();
   });
 
   it('paginates edge rows locally', () => {
