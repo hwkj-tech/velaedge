@@ -75,6 +75,7 @@ const reportModes: Array<[AlgorithmReportPolicy['mode'], string]> = [
 export function AlgorithmsPage({
   algorithms = fallbackAlgorithms,
   edges = fallbackEdges,
+  embedded = false,
   mode = 'configure',
   onAssessRisk,
   onCreateAlgorithm,
@@ -83,6 +84,7 @@ export function AlgorithmsPage({
 }: {
   algorithms?: AlgorithmResponse[];
   edges?: EdgeNodeResponse[];
+  embedded?: boolean;
   mode?: 'configure' | 'list';
   onAssessRisk?: (
     edgeId: string,
@@ -222,7 +224,7 @@ export function AlgorithmsPage({
           </p>
         </div>
         <div className="toolbar">
-          {isConfigureMode ? (
+          {isConfigureMode && !embedded ? (
             <div className="edge-context-pill" aria-label="当前边端">
               <span>当前边端</span>
               <strong>{activeEdge.displayName} / {activeEdge.edgeId}</strong>

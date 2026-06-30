@@ -68,6 +68,7 @@ const fallbackEdges: EdgeNodeResponse[] = [
 
 export function PointMappingsPage({
   edges = fallbackEdges,
+  embedded = false,
   mode = 'configure',
   onCreatePoint,
   onImportPoints,
@@ -77,6 +78,7 @@ export function PointMappingsPage({
   selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
 }: {
   edges?: EdgeNodeResponse[];
+  embedded?: boolean;
   mode?: 'configure' | 'list';
   onCreatePoint?: (
     edgeId: string,
@@ -221,7 +223,7 @@ export function PointMappingsPage({
           </p>
         </div>
         <div className="toolbar">
-          {isConfigureMode ? (
+          {isConfigureMode && !embedded ? (
             <div className="edge-context-pill" aria-label="当前边端">
               <span>当前边端</span>
               <strong>{activeEdge.displayName} / {activeEdge.edgeId}</strong>

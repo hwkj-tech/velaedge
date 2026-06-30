@@ -2,10 +2,7 @@ import {
   Activity,
   Bot,
   Cpu,
-  FileClock,
-  GitBranch,
   LayoutDashboard,
-  ListChecks,
   RadioTower,
   Search,
   ScrollText,
@@ -19,6 +16,7 @@ import './AppShell.css';
 export type PageKey =
   | 'dashboard'
   | 'edges'
+  | 'edgeConfig'
   | 'deviceModels'
   | 'protocolConnections'
   | 'dataConfigs'
@@ -38,16 +36,17 @@ export const navItems: NavItem[] = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { key: 'edges', label: '边端管理', icon: RadioTower },
   { key: 'deviceModels', label: '设备模型', icon: Cpu },
-  { key: 'protocolConnections', label: '协议连接', icon: GitBranch },
-  { key: 'dataConfigs', label: '数据上报', icon: ListChecks },
   { key: 'discovery', label: '点位探测', icon: Search },
-  { key: 'releases', label: '配置发布', icon: FileClock },
   { key: 'runtimeStatus', label: '运行状态', icon: Activity },
   { key: 'auditLog', label: '审计日志', icon: ScrollText },
   { key: 'agentAssistant', label: 'Agent 助手', icon: Bot },
 ];
 
 const pageTitleByKey = new Map(navItems.map((item) => [item.key, item.label]));
+pageTitleByKey.set('edgeConfig', '边端配置');
+pageTitleByKey.set('protocolConnections', '协议连接');
+pageTitleByKey.set('dataConfigs', '数据上报');
+pageTitleByKey.set('releases', '配置发布');
 
 export function AppShell({
   activePage,

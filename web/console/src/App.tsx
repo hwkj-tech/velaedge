@@ -73,6 +73,9 @@ import { DataConfigsPage } from './pages/DataConfigsPage';
 import { DeviceModelsPage } from './pages/DeviceModelsPage';
 import { DiscoveryPage } from './pages/DiscoveryPage';
 import { EdgeNodesPage } from './pages/EdgeNodesPage';
+import { CollectionTasksPage } from './pages/CollectionTasksPage';
+import { MqttUplinkPage } from './pages/MqttUplinkPage';
+import { PointMappingsPage } from './pages/PointMappingsPage';
 import { ProtocolConnectionsPage } from './pages/ProtocolConnectionsPage';
 import { ReleasesPage } from './pages/ReleasesPage';
 import { RuntimeStatusPage } from './pages/RuntimeStatusPage';
@@ -85,10 +88,7 @@ const initialSummary: SummaryResponse = {
 const defaultConfigEdgeId = 'edge-dev';
 type EdgeConfigurationMode = 'configure' | 'list';
 
-const configurationPages = new Set<PageKey>([
-  'protocolConnections',
-  'dataConfigs',
-]);
+const configurationPages = new Set<PageKey>(['edgeConfig']);
 
 interface ConsoleSnapshot {
   algorithms: AlgorithmResponse[];
@@ -476,7 +476,7 @@ export default function App() {
     setSelectedCollectionEdgeId(edgeId);
     setSelectedDataConfigEdgeId(edgeId);
     setSelectedAlgorithmEdgeId(edgeId);
-    setActivePage('dataConfigs');
+    setActivePage('edgeConfig');
 
     const [
       nextProtocolConnections,
@@ -780,6 +780,36 @@ function renderPage(
           onSaveMqttUplink={onSaveMqttUplink}
         />
       );
+    case 'edgeConfig':
+      return (
+        <EdgeConfigWorkspace
+          algorithms={algorithms}
+          collectionTasks={collectionTasks}
+          dataConfigs={dataConfigs}
+          discoverySuggestions={discoverySuggestions}
+          edgeId={selectedProtocolEdgeId}
+          edges={edgeNodes}
+          mqttUplink={mqttUplink}
+          onCreateCollectionTask={onCreateCollectionTask}
+          onCreatePoint={onCreatePoint}
+          onCreateProtocolConnection={onCreateProtocolConnection}
+          onDeleteDataConfig={onDeleteDataConfig}
+          onGenerateSchedule={onGenerateSchedule}
+          onImportPoints={onImportPoints}
+          onPublish={onPublish}
+          onReleaseDiff={onReleaseDiff}
+          onRunDiscovery={onRunDiscovery}
+          onSaveCollectionTask={onSaveCollectionTask}
+          onSaveDataConfig={onSaveDataConfig}
+          onSaveMqttUplink={onSaveMqttUplink}
+          onSavePoint={onSavePoint}
+          onSaveProtocolConnection={onSaveProtocolConnection}
+          onValidateConfig={onValidateConfig}
+          pointMappings={pointMappings}
+          protocolConnections={protocolConnections}
+          releaseList={releaseList}
+        />
+      );
     case 'deviceModels':
       return (
         <DeviceModelsPage
@@ -849,4 +879,223 @@ function renderPage(
         />
       );
   }
+}
+
+type EdgeConfigTab =
+  | 'protocol'
+  | 'points'
+  | 'collection'
+  | 'reports'
+  | 'mqtt'
+  | 'discovery'
+  | 'release';
+
+function EdgeConfigWorkspace({
+  algorithms,
+  collectionTasks,
+  dataConfigs,
+  discoverySuggestions,
+  edgeId,
+  edges,
+  mqttUplink,
+  onCreateCollectionTask,
+  onCreatePoint,
+  onCreateProtocolConnection,
+  onDeleteDataConfig,
+  onGenerateSchedule,
+  onImportPoints,
+  onPublish,
+  onReleaseDiff,
+  onRunDiscovery,
+  onSaveCollectionTask,
+  onSaveDataConfig,
+  onSaveMqttUplink,
+  onSavePoint,
+  onSaveProtocolConnection,
+  onValidateConfig,
+  pointMappings,
+  protocolConnections,
+  releaseList,
+}: {
+  algorithms?: AlgorithmResponse[];
+  collectionTasks?: CollectionTaskResponse[];
+  dataConfigs?: DataConfigResponse[];
+  discoverySuggestions?: PointMappingSuggestionResponse[];
+  edgeId: string;
+  edges?: EdgeNodeResponse[];
+  mqttUplink?: MqttUplinkResponse;
+  onCreateCollectionTask: (
+    edgeId: string,
+    request: CreateCollectionTaskRequest,
+  ) => Promise<CollectionTaskResponse>;
+  onCreatePoint: (
+    edgeId?: string,
+    request?: CreatePointMappingRequest,
+  ) => Promise<PointMappingResponse>;
+  onCreateProtocolConnection: (
+    edgeId: string,
+    request: CreateProtocolConnectionRequest,
+  ) => Promise<ProtocolConnectionResponse>;
+  onDeleteDataConfig: (edgeId: string, configId: string) => Promise<void>;
+  onGenerateSchedule: (edgeId: string) => Promise<ManagementActionResponse>;
+  onImportPoints: (edgeId: string) => Promise<ManagementActionResponse>;
+  onPublish: (edgeId: string) => Promise<void>;
+  onReleaseDiff: (edgeId: string) => Promise<ManagementActionResponse>;
+  onRunDiscovery: (
+    edgeId: string,
+    request: RunDiscoveryRequest,
+  ) => Promise<DiscoveryReportResponse>;
+  onSaveCollectionTask: (
+    edgeId: string,
+    taskId: string,
+    request: SaveCollectionTaskRequest,
+  ) => Promise<void>;
+  onSaveDataConfig: (
+    edgeId: string,
+    configId: string | null,
+    request: SaveDataConfigRequest,
+  ) => Promise<void>;
+  onSaveMqttUplink: (
+    edgeId: string,
+    request: MqttUplinkResponse,
+  ) => Promise<MqttUplinkResponse>;
+  onSavePoint: (
+    edgeId: string,
+    pointId: string,
+    request: SavePointMappingRequest,
+  ) => Promise<void>;
+  onSaveProtocolConnection: (
+    edgeId: string,
+    connectionId: string,
+    request: SaveProtocolConnectionRequest,
+  ) => Promise<void>;
+  onValidateConfig: (edgeId?: string) => Promise<ManagementActionResponse>;
+  pointMappings?: PointMappingResponse[];
+  protocolConnections?: ProtocolConnectionResponse[];
+  releaseList?: ReleaseListResponse;
+}) {
+  const [activeTab, setActiveTab] = useState<EdgeConfigTab>('protocol');
+  const edge = edges?.find((item) => item.edgeId === edgeId);
+  const tabs: Array<{ key: EdgeConfigTab; label: string }> = [
+    { key: 'protocol', label: '协议连接' },
+    { key: 'points', label: '点位配置' },
+    { key: 'collection', label: '采集任务' },
+    { key: 'reports', label: '数据上报' },
+    { key: 'mqtt', label: 'MQTT' },
+    { key: 'discovery', label: '点位探测' },
+    { key: 'release', label: '配置发布' },
+  ];
+
+  return (
+    <div className="edge-config-workspace">
+      <section className="edge-config-header">
+        <div>
+          <span>边端配置工作区</span>
+          <h2>{edge?.displayName ?? edgeId}</h2>
+          <p>{edge?.site ?? '未分组'} · {edgeId} · {edge?.runtimeId ?? 'runtime 未上报'}</p>
+        </div>
+        <div className="edge-config-status">
+          <span className={edge?.status === '健康' ? 'tag ok' : 'tag warn'}>
+            {edge?.status ?? '未知'}
+          </span>
+          <strong>{edge?.resources ?? '-'}</strong>
+          <small>{edge?.heartbeat ?? '-'}</small>
+        </div>
+      </section>
+
+      <nav className="workspace-tabs" aria-label="边端配置标签" role="tablist">
+        {tabs.map((tab) => (
+          <button
+            aria-selected={activeTab === tab.key}
+            className={activeTab === tab.key ? 'workspace-tab active' : 'workspace-tab'}
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            role="tab"
+            type="button"
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
+      <section className="workspace-tab-panel" role="tabpanel">
+        {activeTab === 'protocol' ? (
+          <ProtocolConnectionsPage
+            connections={protocolConnections}
+            edges={edges}
+            embedded
+            mode="configure"
+            onCreateConnection={onCreateProtocolConnection}
+            onSaveConnection={onSaveProtocolConnection}
+            onValidateConnection={onValidateConfig}
+            selectedEdgeId={edgeId}
+          />
+        ) : null}
+        {activeTab === 'points' ? (
+          <PointMappingsPage
+            edges={edges}
+            embedded
+            mode="configure"
+            onCreatePoint={onCreatePoint}
+            onImportPoints={onImportPoints}
+            onSavePoint={onSavePoint}
+            onValidateDraft={onValidateConfig}
+            points={pointMappings}
+            selectedEdgeId={edgeId}
+          />
+        ) : null}
+        {activeTab === 'collection' ? (
+          <CollectionTasksPage
+            edges={edges}
+            embedded
+            mode="configure"
+            onCreateTask={onCreateCollectionTask}
+            onGenerateSchedule={onGenerateSchedule}
+            onSaveTask={onSaveCollectionTask}
+            selectedEdgeId={edgeId}
+            tasks={collectionTasks}
+          />
+        ) : null}
+        {activeTab === 'reports' ? (
+          <DataConfigsPage
+            algorithms={algorithms}
+            configs={dataConfigs}
+            edges={edges}
+            embedded
+            mqttUplink={mqttUplink}
+            onDeleteConfig={onDeleteDataConfig}
+            onSaveConfig={onSaveDataConfig}
+            pointMappings={pointMappings}
+            protocolConnections={protocolConnections}
+            selectedEdgeId={edgeId}
+          />
+        ) : null}
+        {activeTab === 'mqtt' ? (
+          <MqttUplinkPage
+            onSave={onSaveMqttUplink}
+            selectedEdgeId={edgeId}
+            uplink={mqttUplink}
+          />
+        ) : null}
+        {activeTab === 'discovery' ? (
+          <DiscoveryPage
+            onRunDiscovery={onRunDiscovery}
+            selectedEdgeId={edgeId}
+            suggestions={discoverySuggestions}
+          />
+        ) : null}
+        {activeTab === 'release' ? (
+          <ReleasesPage
+            edges={edges}
+            embedded
+            onPublish={onPublish}
+            onShowDiff={onReleaseDiff}
+            onValidateRelease={onValidateConfig}
+            releaseList={releaseList}
+            selectedEdgeId={edgeId}
+          />
+        ) : null}
+      </section>
+    </div>
+  );
 }

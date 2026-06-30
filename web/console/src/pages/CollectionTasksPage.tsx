@@ -41,6 +41,7 @@ const fallbackEdges: EdgeNodeResponse[] = [
 
 export function CollectionTasksPage({
   edges = fallbackEdges,
+  embedded = false,
   mode = 'configure',
   onCreateTask,
   onGenerateSchedule,
@@ -49,6 +50,7 @@ export function CollectionTasksPage({
   tasks = fallbackTasks,
 }: {
   edges?: EdgeNodeResponse[];
+  embedded?: boolean;
   mode?: 'configure' | 'list';
   onCreateTask?: (
     edgeId: string,
@@ -172,7 +174,7 @@ export function CollectionTasksPage({
           </p>
         </div>
         <div className="toolbar">
-          {isConfigureMode ? (
+          {isConfigureMode && !embedded ? (
             <div className="edge-context-pill" aria-label="当前边端">
               <span>当前边端</span>
               <strong>{activeEdge.displayName} / {activeEdge.edgeId}</strong>

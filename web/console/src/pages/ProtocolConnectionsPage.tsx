@@ -51,6 +51,7 @@ const protocolOptions = [
 export function ProtocolConnectionsPage({
   connections = fallbackConnections,
   edges = fallbackEdges,
+  embedded = false,
   mode = 'configure',
   onCreateConnection,
   onSaveConnection,
@@ -59,6 +60,7 @@ export function ProtocolConnectionsPage({
 }: {
   connections?: ProtocolConnectionResponse[];
   edges?: EdgeNodeResponse[];
+  embedded?: boolean;
   mode?: 'configure' | 'list';
   onCreateConnection?: (
     edgeId: string,
@@ -195,7 +197,7 @@ export function ProtocolConnectionsPage({
           </p>
         </div>
         <div className="toolbar">
-          {isConfigureMode ? (
+          {isConfigureMode && !embedded ? (
             <div className="edge-context-pill" aria-label="当前边端">
               <span>当前边端</span>
               <strong>{activeEdge.displayName} / {activeEdge.edgeId}</strong>

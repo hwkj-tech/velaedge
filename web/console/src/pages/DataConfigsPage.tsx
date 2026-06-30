@@ -60,6 +60,7 @@ export function DataConfigsPage({
   algorithms = [],
   configs = [fallbackConfig],
   edges = [],
+  embedded = false,
   mqttUplink,
   onDeleteConfig,
   onSaveConfig,
@@ -70,6 +71,7 @@ export function DataConfigsPage({
   algorithms?: AlgorithmResponse[];
   configs?: DataConfigResponse[];
   edges?: EdgeNodeResponse[];
+  embedded?: boolean;
   mqttUplink?: MqttUplinkResponse | null;
   onDeleteConfig?: (edgeId: string, configId: string) => Promise<void> | void;
   onSaveConfig?: (
@@ -261,10 +263,12 @@ export function DataConfigsPage({
           <p>定义数据上报流水线：选择边端已配置点位，拖入算法节点汇聚处理，再组装 JSON 上报到 MQTT topic。</p>
         </div>
         <div className="toolbar">
-          <div className="edge-context-pill" aria-label="当前边端">
-            <span>当前边端</span>
-            <strong>{edge?.displayName ?? selectedEdgeId} / {selectedEdgeId}</strong>
-          </div>
+          {!embedded ? (
+            <div className="edge-context-pill" aria-label="当前边端">
+              <span>当前边端</span>
+              <strong>{edge?.displayName ?? selectedEdgeId} / {selectedEdgeId}</strong>
+            </div>
+          ) : null}
           {status ? <span className="toolbar-status" role="status">{status}</span> : null}
           <button className="primary-button" onClick={openCreate} type="button">
             <Plus size={15} aria-hidden="true" />

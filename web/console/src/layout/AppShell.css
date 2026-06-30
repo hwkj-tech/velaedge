@@ -210,6 +210,100 @@
   line-height: 1.2;
 }
 
+.edge-config-workspace {
+  display: grid;
+  gap: 14px;
+}
+
+.edge-config-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 16px 18px;
+}
+
+.edge-config-header > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.edge-config-header span {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.edge-config-header h2 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.edge-config-header p {
+  margin: 0;
+  color: #5d6b82;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.edge-config-status {
+  display: grid;
+  justify-items: end;
+  gap: 5px;
+  color: #42526b;
+  font-size: 12px;
+  font-weight: 750;
+  text-align: right;
+}
+
+.edge-config-status strong,
+.edge-config-status small {
+  color: #42526b;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.workspace-tabs {
+  display: flex;
+  min-width: 0;
+  gap: 4px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.workspace-tab {
+  min-height: 38px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #5d6b82;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.2;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.workspace-tab:hover {
+  color: var(--color-accent);
+}
+
+.workspace-tab.active {
+  border-bottom-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.workspace-tab-panel {
+  min-width: 0;
+}
+
 .primary-button,
 .secondary-button {
   display: inline-flex;
