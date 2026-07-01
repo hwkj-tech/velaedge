@@ -88,8 +88,34 @@ export function DataConfigsPage({
   >();
   const [step, setStep] = useState(0);
   const [status, setStatus] = useState('');
+  const [query, setQuery] = useState('');
+  const [enabledFilter, setEnabledFilter] = useState<'all' | 'enabled' | 'disabled'>('all');
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const activeConfigs = configs.filter((config) => config.edgeId === selectedEdgeId);
+  const filteredConfigs = activeConfigs.filter((config) => {
+    const keyword = query.trim().toLowerCase();
+    const matchesKeyword = keyword
+      ? [
+          config.configId,
+          config.name,
+          config.deviceId,
+          config.protocolConnectionId,
+          config.publish.sinkId,
+          config.publish.topicTemplate,
+          ...config.points.map((point) => point.pointId),
+          ...config.points.map((point) => point.semanticId),
+          ...(config.algorithmIds ?? []),
+        ]
+          .join(' ')
+          .toLowerCase()
+          .includes(keyword)
+      : true;
+    const matchesState =
+      enabledFilter === 'all' ||
+      (enabledFilter === 'enabled' && config.enabled) ||
+      (enabledFilter === 'disabled' && !config.enabled);
+    return matchesKeyword && matchesState;
+  });
   const activeAlgorithms = algorithms.filter((algorithm) => algorithm.edgeId === selectedEdgeId);
   const activePointMappings = pointMappings.filter((point) => point.edgeId === selectedEdgeId);
   const columns = useMemo<Array<DataTableColumn<DataConfigResponse>>>(
@@ -331,14 +357,41 @@ export function DataConfigsPage({
       <section className="table-card">
         <div className="section-heading">
           <h3>数据上报清单</h3>
-          <span>{activeConfigs.length} 套配置</span>
+          <span>
+            {filteredConfigs.length === activeConfigs.length
+              ? `${activeConfigs.length} 套配置`
+              : `已筛选 ${filteredConfigs.length} / ${activeConfigs.length} 套配置`}
+          </span>
+        </div>
+        <div className="table-filter-bar" aria-label="数据上报筛选">
+          <label>
+            <span>搜索</span>
+            <input
+              aria-label="搜索数据上报"
+              placeholder="配置 ID、名称、Topic、点位"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+          <label>
+            <span>状态</span>
+            <select
+              aria-label="状态筛选"
+              value={enabledFilter}
+              onChange={(event) => setEnabledFilter(event.target.value as 'all' | 'enabled' | 'disabled')}
+            >
+              <option value="all">全部状态</option>
+              <option value="enabled">仅启用</option>
+              <option value="disabled">仅暂停</option>
+            </select>
+          </label>
         </div>
         <DataTable
           ariaLabel="数据配置分页"
           columns={columns}
           getRowKey={(config) => config.configId}
           pageSize={10}
-          rows={activeConfigs}
+          rows={filteredConfigs}
         />
       </section>
 

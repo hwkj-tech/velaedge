@@ -182,4 +182,38 @@ describe('DataConfigsPage', () => {
       }),
     );
   });
+
+  it('filters data configs by keyword and enabled state', () => {
+    const pausedConfig = {
+      ...existingConfig,
+      configId: 'pump_energy',
+      enabled: false,
+      name: '泵能耗上报',
+      publish: {
+        ...existingConfig.publish,
+        topicTemplate: 'factory/{edge_id}/{device_id}/energy',
+      },
+    };
+
+    render(
+      <DataConfigsPage
+        configs={[existingConfig as any, pausedConfig as any]}
+        selectedEdgeId="edge-dev"
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('搜索数据上报'), {
+      target: { value: 'energy' },
+    });
+
+    expect(screen.getByText('pump_energy')).toBeInTheDocument();
+    expect(screen.queryByText('pump_status')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('状态筛选'), {
+      target: { value: 'disabled' },
+    });
+
+    expect(screen.getByText('pump_energy')).toBeInTheDocument();
+    expect(screen.getByText('已筛选 1 / 2 套配置')).toBeInTheDocument();
+  });
 });
