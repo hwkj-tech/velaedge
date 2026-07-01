@@ -17,7 +17,7 @@ use edge_core::{
     TelemetryPoint, TelemetryPointMapping, TelemetryType,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -2386,16 +2386,35 @@ fn build_data_config_from_request(
     data_config.algorithm_ids = algorithm_ids;
     data_config.visual_graph = data_config_visual_graph_from_request(request.visual_graph)?;
 
+    let mut json_fields = BTreeSet::new();
     for point in request.points {
+        let point_id = non_empty_field(point.point_id, "pointId")?;
+        if !package
+            .point_mappings
+            .iter()
+            .any(|mapping| mapping.point_id == point_id)
+        {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!("data config point `{point_id}` missing"),
+            ));
+        }
+        let json_field = non_empty_field(point.json_field, "jsonField")?;
+        if !json_fields.insert(json_field.clone()) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!("data config json field `{json_field}` duplicated"),
+            ));
+        }
         let mut data_point = DataConfigPoint::new(
-            non_empty_field(point.point_id, "pointId")?,
+            point_id,
             non_empty_field(point.semantic_id, "semanticId")?,
             PointAddress {
                 kind: non_empty_field(point.address_kind, "addressKind")?,
                 value: non_empty_field(point.address_value, "addressValue")?,
             },
             parse_telemetry_type(&point.value_type)?,
-            non_empty_field(point.json_field, "jsonField")?,
+            json_field,
         );
         if let Some(unit) = non_empty_optional(point.unit) {
             data_point = data_point.with_unit(unit);

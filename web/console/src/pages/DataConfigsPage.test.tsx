@@ -77,14 +77,16 @@ describe('DataConfigsPage', () => {
     fireEvent.change(within(dialog).getByLabelText('配置名称'), {
       target: { value: '泵运行状态上报' },
     });
+    expect(within(dialog).getAllByText('1 个')).toHaveLength(2);
+    expect(within(dialog).getByText('velamq-main')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
 
     expect(within(dialog).getByText('pressure-change-report')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('数据上报画布')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('已选数据流资源')).toBeInTheDocument();
+    expect(within(dialog).getByText('0 个点位')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: /flow_rate/ }));
     expect(within(dialog).getByText('pump.flow_rate')).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole('button', { name: '移除点位 pressure' }));
     fireEvent.click(within(dialog).getByRole('button', { name: /pressure-change-report/ }));
     fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
 
@@ -256,7 +258,7 @@ describe('DataConfigsPage', () => {
 
     fireEvent.click(within(dialog).getByRole('button', { name: '加入筛选点位' }));
 
-    expect(within(dialog).getByText('2 个点位')).toBeInTheDocument();
+    expect(within(dialog).getByText('1 个点位')).toBeInTheDocument();
 
     fireEvent.click(within(dialog).getByRole('button', { name: '清空点位' }));
 

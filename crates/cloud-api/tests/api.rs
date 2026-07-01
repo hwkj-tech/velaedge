@@ -219,6 +219,111 @@ async fn data_config_endpoints_create_and_list_edge_configs() {
 }
 
 #[tokio::test]
+async fn data_config_endpoint_rejects_unknown_points_and_duplicate_json_fields() {
+    let router = app(AppState::default());
+
+    let unknown_point_response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/data-configs")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "configId": "bad_unknown_point",
+                        "name": "非法点位上报",
+                        "enabled": true,
+                        "deviceId": "pump-1",
+                        "protocolConnectionId": "modbus-line-a",
+                        "collection": {"periodMs": 1000, "timeoutMs": 800, "retryCount": 2},
+                        "points": [{
+                            "pointId": "not_configured",
+                            "semanticId": "pump.not_configured",
+                            "addressKind": "holding_register",
+                            "addressValue": "49999",
+                            "valueType": "float32",
+                            "unit": "-",
+                            "jsonField": "not_configured"
+                        }],
+                        "publish": {
+                            "sinkId": "velamq-main",
+                            "topicTemplate": "factory/{edge_id}/{device_id}/bad",
+                            "qos": 1,
+                            "payload": {"mode": "object", "timestampField": "ts", "includeQuality": true}
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unknown_point_response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(unknown_point_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["message"],
+        "data config point `not_configured` missing"
+    );
+
+    let duplicate_json_response = router
+        .oneshot(
+            Request::post("/api/edges/edge-dev/data-configs")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "configId": "bad_duplicate_json",
+                        "name": "重复 JSON 字段上报",
+                        "enabled": true,
+                        "deviceId": "pump-1",
+                        "protocolConnectionId": "modbus-line-a",
+                        "collection": {"periodMs": 1000, "timeoutMs": 800, "retryCount": 2},
+                        "points": [
+                          {
+                            "pointId": "pressure",
+                            "semanticId": "pump.pressure",
+                            "addressKind": "holding_register",
+                            "addressValue": "40001",
+                            "valueType": "float32",
+                            "unit": "MPa",
+                            "jsonField": "value"
+                          },
+                          {
+                            "pointId": "running",
+                            "semanticId": "pump.running",
+                            "addressKind": "coil",
+                            "addressValue": "00001",
+                            "valueType": "bool",
+                            "unit": "-",
+                            "jsonField": "value"
+                          }
+                        ],
+                        "publish": {
+                            "sinkId": "velamq-main",
+                            "topicTemplate": "factory/{edge_id}/{device_id}/bad",
+                            "qos": 1,
+                            "payload": {"mode": "object", "timestampField": "ts", "includeQuality": true}
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(duplicate_json_response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(duplicate_json_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["message"],
+        "data config json field `value` duplicated"
+    );
+}
+
+#[tokio::test]
 async fn releases_endpoint_returns_seeded_apply_results() {
     let response = app(AppState::default())
         .oneshot(Request::get("/api/releases").body(Body::empty()).unwrap())

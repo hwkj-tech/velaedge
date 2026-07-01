@@ -217,7 +217,10 @@ export function DataConfigsPage({
     setStep(0);
     setStatus('');
     setValidationErrors([]);
-    setDialog({ mode: 'create', form: createDefaultForm(selectedEdgeId, mqttUplink, protocolConnections) });
+    setDialog({
+      mode: 'create',
+      form: createDefaultForm(selectedEdgeId, mqttUplink, protocolConnections, activePointMappings),
+    });
   };
 
   function openEdit(config: DataConfigResponse) {
@@ -508,6 +511,11 @@ function DataConfigStep({
   if (step === 0) {
     return (
       <div className="form-grid">
+        <DataConfigReadiness
+          algorithmCount={algorithms.length}
+          mqttUplink={mqttUplink}
+          pointCount={pointMappings.length}
+        />
         <TextField label="配置 ID" value={form.configId} onChange={(configId) => updateForm({ configId })} />
         <TextField label="配置名称" value={form.name} onChange={(name) => updateForm({ name })} />
         <TextField label="设备 ID" value={form.deviceId} onChange={(deviceId) => updateForm({ deviceId })} />
@@ -572,6 +580,41 @@ function DataConfigStep({
       <span>JSON 预览</span>
       <textarea aria-label="JSON 预览" readOnly value={JSON.stringify(buildPreview(form), null, 2)} />
     </label>
+  );
+}
+
+function DataConfigReadiness({
+  algorithmCount,
+  mqttUplink,
+  pointCount,
+}: {
+  algorithmCount: number;
+  mqttUplink?: MqttUplinkResponse | null;
+  pointCount: number;
+}) {
+  return (
+    <div className="data-config-readiness-grid">
+      <ReadinessItem label="可选点位" ready={pointCount > 0} value={`${pointCount} 个`} />
+      <ReadinessItem label="可选算法" ready={algorithmCount > 0} value={algorithmCount > 0 ? `${algorithmCount} 个` : '可选'} />
+      <ReadinessItem label="MQTT Sink" ready={Boolean(mqttUplink?.sinkId)} value={mqttUplink?.sinkId ?? '未配置'} />
+    </div>
+  );
+}
+
+function ReadinessItem({
+  label,
+  ready,
+  value,
+}: {
+  label: string;
+  ready: boolean;
+  value: string;
+}) {
+  return (
+    <div className={ready ? 'readiness-item ready' : 'readiness-item'}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
@@ -872,15 +915,23 @@ function createDefaultForm(
   edgeId: string,
   mqttUplink?: MqttUplinkResponse | null,
   protocolConnections: ProtocolConnectionResponse[] = [],
+  pointMappings: PointMappingResponse[] = [],
 ): SaveDataConfigRequest {
+  const initialPoints = pointMappings.length ? [] : [emptyPoint];
+  const firstPoint = pointMappings[0];
+  const firstConnectionId =
+    firstPoint?.connection ||
+    protocolConnections[0]?.connectionId ||
+    'modbus-line-a';
+
   return {
     collection: { periodMs: 1000, retryCount: 2, timeoutMs: 800 },
     configId: `${edgeId}_data_${Date.now().toString().slice(-4)}`,
-    deviceId: 'pump-1',
+    deviceId: firstPoint?.deviceId || 'pump-1',
     enabled: true,
     algorithmIds: [],
     visualGraph: createDefaultVisualGraph({
-      points: [emptyPoint],
+      points: initialPoints,
       publish: {
         payload: { includeQuality: true, mode: 'object', timestampField: 'ts' },
         qos: mqttUplink?.qos ?? 1,
@@ -889,8 +940,8 @@ function createDefaultForm(
       },
     }),
     name: '新数据配置',
-    points: [emptyPoint],
-    protocolConnectionId: protocolConnections[0]?.connectionId ?? 'modbus-line-a',
+    points: initialPoints,
+    protocolConnectionId: firstConnectionId,
     publish: {
       payload: { includeQuality: true, mode: 'object', timestampField: 'ts' },
       qos: mqttUplink?.qos ?? 1,
