@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, ShieldCheck, X } from 'lucide-react';
+import { Edit3, Plus, ShieldCheck, X } from 'lucide-react';
 
 import type {
   EdgeNodeResponse,
@@ -322,6 +322,7 @@ export function ProtocolConnectionsPage({
                   <th>端点</th>
                   <th>状态</th>
                   <th>策略</th>
+                  {isConfigureMode ? <th>操作</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -355,6 +356,22 @@ export function ProtocolConnectionsPage({
                       </span>
                     </td>
                     <td>{connection.policy}</td>
+                    {isConfigureMode ? (
+                      <td>
+                        <button
+                          aria-label={`修改连接 ${connection.connectionId}`}
+                          className="secondary-button compact"
+                          onClick={() => {
+                            setSelectedConnectionId(connection.connectionId);
+                            setEditDialogOpen(true);
+                          }}
+                          type="button"
+                        >
+                          <Edit3 size={14} aria-hidden="true" />
+                          修改
+                        </button>
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>

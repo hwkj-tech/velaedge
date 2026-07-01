@@ -16,6 +16,16 @@ describe('ProtocolConnectionsPage', () => {
     expect(screen.getByLabelText('协议类型')).toBeInTheDocument();
   });
 
+  it('shows an explicit row action for editing protocol connections', () => {
+    render(<ProtocolConnectionsPage selectedEdgeId="edge-dev" />);
+
+    expect(screen.getByRole('columnheader', { name: '操作' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '修改连接 modbus-line-a' }));
+
+    expect(screen.getByRole('dialog', { name: '编辑连接 modbus-line-a' })).toBeInTheDocument();
+    expect(screen.getByLabelText('端点')).toHaveValue('10.12.0.20:502');
+  });
+
   it('saves edited protocol connection drafts from the editor drawer', async () => {
     const onSaveConnection = vi.fn().mockResolvedValue(undefined);
 

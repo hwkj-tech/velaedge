@@ -15,6 +15,16 @@ describe('CollectionTasksPage', () => {
     expect(screen.getByLabelText('采集周期(ms)')).toBeInTheDocument();
   });
 
+  it('shows an explicit row action for editing collection tasks', () => {
+    render(<CollectionTasksPage selectedEdgeId="edge-dev" />);
+
+    expect(screen.getByRole('columnheader', { name: '操作' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '修改任务 pump-main' }));
+
+    expect(screen.getByRole('dialog', { name: '编辑任务 pump-main' })).toBeInTheDocument();
+    expect(screen.getByLabelText('采集周期(ms)')).toHaveValue(1000);
+  });
+
   it('saves edited collection task drafts from the editor drawer', async () => {
     const onSaveTask = vi.fn().mockResolvedValue(undefined);
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, TimerReset, X } from 'lucide-react';
+import { Edit3, Plus, TimerReset, X } from 'lucide-react';
 
 import type {
   CollectionTaskResponse,
@@ -339,6 +339,7 @@ export function CollectionTasksPage({
                   <th>点位</th>
                   <th>周期</th>
                   <th>状态</th>
+                  {isConfigureMode ? <th>操作</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -370,6 +371,22 @@ export function CollectionTasksPage({
                         {task.status}
                       </span>
                     </td>
+                    {isConfigureMode ? (
+                      <td>
+                        <button
+                          aria-label={`修改任务 ${task.taskId}`}
+                          className="secondary-button compact"
+                          onClick={() => {
+                            setSelectedTaskId(task.taskId);
+                            setEditDialogOpen(true);
+                          }}
+                          type="button"
+                        >
+                          <Edit3 size={14} aria-hidden="true" />
+                          修改
+                        </button>
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>
