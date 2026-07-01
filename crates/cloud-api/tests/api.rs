@@ -391,7 +391,7 @@ async fn edge_node_create_registers_draft_edge_and_empty_config() {
 }
 
 #[tokio::test]
-async fn edge_node_actions_rotate_credentials_and_enable_maintenance() {
+async fn removed_edge_node_actions_are_not_callable() {
     let router = app(AppState::default());
 
     let response = router
@@ -403,15 +403,9 @@ async fn edge_node_actions_rotate_credentials_and_enable_maintenance() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let rotated: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(rotated["edgeId"], "edge-dev");
-    assert_eq!(rotated["action"], "rotate_credentials");
-    assert_eq!(rotated["credentialVersion"], "credential-v2");
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
 
     let response = router
-        .clone()
         .oneshot(
             Request::post("/api/edges/edge-dev/maintenance-mode")
                 .body(Body::empty())
@@ -419,21 +413,7 @@ async fn edge_node_actions_rotate_credentials_and_enable_maintenance() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let maintenance: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(maintenance["edgeId"], "edge-dev");
-    assert_eq!(maintenance["action"], "enable_maintenance");
-    assert_eq!(maintenance["status"], "维护中");
-
-    let response = router
-        .oneshot(Request::get("/api/edge-nodes").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let edges: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(edges[0]["status"], "维护中");
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
 
 #[tokio::test]

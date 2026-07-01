@@ -9,7 +9,6 @@ import type {
   CreateEdgeNodeRequest,
   CreatePointMappingRequest,
   DataConfigResponse,
-  EdgeNodeActionResponse,
   DeviceModelResponse,
   DiscoveryReportResponse,
   EdgeNodeResponse,
@@ -75,32 +74,6 @@ export async function createEdgeNode(
     headers: { 'content-type': 'application/json' },
     method: 'POST',
   });
-}
-
-export async function rotateEdgeCredentials(
-  edgeId: string,
-  fetcher: typeof fetch = fetch,
-): Promise<EdgeNodeActionResponse> {
-  return requestJson<EdgeNodeActionResponse>(
-    `/api/edges/${encodeURIComponent(edgeId)}/credentials/rotate`,
-    fetcher,
-    {
-      method: 'POST',
-    },
-  );
-}
-
-export async function enableEdgeMaintenanceMode(
-  edgeId: string,
-  fetcher: typeof fetch = fetch,
-): Promise<EdgeNodeActionResponse> {
-  return requestJson<EdgeNodeActionResponse>(
-    `/api/edges/${encodeURIComponent(edgeId)}/maintenance-mode`,
-    fetcher,
-    {
-      method: 'POST',
-    },
-  );
 }
 
 export async function fetchDeviceModels(

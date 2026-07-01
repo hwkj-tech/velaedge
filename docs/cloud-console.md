@@ -63,7 +63,7 @@ Cloud metadata is stored in SQLite by the cloud service. Runtime-local desired c
 ## Page Map
 
 - 工作台: fleet summary, health list, recent events, and quick actions.
-- 边端管理: edge lifecycle, credentials, maintenance mode, and runtime capability.
+- 边端管理: runtime 自动登记、配置入口、运行监控、MQTT 上报连接和配置摘要。
 - 设备模型: semantic telemetry, commands, events, units, ranges, and types.
 - 协议连接: serial collection connection list and protocol-specific validation.
 - 点位配置: primary point table and right-side editor drawer.

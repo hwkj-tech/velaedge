@@ -9,7 +9,6 @@ import {
   createPointMappingDraft,
   createEdgeProtocolConnection,
   deleteEdgeDataConfig,
-  enableEdgeMaintenanceMode,
   fetchDiscoverySuggestions,
   generateAgentSuggestions,
   fetchAlgorithms,
@@ -34,7 +33,6 @@ import {
   runDiscovery,
   saveMqttUplink,
   publishLatestRelease,
-  rotateEdgeCredentials,
   saveEdgeCollectionTask,
   saveEdgeDataConfig,
   saveEdgeAlgorithm,
@@ -1084,55 +1082,6 @@ describe('edge node lifecycle actions', () => {
     expect(result.edgeId).toBe('edge-draft-2');
   });
 
-  it('rotates edge credentials through the API', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        action: 'rotate_credentials',
-        credentialVersion: 'credential-v2',
-        edgeId: 'edge-dev',
-        message: '凭证已轮换',
-      }),
-    });
-
-    const result = await rotateEdgeCredentials(
-      'edge-dev',
-      fetchMock as unknown as typeof fetch,
-    );
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/edges/edge-dev/credentials/rotate',
-      {
-        method: 'POST',
-      },
-    );
-    expect(result.credentialVersion).toBe('credential-v2');
-  });
-
-  it('enables maintenance mode through the API', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        action: 'enable_maintenance',
-        edgeId: 'edge-dev',
-        message: '维护模式已启用',
-        status: '维护中',
-      }),
-    });
-
-    const result = await enableEdgeMaintenanceMode(
-      'edge-dev',
-      fetchMock as unknown as typeof fetch,
-    );
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/edges/edge-dev/maintenance-mode',
-      {
-        method: 'POST',
-      },
-    );
-    expect(result.status).toBe('维护中');
-  });
 });
 
 describe('saveEdgePointMapping', () => {

@@ -32,8 +32,6 @@ import {
   runReleaseDiff,
   createEdgeProtocolConnection,
   deleteEdgeDataConfig,
-  rotateEdgeCredentials,
-  enableEdgeMaintenanceMode,
   saveEdgeAlgorithm,
   saveEdgeCollectionTask,
   saveEdgeDataConfig,
@@ -90,8 +88,6 @@ vi.mock('./api/client', () => ({
   runReleaseDiff: vi.fn(),
   createEdgeProtocolConnection: vi.fn(),
   deleteEdgeDataConfig: vi.fn(),
-  rotateEdgeCredentials: vi.fn(),
-  enableEdgeMaintenanceMode: vi.fn(),
   saveEdgeAlgorithm: vi.fn(),
   saveEdgeCollectionTask: vi.fn(),
   saveEdgeDataConfig: vi.fn(),
@@ -509,18 +505,6 @@ describe('App cloud console write actions', () => {
       protocolType: 'OpcUa',
     });
     vi.mocked(createEdgeProtocolConnection).mockResolvedValue(createdProtocolConnection);
-    vi.mocked(rotateEdgeCredentials).mockResolvedValue({
-      action: 'rotate_credentials',
-      credentialVersion: 'credential-v2',
-      edgeId: 'edge-dev',
-      message: '凭证已轮换',
-    });
-    vi.mocked(enableEdgeMaintenanceMode).mockResolvedValue({
-      action: 'enable_maintenance',
-      edgeId: 'edge-dev',
-      message: '维护模式已启用',
-      status: '维护中',
-    });
     vi.mocked(saveEdgeAlgorithm).mockResolvedValue({
       ...algorithms[0],
       algorithmKind: 'WindowAggregate',

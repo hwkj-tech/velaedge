@@ -104,14 +104,6 @@ pub fn app(state: AppState) -> Router {
             get(releases).post(edge_reported_config),
         )
         .route(
-            "/api/edges/{edge_id}/credentials/rotate",
-            post(rotate_edge_credentials),
-        )
-        .route(
-            "/api/edges/{edge_id}/maintenance-mode",
-            post(enable_edge_maintenance_mode),
-        )
-        .route(
             "/api/edges/{edge_id}/config/validate",
             post(validate_edge_config),
         )
@@ -464,84 +456,6 @@ async fn create_edge_node(
         .map_err(persistence_error)?;
 
     Ok((StatusCode::CREATED, Json(response)))
-}
-
-async fn rotate_edge_credentials(
-    State(state): State<AppState>,
-    Path(edge_id): Path<String>,
-) -> Result<Json<EdgeNodeActionResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let (node, credential_version) = {
-        let mut store = state.store.lock().expect("store mutex poisoned");
-        let Some(existing) = store
-            .edge_nodes()
-            .find(|edge| edge.edge_id == edge_id)
-            .cloned()
-        else {
-            return Err(error(StatusCode::NOT_FOUND, "missing edge node"));
-        };
-        let mut node = existing;
-        let credential_version = next_credential_version(&node);
-        node.capabilities
-            .retain(|capability| !capability.starts_with("credential:"));
-        node.capabilities
-            .push(format!("credential:{credential_version}"));
-        store.register_edge(node.clone());
-        store.push_audit(AuditAction::UpdateConfig, edge_id.clone());
-        (node, credential_version)
-    };
-
-    state
-        .persist_edge_node(node)
-        .await
-        .map_err(persistence_error)?;
-
-    Ok(Json(EdgeNodeActionResponse {
-        action: "rotate_credentials".to_string(),
-        credential_version: Some(credential_version),
-        edge_id,
-        message: "凭证已轮换".to_string(),
-        status: None,
-    }))
-}
-
-async fn enable_edge_maintenance_mode(
-    State(state): State<AppState>,
-    Path(edge_id): Path<String>,
-) -> Result<Json<EdgeNodeActionResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let node = {
-        let mut store = state.store.lock().expect("store mutex poisoned");
-        let Some(existing) = store
-            .edge_nodes()
-            .find(|edge| edge.edge_id == edge_id)
-            .cloned()
-        else {
-            return Err(error(StatusCode::NOT_FOUND, "missing edge node"));
-        };
-        let mut node = existing;
-        if !node
-            .capabilities
-            .iter()
-            .any(|capability| capability == "mode:maintenance")
-        {
-            node.capabilities.push("mode:maintenance".to_string());
-        }
-        store.register_edge(node.clone());
-        store.push_audit(AuditAction::UpdateConfig, edge_id.clone());
-        node
-    };
-
-    state
-        .persist_edge_node(node)
-        .await
-        .map_err(persistence_error)?;
-
-    Ok(Json(EdgeNodeActionResponse {
-        action: "enable_maintenance".to_string(),
-        credential_version: None,
-        edge_id,
-        message: "维护模式已启用".to_string(),
-        status: Some("维护中".to_string()),
-    }))
 }
 
 async fn device_models(State(state): State<AppState>) -> Json<Vec<DeviceModelResponse>> {
@@ -1717,16 +1631,6 @@ pub struct CreateEdgeNodeRequest {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EdgeNodeActionResponse {
-    pub action: String,
-    pub credential_version: Option<String>,
-    pub edge_id: String,
-    pub message: String,
-    pub status: Option<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DeviceModelResponse {
     pub device_type: String,
     pub version: String,
@@ -2734,18 +2638,6 @@ fn next_edge_id(edges: &[EdgeNode]) -> String {
         }
         next += 1;
     }
-}
-
-fn next_credential_version(edge: &EdgeNode) -> String {
-    let next = edge
-        .capabilities
-        .iter()
-        .filter_map(|capability| capability.strip_prefix("credential:credential-v"))
-        .filter_map(|version| version.parse::<u32>().ok())
-        .max()
-        .unwrap_or(1)
-        + 1;
-    format!("credential-v{next}")
 }
 
 fn default_config_edge_id(store: &cloud_control::CloudControlStore) -> Option<String> {
