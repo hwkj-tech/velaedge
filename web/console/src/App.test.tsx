@@ -770,7 +770,7 @@ describe('App cloud console write actions', () => {
     expect(screen.queryByRole('button', { name: /数据上报/ })).not.toBeInTheDocument();
 
     await openEdgeConfiguration();
-    fireEvent.click(screen.getByRole('button', { name: '维护连接' }));
+    fireEvent.click(screen.getByRole('button', { name: '配置连接' }));
     expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '新建连接' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '编辑连接 modbus-line-a' }));
@@ -825,8 +825,11 @@ describe('App cloud console write actions', () => {
     expect(screen.getByRole('tab', { name: '配置总览' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('button', { name: '校验配置' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '发布到 runtime' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '维护上报' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '维护上报' }));
+    expect(screen.getAllByText('协议连接').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('数据上报').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('已配置').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: '配置上报' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '配置上报' }));
     expect(await screen.findByRole('button', { name: 'pump_status' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '新建数据上报' })).toBeInTheDocument();
     await waitFor(() => {

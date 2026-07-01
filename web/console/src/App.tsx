@@ -1269,35 +1269,35 @@ function EdgeConfigOverview({
     tab: EdgeConfigTab;
   }> = [
     {
-      action: '维护连接',
+      action: '配置连接',
       description: '串口总线、Modbus RTU/TCP、DL/T645 等采集通道',
       label: '协议连接',
       status: `${protocolConnections.length} 个连接`,
       tab: 'protocol',
     },
     {
-      action: '维护点位',
+      action: '配置点位',
       description: '协议地址到语义点位的映射，发布后由 runtime 执行采集',
       label: '点位配置',
       status: `${pointMappings.length} 个点位`,
       tab: 'points',
     },
     {
-      action: '维护任务',
+      action: '配置任务',
       description: '采集周期、点位批次、超时重试和缓存策略',
       label: '采集任务',
       status: `${collectionTasks.length} 个任务`,
       tab: 'collection',
     },
     {
-      action: '维护上报',
+      action: '配置上报',
       description: '点位组合、DSL 算法、JSON 结构和 MQTT topic',
       label: '数据上报',
       status: `${dataConfigs.length} 套配置`,
       tab: 'reports',
     },
     {
-      action: '维护 MQTT',
+      action: '配置 MQTT',
       description: 'velaMQ broker、clientId、QoS、批量和刷新策略',
       label: 'MQTT 上报',
       status: mqttUplink ? mqttUplink.sinkId : '未配置',
@@ -1344,7 +1344,7 @@ function EdgeConfigOverview({
         <div>
           <h2>配置绑定总览</h2>
           <p>
-            这里展示该边端已选择的采集、处理、上报和发布配置。新增配置后，从这里进入对应配置项维护并发布到 runtime。
+            这里展示该边端已选择的采集、处理、上报和发布配置。新增配置后，从这里进入对应配置项继续配置并发布到 runtime。
           </p>
         </div>
       </section>
@@ -1397,6 +1397,9 @@ function EdgeConfigOverview({
           >
             <span>{card.label}</span>
             <strong>{card.value}</strong>
+            <small className={card.value > 0 ? 'summary-card-state ready' : 'summary-card-state pending'}>
+              {card.value > 0 ? '已配置' : '待配置'}
+            </small>
           </button>
         ))}
       </div>
@@ -1404,7 +1407,7 @@ function EdgeConfigOverview({
       <section className="panel">
         <div className="panel-header">
           <h3>配置绑定清单</h3>
-          <span>选择后维护该边端配置</span>
+          <span>选择后配置该边端能力</span>
         </div>
         <div className="binding-matrix">
           {bindingRows.map((row) => (

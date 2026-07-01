@@ -401,6 +401,26 @@
   line-height: 1;
 }
 
+.summary-card-state {
+  justify-self: start;
+  min-height: 20px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 20px;
+  padding: 0 7px;
+}
+
+.summary-card-state.ready {
+  background: #e8f8ee;
+  color: #0f7a4b;
+}
+
+.summary-card-state.pending {
+  background: #fff2d5;
+  color: #93630b;
+}
+
 .binding-matrix {
   display: grid;
 }
