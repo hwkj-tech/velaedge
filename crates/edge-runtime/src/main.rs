@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
 use clap::Parser;
 use edge_core::{
@@ -13,10 +13,10 @@ use edge_runtime::{
     publish_edgelink_runtime_status_with_mqtt_uplink_once,
     publish_edgelink_runtime_status_with_store_and_capabilities_once,
     sync_and_report_mqtt_uplink_once, sync_and_report_once, CollectionRunStats, CollectionSchedule,
-    ConfiguredEdgeRuntime, EdgeConfigSyncClient, EdgeRuntime, HttpEdgeConfigSyncClient,
-    HttpRuntimeStatusReporter, JsonlLocalStore, RocksEdgeRuntimeStore, RuntimeCapabilityConfig,
-    RuntimeStatusReporter, SimulatedProtocolAdapter, SimulatedRuntimeMetricsCollector,
-    TokioSerialBusFactory,
+    ConfiguredEdgeRuntime, DataConfigSchedule, EdgeConfigSyncClient, EdgeRuntime,
+    HttpEdgeConfigSyncClient, HttpRuntimeStatusReporter, JsonlLocalStore, MqttPublisher,
+    RocksEdgeRuntimeStore, RumqttcMqttPublisher, RuntimeCapabilityConfig, RuntimeStatusReporter,
+    SimulatedProtocolAdapter, SimulatedRuntimeMetricsCollector, TokioSerialBusFactory,
 };
 use tracing::info;
 
@@ -110,6 +110,7 @@ async fn main() -> Result<()> {
                 &mut runtime_reporter,
                 args.scheduled_ticks,
                 args.scheduler_tick_ms,
+                args.mqtt_uplink,
             )
             .await?;
 
@@ -119,6 +120,7 @@ async fn main() -> Result<()> {
                 applied_version = %report.applied_version,
                 tasks_run = report.tasks_run,
                 samples_collected = report.samples_collected,
+                mqtt_messages_published = report.mqtt_messages_published,
                 events_reported = report.events_reported,
                 cloud_api_url = %cloud_api_url,
                 "scheduled cloud config collection completed"
@@ -197,6 +199,7 @@ struct ScheduledCloudRunReport {
     applied_version: String,
     tasks_run: usize,
     samples_collected: usize,
+    mqtt_messages_published: usize,
     events_reported: usize,
 }
 
@@ -207,6 +210,7 @@ async fn run_scheduled_cloud_ticks<C, R>(
     runtime_reporter: &mut R,
     scheduled_ticks: u32,
     scheduler_tick_ms: u64,
+    mqtt_uplink: bool,
 ) -> Result<ScheduledCloudRunReport>
 where
     C: EdgeConfigSyncClient + Send,
@@ -229,6 +233,26 @@ where
     }
 
     let applied = edge_runtime::AppliedEdgeConfig::apply(desired.package.clone())?;
+    if mqtt_uplink && !applied.package().data_configs.is_empty() {
+        let uplink = applied
+            .package()
+            .mqtt_uplinks
+            .first()
+            .context("scheduled data config mqtt uplink requires at least one mqtt sink")?;
+        let mut publisher = RumqttcMqttPublisher::connect_from_uplink(uplink)?;
+        return run_scheduled_data_config_ticks(
+            edge_id,
+            runtime_id,
+            config_client,
+            runtime_reporter,
+            applied,
+            scheduled_ticks,
+            scheduler_tick_ms,
+            &mut publisher,
+        )
+        .await;
+    }
+
     let mut schedule = CollectionSchedule::from_package(&desired.package)?;
     let mut runtime = ConfiguredEdgeRuntime::new(desired.package, TokioSerialBusFactory)?;
     let mut stats = CollectionRunStats::new(
@@ -283,6 +307,83 @@ where
         applied_version,
         tasks_run,
         samples_collected,
+        mqtt_messages_published: 0,
+        events_reported,
+    })
+}
+
+async fn run_scheduled_data_config_ticks<C, R, P>(
+    edge_id: &str,
+    runtime_id: &str,
+    config_client: &mut C,
+    runtime_reporter: &mut R,
+    applied: edge_runtime::AppliedEdgeConfig,
+    scheduled_ticks: u32,
+    scheduler_tick_ms: u64,
+    publisher: &mut P,
+) -> Result<ScheduledCloudRunReport>
+where
+    C: EdgeConfigSyncClient + Send,
+    R: RuntimeStatusReporter + Send,
+    P: MqttPublisher + Send,
+{
+    let mut schedule = DataConfigSchedule::from_package(applied.package())?;
+    let mut runtime = ConfiguredEdgeRuntime::new(applied.package().clone(), TokioSerialBusFactory)?;
+    let mut stats = CollectionRunStats::new(
+        applied
+            .package()
+            .data_configs
+            .iter()
+            .filter(|config| config.enabled)
+            .count(),
+    );
+    let mut tasks_run = 0;
+    let mut samples_collected = 0;
+    let mut mqtt_messages_published = 0;
+    let mut failure_events = Vec::new();
+
+    for tick in 0..scheduled_ticks {
+        let now_ms = u64::from(tick).saturating_mul(scheduler_tick_ms);
+        let started = Instant::now();
+        let report = runtime
+            .collect_due_data_configs_resilient_once(&mut schedule, now_ms, publisher)
+            .await?;
+        let latency_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        stats.record_tick(
+            report.data_configs_run,
+            report.data_configs_succeeded,
+            report.data_configs_failed,
+            latency_ms,
+        );
+        tasks_run += report.data_configs_run;
+        samples_collected += report.samples_collected;
+        mqtt_messages_published += report.mqtt_messages_published;
+        failure_events.extend(
+            report
+                .failures
+                .into_iter()
+                .map(|failure| failure.to_runtime_event(edge_id)),
+        );
+    }
+
+    let applied_version = runtime.reported_version().to_string();
+    config_client
+        .report_applied_version(edge_id, &applied_version)
+        .await?;
+    let snapshot = SimulatedRuntimeMetricsCollector::new(runtime_id, applied)
+        .with_collection_metrics(stats.metrics())
+        .snapshot();
+    runtime_reporter.report_metrics(snapshot).await?;
+    let events_reported = failure_events.len();
+    for event in failure_events {
+        runtime_reporter.report_event(event).await?;
+    }
+
+    Ok(ScheduledCloudRunReport {
+        applied_version,
+        tasks_run,
+        samples_collected,
+        mqtt_messages_published,
         events_reported,
     })
 }
@@ -337,5 +438,192 @@ fn runtime_metrics_snapshot(
             desired_version: "local-runtime".to_string(),
             reported_version: "local-runtime".to_string(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use async_trait::async_trait;
+    use edge_core::{
+        DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish,
+        DeviceInstance, EdgeConfigPackage, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot,
+        MqttUplinkConfig, PointAddress, ProtocolConnection, TelemetryPointMapping, TelemetryType,
+    };
+    use edge_runtime::{AppliedEdgeConfig, EdgeDesiredConfig, RecordingMqttPublisher};
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct MemorySyncClient {
+        desired: EdgeDesiredConfig,
+        reported: Vec<(String, String)>,
+    }
+
+    #[derive(Default)]
+    struct MemoryRuntimeReporter {
+        metrics: Vec<EdgeRuntimeMetricsSnapshot>,
+        events: Vec<EdgeRuntimeEvent>,
+    }
+
+    #[async_trait]
+    impl EdgeConfigSyncClient for MemorySyncClient {
+        async fn fetch_desired_config(
+            &mut self,
+            edge_id: &str,
+        ) -> anyhow::Result<EdgeDesiredConfig> {
+            assert_eq!(edge_id, "edge-dev");
+            Ok(self.desired.clone())
+        }
+
+        async fn report_applied_version(
+            &mut self,
+            edge_id: &str,
+            version: &str,
+        ) -> anyhow::Result<()> {
+            self.reported
+                .push((edge_id.to_string(), version.to_string()));
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl RuntimeStatusReporter for MemoryRuntimeReporter {
+        async fn report_metrics(
+            &mut self,
+            snapshot: EdgeRuntimeMetricsSnapshot,
+        ) -> anyhow::Result<()> {
+            self.metrics.push(snapshot);
+            Ok(())
+        }
+
+        async fn report_event(&mut self, event: EdgeRuntimeEvent) -> anyhow::Result<()> {
+            self.events.push(event);
+            Ok(())
+        }
+    }
+
+    fn data_config_package() -> EdgeConfigPackage {
+        EdgeConfigPackage::new("edge-dev", "2026.07.01-scheduled-data")
+            .with_device(DeviceInstance::new("pump-1", "pump"))
+            .with_protocol_connection(ProtocolConnection::simulated("sim-main"))
+            .with_mqtt_uplink(
+                MqttUplinkConfig::velamq("velamq-main", "mqtt://velamq.local:1883", "edge-dev")
+                    .with_topic_template("unused/{edge_id}/{device_id}/{telemetry_id}"),
+            )
+            .with_point_mapping(TelemetryPointMapping::new(
+                "pressure",
+                "pump-1",
+                "pump.pressure",
+                "sim-main",
+                PointAddress::simulated("pressure"),
+                TelemetryType::Float,
+            ))
+            .with_point_mapping(TelemetryPointMapping::new(
+                "running",
+                "pump-1",
+                "pump.running",
+                "sim-main",
+                PointAddress::simulated("running"),
+                TelemetryType::Boolean,
+            ))
+            .with_data_config(
+                DataConfig::new(
+                    "pump_status_fast",
+                    "泵状态",
+                    "pump-1",
+                    "sim-main",
+                    DataConfigCollection::new(1000),
+                    DataConfigPublish::new(
+                        "velamq-main",
+                        "factory/{edge_id}/{device_id}/status",
+                        DataConfigPayload::object(),
+                    ),
+                )
+                .with_point(DataConfigPoint::new(
+                    "pressure",
+                    "pump.pressure",
+                    PointAddress::simulated("pressure"),
+                    TelemetryType::Float,
+                    "pressure",
+                )),
+            )
+            .with_data_config(
+                DataConfig::new(
+                    "pump_running_slow",
+                    "泵运行",
+                    "pump-1",
+                    "sim-main",
+                    DataConfigCollection::new(5000),
+                    DataConfigPublish::new(
+                        "velamq-main",
+                        "factory/{edge_id}/{device_id}/running",
+                        DataConfigPayload::object(),
+                    ),
+                )
+                .with_point(DataConfigPoint::new(
+                    "running",
+                    "pump.running",
+                    PointAddress::simulated("running"),
+                    TelemetryType::Boolean,
+                    "running",
+                )),
+            )
+    }
+
+    #[tokio::test]
+    async fn scheduled_data_config_ticks_publish_mqtt_and_report_metrics() {
+        let package = data_config_package();
+        let applied = AppliedEdgeConfig::apply(package.clone()).unwrap();
+        let mut client = MemorySyncClient {
+            desired: EdgeDesiredConfig {
+                desired_version: package.version.clone(),
+                package,
+            },
+            reported: Vec::new(),
+        };
+        let mut reporter = MemoryRuntimeReporter::default();
+        let mut publisher = RecordingMqttPublisher::default();
+
+        let report = run_scheduled_data_config_ticks(
+            "edge-dev",
+            "runtime-test",
+            &mut client,
+            &mut reporter,
+            applied,
+            2,
+            1000,
+            &mut publisher,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.applied_version, "2026.07.01-scheduled-data");
+        assert_eq!(report.tasks_run, 3);
+        assert_eq!(report.samples_collected, 3);
+        assert_eq!(report.mqtt_messages_published, 3);
+        assert_eq!(report.events_reported, 0);
+        assert_eq!(
+            client.reported,
+            vec![(
+                "edge-dev".to_string(),
+                "2026.07.01-scheduled-data".to_string()
+            )]
+        );
+        assert_eq!(reporter.metrics.len(), 1);
+        assert_eq!(reporter.metrics[0].collection.active_task_count, 2);
+        assert_eq!(reporter.metrics[0].collection.success_rate, 1.0);
+        assert_eq!(publisher.messages().len(), 3);
+        assert_eq!(
+            publisher.messages()[0].topic,
+            "factory/edge-dev/pump-1/status"
+        );
+        assert_eq!(
+            publisher.messages()[1].topic,
+            "factory/edge-dev/pump-1/running"
+        );
+        assert_eq!(
+            publisher.messages()[2].topic,
+            "factory/edge-dev/pump-1/status"
+        );
     }
 }
