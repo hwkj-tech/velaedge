@@ -1,5 +1,5 @@
 import { type DragEvent, useMemo, useState } from 'react';
-import { Edit3, GitBranch, Plus, Radio, Trash2, X } from 'lucide-react';
+import { Copy, Edit3, GitBranch, Pause, Play, Plus, Radio, Trash2, X } from 'lucide-react';
 
 import type {
   AlgorithmResponse,
@@ -150,6 +150,26 @@ export function DataConfigsPage({
               编辑
             </button>
             <button
+              className="secondary-button compact"
+              onClick={() => {
+                void handleDuplicate(config);
+              }}
+              type="button"
+            >
+              <Copy size={14} aria-hidden="true" />
+              复制
+            </button>
+            <button
+              className="secondary-button compact"
+              onClick={() => {
+                void handleToggleEnabled(config);
+              }}
+              type="button"
+            >
+              {config.enabled ? <Pause size={14} aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
+              {config.enabled ? '暂停' : '启用'}
+            </button>
+            <button
               className="secondary-button compact icon-only"
               aria-label={`删除 ${config.configId}`}
               onClick={() => {
@@ -161,7 +181,7 @@ export function DataConfigsPage({
             </button>
           </div>
         ),
-        width: '170px',
+        width: '270px',
       },
     ],
     [selectedEdgeId],
@@ -260,6 +280,35 @@ export function DataConfigsPage({
       setStatus(`已删除 ${configId}`);
     } catch {
       setStatus('删除失败');
+    }
+  };
+
+  const handleDuplicate = async (config: DataConfigResponse) => {
+    setStatus('');
+    try {
+      const request = sanitizeForm({
+        ...responseToSave(config),
+        configId: nextDuplicateConfigId(config.configId, activeConfigs.map((item) => item.configId)),
+        name: `${config.name} 副本`,
+      });
+      await onSaveConfig?.(selectedEdgeId, null, request);
+      setStatus(`已复制 ${config.configId}`);
+    } catch {
+      setStatus('复制失败');
+    }
+  };
+
+  const handleToggleEnabled = async (config: DataConfigResponse) => {
+    setStatus('');
+    try {
+      await onSaveConfig?.(
+        selectedEdgeId,
+        config.configId,
+        sanitizeForm({ ...responseToSave(config), enabled: !config.enabled }),
+      );
+      setStatus(`${config.enabled ? '已暂停' : '已启用'} ${config.configId}`);
+    } catch {
+      setStatus('状态更新失败');
     }
   };
 
@@ -763,6 +812,17 @@ function validateDataConfigForm(form: SaveDataConfigRequest) {
     errors.push('MQTT Topic 不能为空');
   }
   return errors;
+}
+
+function nextDuplicateConfigId(configId: string, existingIds: string[]) {
+  const existing = new Set(existingIds);
+  let index = 1;
+  let candidate = `${configId}_copy`;
+  while (existing.has(candidate)) {
+    index += 1;
+    candidate = `${configId}_copy_${index}`;
+  }
+  return candidate;
 }
 
 function buildPreview(form: SaveDataConfigRequest) {

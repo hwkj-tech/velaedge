@@ -4,6 +4,35 @@ import { describe, expect, it, vi } from 'vitest';
 import { DataConfigsPage } from './DataConfigsPage';
 
 describe('DataConfigsPage', () => {
+  const existingConfig = {
+    edgeId: 'edge-dev',
+    configId: 'pump_status',
+    name: '泵状态上报',
+    enabled: true,
+    deviceId: 'pump-1',
+    protocolConnectionId: 'modbus-line-a',
+    collection: { periodMs: 1000, retryCount: 2, timeoutMs: 800 },
+    points: [
+      {
+        addressKind: 'holding_register',
+        addressValue: '40001',
+        jsonField: 'pressure',
+        pointId: 'pressure',
+        semanticId: 'pump.pressure',
+        unit: 'MPa',
+        valueType: 'float32',
+      },
+    ],
+    algorithmIds: [],
+    publish: {
+      payload: { includeQuality: true, mode: 'object', timestampField: 'ts' },
+      qos: 1,
+      sinkId: 'velamq-main',
+      topicTemplate: 'factory/{edge_id}/{device_id}/status',
+    },
+    visualGraph: { edges: [], nodes: [] },
+  } as const;
+
   it('opens a step dialog and saves a complete data config', async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
 
@@ -120,5 +149,37 @@ describe('DataConfigsPage', () => {
 
     expect(within(dialog).getByRole('alert')).toHaveTextContent('MQTT Topic 不能为空');
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('duplicates and toggles an existing data config through the save API', () => {
+    const onSave = vi.fn();
+
+    render(
+      <DataConfigsPage
+        configs={[existingConfig as any]}
+        onSaveConfig={onSave}
+        selectedEdgeId="edge-dev"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '复制' }));
+    expect(onSave).toHaveBeenCalledWith(
+      'edge-dev',
+      null,
+      expect.objectContaining({
+        configId: 'pump_status_copy',
+        name: '泵状态上报 副本',
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '暂停' }));
+    expect(onSave).toHaveBeenCalledWith(
+      'edge-dev',
+      'pump_status',
+      expect.objectContaining({
+        configId: 'pump_status',
+        enabled: false,
+      }),
+    );
   });
 });
