@@ -22,6 +22,16 @@ describe('DataConfigsPage', () => {
             outputIds: ['pressure_changed'],
           } as any,
         ]}
+        pointMappings={[
+          {
+            address: 'holding_register:40003',
+            edgeId: 'edge-dev',
+            pointId: 'flow_rate',
+            semanticTelemetry: 'pump.flow_rate',
+            unit: 'm3/h',
+            valueType: 'float32',
+          } as any,
+        ]}
         protocolConnections={[
           { connectionId: 'modbus-line-a', protocol: 'Modbus RTU' } as any,
         ]}
@@ -42,6 +52,10 @@ describe('DataConfigsPage', () => {
 
     expect(within(dialog).getByText('pressure-change-report')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('数据上报画布')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('已选数据流资源')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: /flow_rate/ }));
+    expect(within(dialog).getByText('pump.flow_rate')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: '移除点位 pressure' }));
     fireEvent.click(within(dialog).getByRole('button', { name: /pressure-change-report/ }));
     fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
 
@@ -53,7 +67,10 @@ describe('DataConfigsPage', () => {
     expect(within(dialog).getByLabelText('JSON 预览')).toHaveValue();
     expect(
       (within(dialog).getByLabelText('JSON 预览') as HTMLTextAreaElement).value,
-    ).toContain('pressure');
+    ).toContain('flow_rate');
+    expect(
+      (within(dialog).getByLabelText('JSON 预览') as HTMLTextAreaElement).value,
+    ).not.toContain('"pressure"');
     fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
 
     expect(onSave).toHaveBeenCalledWith(

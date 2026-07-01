@@ -495,9 +495,8 @@ function VisualReportBuilder({
     const points = selectedPointIds.has(point.pointId) ? form.points : [...form.points, point];
     updateForm({
       points,
-      visualGraph: addGraphNode(graph, 'point', point.pointId, point.pointId),
+      visualGraph: addGraphNode(graph, 'point', point.pointId, point.pointId, form.publish.topicTemplate),
     });
-    updateFirstPoint(point);
   };
 
   const addAlgorithm = (algorithm: AlgorithmResponse) => {
@@ -507,7 +506,24 @@ function VisualReportBuilder({
     updateAlgorithmIds(algorithmIds);
     updateForm({
       algorithmIds,
-      visualGraph: addGraphNode(graph, 'algorithm', algorithm.algorithmId, algorithm.algorithmId),
+      visualGraph: addGraphNode(graph, 'algorithm', algorithm.algorithmId, algorithm.algorithmId, form.publish.topicTemplate),
+    });
+  };
+
+  const removePoint = (pointId: string) => {
+    const points = form.points.filter((point) => point.pointId !== pointId);
+    updateForm({
+      points: points.length ? points : [emptyPoint],
+      visualGraph: removeGraphNode(graph, `point-${pointId}`, form.publish.topicTemplate),
+    });
+  };
+
+  const removeAlgorithm = (algorithmId: string) => {
+    const algorithmIds = (form.algorithmIds ?? []).filter((id) => id !== algorithmId);
+    updateAlgorithmIds(algorithmIds);
+    updateForm({
+      algorithmIds,
+      visualGraph: removeGraphNode(graph, `algorithm-${algorithmId}`, form.publish.topicTemplate),
     });
   };
 
@@ -595,6 +611,44 @@ function VisualReportBuilder({
           <span>{form.points.length} 个点位</span>
           <span>{(form.algorithmIds ?? []).length} 个算法</span>
           <span>输出到 {form.publish.topicTemplate}</span>
+        </div>
+        <div className="selected-flow-assets" aria-label="已选数据流资源">
+          <section>
+            <h4>已选点位</h4>
+            <div className="asset-chip-list">
+              {form.points.map((point) => (
+                <span className="asset-chip point" key={point.pointId}>
+                  <strong>{point.jsonField}</strong>
+                  <small>{point.pointId}</small>
+                  <button
+                    aria-label={`移除点位 ${point.pointId}`}
+                    onClick={() => removePoint(point.pointId)}
+                    type="button"
+                  >
+                    <X size={12} aria-hidden="true" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          </section>
+          <section>
+            <h4>已选算法</h4>
+            <div className="asset-chip-list">
+              {(form.algorithmIds ?? []).length ? (form.algorithmIds ?? []).map((algorithmId) => (
+                <span className="asset-chip algorithm" key={algorithmId}>
+                  <strong>{algorithmId}</strong>
+                  <small>DSL</small>
+                  <button
+                    aria-label={`移除算法 ${algorithmId}`}
+                    onClick={() => removeAlgorithm(algorithmId)}
+                    type="button"
+                  >
+                    <X size={12} aria-hidden="true" />
+                  </button>
+                </span>
+              )) : <p>未选择算法，点位将直接组装为 JSON 上报。</p>}
+            </div>
+          </section>
         </div>
       </section>
     </div>
@@ -696,10 +750,11 @@ function addGraphNode(
   kind: DataConfigGraphNodeKind,
   label: string,
   refId: string,
+  topicTemplate: string,
 ) {
   const nodeId = `${kind}-${refId}`;
   if (graph.nodes.some((node) => node.nodeId === nodeId)) {
-    return ensureOutputNodes(graph, '');
+    return ensureOutputNodes(graph, topicTemplate);
   }
   const next = {
     edges: graph.edges,
@@ -715,7 +770,21 @@ function addGraphNode(
       },
     ],
   };
-  return ensureOutputNodes(next, '');
+  return ensureOutputNodes(next, topicTemplate);
+}
+
+function removeGraphNode(
+  graph: NonNullable<SaveDataConfigRequest['visualGraph']>,
+  nodeId: string,
+  topicTemplate: string,
+) {
+  return ensureOutputNodes(
+    {
+      edges: graph.edges.filter((edge) => edge.from !== nodeId && edge.to !== nodeId),
+      nodes: graph.nodes.filter((node) => node.nodeId !== nodeId),
+    },
+    topicTemplate,
+  );
 }
 
 function ensureOutputNodes(

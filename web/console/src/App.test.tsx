@@ -793,7 +793,7 @@ describe('App cloud console write actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'pump_status' }));
     const dataConfigDialog = screen.getByRole('dialog', { name: '编辑数据上报' });
     fireEvent.click(within(dataConfigDialog).getByRole('button', { name: '2. 可视化编排' }));
-    expect(within(dataConfigDialog).getByText('pump-anomaly-v1')).toBeInTheDocument();
+    expect(within(dataConfigDialog).getAllByText('pump-anomaly-v1').length).toBeGreaterThan(0);
   });
 
   it('keeps editable controls when switching configuration tabs', async () => {
