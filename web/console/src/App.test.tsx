@@ -555,7 +555,7 @@ describe('App cloud console write actions', () => {
     });
   });
 
-  it.skip('saves point drafts through the API and refreshes point mappings', async () => {
+  it('saves point drafts through the API and refreshes point mappings', async () => {
     vi.mocked(fetchEdgePointMappings)
       .mockResolvedValueOnce([basePoint])
       .mockResolvedValueOnce([basePoint])
@@ -598,7 +598,7 @@ describe('App cloud console write actions', () => {
     expect(screen.getByText('已保存')).toBeInTheDocument();
   });
 
-  it.skip('saves collection task drafts through the selected edge API', async () => {
+  it('saves collection task drafts through the selected edge API', async () => {
     vi.mocked(fetchEdgeCollectionTasks)
       .mockResolvedValueOnce(collectionTasks)
       .mockResolvedValueOnce(collectionTasks)
@@ -872,7 +872,7 @@ describe('App cloud console write actions', () => {
     expect(screen.getByRole('button', { name: '修改算法 pump-anomaly-v1' })).toBeInTheDocument();
   });
 
-  it.skip('saves algorithm drafts through the selected edge API', async () => {
+  it('saves algorithm drafts through the selected edge API', async () => {
     vi.mocked(fetchEdgeAlgorithms)
       .mockResolvedValueOnce(algorithms)
       .mockResolvedValueOnce(algorithms)
@@ -906,7 +906,7 @@ describe('App cloud console write actions', () => {
     render(<App />);
 
     await openEdgeConfiguration();
-    fireEvent.click(screen.getByRole('button', { name: /算法配置/ }));
+    fireEvent.click(screen.getByRole('tab', { name: '算法配置' }));
     expect(await screen.findByText('pressure.reported')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '选择算法 pump-anomaly-v1' }));
 
@@ -1008,7 +1008,7 @@ describe('App cloud console write actions', () => {
     expect(publishLatestRelease).not.toHaveBeenCalled();
   });
 
-  it.skip('creates point, task, and algorithm drafts from edge configuration pages', async () => {
+  it('creates point, task, and algorithm drafts from edge configuration pages', async () => {
     vi.mocked(fetchEdgePointMappings)
       .mockResolvedValueOnce([basePoint])
       .mockResolvedValueOnce([basePoint])
@@ -1025,7 +1025,7 @@ describe('App cloud console write actions', () => {
     render(<App />);
     await openEdgeConfiguration();
 
-    fireEvent.click(screen.getByRole('button', { name: /点位配置/ }));
+    fireEvent.click(screen.getByRole('tab', { name: '点位配置' }));
     expect(await screen.findByText('holding_register:40001')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '新建点位' }));
     const pointDialog = screen.getByRole('dialog', { name: '新建点位' });
@@ -1060,7 +1060,7 @@ describe('App cloud console write actions', () => {
     });
     expect(await screen.findByText('point-draft-2')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /采集任务/ }));
+    fireEvent.click(screen.getByRole('tab', { name: '采集任务' }));
     expect(
       await screen.findByRole('button', { name: '编辑任务 pump-main' }),
     ).toBeInTheDocument();
@@ -1090,10 +1090,10 @@ describe('App cloud console write actions', () => {
     fireEvent.click(screen.getByRole('tab', { name: '数据上报' }));
     fireEvent.click(await screen.findByRole('button', { name: 'pump_status' }));
     fireEvent.click(screen.getByRole('button', { name: '2. 可视化编排' }));
-    expect(screen.getByText('pump-anomaly-v1')).toBeInTheDocument();
+    expect(screen.getAllByText('pump-anomaly-v1').length).toBeGreaterThan(0);
   });
 
-  it.skip('imports discovered point suggestions into selected edge point mappings', async () => {
+  it('imports discovered point suggestions into selected edge point mappings', async () => {
     const importSuggestions = [
       {
         pointId: 'meter_voltage_a',
@@ -1139,7 +1139,7 @@ describe('App cloud console write actions', () => {
     render(<App />);
     await openEdgeConfiguration();
 
-    fireEvent.click(screen.getByRole('button', { name: /点位配置/ }));
+    fireEvent.click(screen.getByRole('tab', { name: '点位配置' }));
     expect(await screen.findByText('holding_register:40001')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '批量导入' }));
 
