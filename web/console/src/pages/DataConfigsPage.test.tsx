@@ -216,4 +216,81 @@ describe('DataConfigsPage', () => {
     expect(screen.getByText('pump_energy')).toBeInTheDocument();
     expect(screen.getByText('已筛选 1 / 2 套配置')).toBeInTheDocument();
   });
+
+  it('searches and bulk manages visual point resources', () => {
+    render(
+      <DataConfigsPage
+        configs={[]}
+        pointMappings={[
+          {
+            address: 'holding_register:40003',
+            edgeId: 'edge-dev',
+            pointId: 'flow_rate',
+            semanticTelemetry: 'pump.flow_rate',
+            unit: 'm3/h',
+            valueType: 'float32',
+          } as any,
+          {
+            address: 'coil:1',
+            edgeId: 'edge-dev',
+            pointId: 'running',
+            semanticTelemetry: 'pump.running',
+            unit: '-',
+            valueType: 'bool',
+          } as any,
+        ]}
+        selectedEdgeId="edge-dev"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '新建数据上报' }));
+    const dialog = screen.getByRole('dialog', { name: '新建数据上报' });
+    fireEvent.click(within(dialog).getByRole('button', { name: '2. 可视化编排' }));
+
+    fireEvent.change(within(dialog).getByLabelText('搜索点位资源'), {
+      target: { value: 'running' },
+    });
+
+    expect(within(dialog).queryByRole('button', { name: /flow_rate/ })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /running/ })).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '加入筛选点位' }));
+
+    expect(within(dialog).getByText('2 个点位')).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '清空点位' }));
+
+    expect(within(dialog).getByText('0 个点位')).toBeInTheDocument();
+  });
+
+  it('blocks save when multiple points map to the same JSON field', () => {
+    const onSave = vi.fn();
+    const duplicateConfig = {
+      ...existingConfig,
+      points: [
+        existingConfig.points[0],
+        {
+          ...existingConfig.points[0],
+          addressValue: '40002',
+          pointId: 'pressure_b',
+        },
+      ],
+    };
+
+    render(
+      <DataConfigsPage
+        configs={[duplicateConfig as any]}
+        onSaveConfig={onSave}
+        selectedEdgeId="edge-dev"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'pump_status' }));
+    const dialog = screen.getByRole('dialog', { name: '编辑数据上报' });
+    fireEvent.click(within(dialog).getByRole('button', { name: '4. JSON 预览' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('JSON 字段 pressure 重复');
+    expect(onSave).not.toHaveBeenCalled();
+  });
 });

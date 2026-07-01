@@ -502,9 +502,58 @@
 }
 
 .node-palette h4 {
-  margin: 0 0 8px;
+  margin: 0;
   color: var(--color-text);
   font-size: 13px;
+}
+
+.palette-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.palette-heading span {
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.palette-search {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.palette-search span {
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.palette-search input {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: #fbfdff;
+  color: var(--color-text);
+  font-size: 12px;
+  outline: none;
+  padding: 8px 9px;
+}
+
+.palette-search input:focus {
+  border-color: rgba(31, 105, 205, 0.55);
+  box-shadow: 0 0 0 3px rgba(31, 105, 205, 0.1);
+}
+
+.palette-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
 }
 
 .palette-node {

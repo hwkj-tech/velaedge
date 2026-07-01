@@ -601,6 +601,8 @@ function VisualReportBuilder({
   updateFirstPoint: (patch: Partial<DataConfigPoint>) => void;
   updateForm: (patch: Partial<SaveDataConfigRequest>) => void;
 }) {
+  const [pointQuery, setPointQuery] = useState('');
+  const [algorithmQuery, setAlgorithmQuery] = useState('');
   const pointResources = pointMappings.length
     ? pointMappings.map((point) => ({
         addressKind: point.address.split(':')[0] || 'holding_register',
@@ -614,6 +616,23 @@ function VisualReportBuilder({
     : form.points;
   const selectedPointIds = new Set(form.points.map((point) => point.pointId));
   const selectedAlgorithmIds = new Set(form.algorithmIds ?? []);
+  const filteredPointResources = pointResources.filter((point) =>
+    matchesResourceQuery(
+      [point.pointId, point.semanticId, point.addressKind, point.addressValue, point.valueType],
+      pointQuery,
+    ),
+  );
+  const filteredAlgorithms = algorithms.filter((algorithm) =>
+    matchesResourceQuery(
+      [
+        algorithm.algorithmId,
+        algorithm.algorithmKind,
+        ...(algorithm.inputIds ?? []),
+        ...(algorithm.outputIds ?? []),
+      ],
+      algorithmQuery,
+    ),
+  );
 
   const addPoint = (point: DataConfigPoint) => {
     const points = selectedPointIds.has(point.pointId) ? form.points : [...form.points, point];
@@ -637,7 +656,7 @@ function VisualReportBuilder({
   const removePoint = (pointId: string) => {
     const points = form.points.filter((point) => point.pointId !== pointId);
     updateForm({
-      points: points.length ? points : [emptyPoint],
+      points,
       visualGraph: removeGraphNode(graph, `point-${pointId}`, form.publish.topicTemplate),
     });
   };
@@ -653,6 +672,43 @@ function VisualReportBuilder({
 
   const ensureOutput = () => {
     updateForm({ visualGraph: ensureOutputNodes(graph, form.publish.topicTemplate) });
+  };
+
+  const addFilteredPoints = () => {
+    const merged = mergePoints(form.points, filteredPointResources);
+    updateForm({
+      points: merged,
+      visualGraph: ensureOutputNodes(
+        {
+          edges: graph.edges,
+          nodes: [
+            ...graph.nodes.filter((node) => node.kind !== 'point' && node.kind !== 'json' && node.kind !== 'mqtt'),
+            ...merged.map((point, index) => ({
+              kind: 'point' as const,
+              label: point.pointId,
+              nodeId: `point-${point.pointId}`,
+              refId: point.pointId,
+              x: 56,
+              y: 56 + index * 86,
+            })),
+          ],
+        },
+        form.publish.topicTemplate,
+      ),
+    });
+  };
+
+  const clearPoints = () => {
+    updateForm({
+      points: [],
+      visualGraph: ensureOutputNodes(
+        {
+          edges: graph.edges.filter((edge) => !edge.from.startsWith('point-') && !edge.to.startsWith('point-')),
+          nodes: graph.nodes.filter((node) => node.kind !== 'point'),
+        },
+        form.publish.topicTemplate,
+      ),
+    });
   };
 
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -672,8 +728,28 @@ function VisualReportBuilder({
     <div className="visual-builder">
       <aside className="node-palette" aria-label="节点库">
         <div>
-          <h4>已配置点位</h4>
-          {pointResources.map((point) => (
+          <div className="palette-heading">
+            <h4>已配置点位</h4>
+            <span>{filteredPointResources.length} / {pointResources.length}</span>
+          </div>
+          <label className="palette-search">
+            <span>搜索点位资源</span>
+            <input
+              aria-label="搜索点位资源"
+              placeholder="点位、语义、地址"
+              value={pointQuery}
+              onChange={(event) => setPointQuery(event.target.value)}
+            />
+          </label>
+          <div className="palette-actions">
+            <button className="secondary-button compact" onClick={addFilteredPoints} type="button">
+              加入筛选点位
+            </button>
+            <button className="secondary-button compact" onClick={clearPoints} type="button">
+              清空点位
+            </button>
+          </div>
+          {filteredPointResources.map((point) => (
             <button
               className="palette-node"
               draggable
@@ -687,10 +763,23 @@ function VisualReportBuilder({
               <small>{point.semanticId}</small>
             </button>
           ))}
+          {filteredPointResources.length === 0 ? <p className="palette-empty">没有匹配的点位。</p> : null}
         </div>
         <div>
-          <h4>算法节点</h4>
-          {algorithms.length ? algorithms.map((algorithm) => (
+          <div className="palette-heading">
+            <h4>算法节点</h4>
+            <span>{filteredAlgorithms.length} / {algorithms.length}</span>
+          </div>
+          <label className="palette-search">
+            <span>搜索算法资源</span>
+            <input
+              aria-label="搜索算法资源"
+              placeholder="算法 ID、类型、输入输出"
+              value={algorithmQuery}
+              onChange={(event) => setAlgorithmQuery(event.target.value)}
+            />
+          </label>
+          {filteredAlgorithms.length ? filteredAlgorithms.map((algorithm) => (
             <button
               className="palette-node"
               draggable
@@ -703,7 +792,7 @@ function VisualReportBuilder({
               <span>{algorithm.algorithmId}</span>
               <small>{algorithm.algorithmKind}</small>
             </button>
-          )) : <p className="palette-empty">暂无算法，可直接上报原始点位。</p>}
+          )) : <p className="palette-empty">暂无匹配算法，可直接上报原始点位。</p>}
         </div>
       </aside>
       <section
@@ -858,6 +947,12 @@ function validateDataConfigForm(form: SaveDataConfigRequest) {
   if (form.points.length === 0 || form.points.every((point) => !point.pointId.trim())) {
     errors.push('至少选择 1 个上报点位');
   }
+  const duplicatedJsonField = findDuplicate(
+    form.points.map((point) => point.jsonField.trim()).filter(Boolean),
+  );
+  if (duplicatedJsonField) {
+    errors.push(`JSON 字段 ${duplicatedJsonField} 重复`);
+  }
   if (!form.publish.sinkId.trim()) {
     errors.push('MQTT Sink 不能为空');
   }
@@ -865,6 +960,31 @@ function validateDataConfigForm(form: SaveDataConfigRequest) {
     errors.push('MQTT Topic 不能为空');
   }
   return errors;
+}
+
+function matchesResourceQuery(values: string[], query: string) {
+  const keyword = query.trim().toLowerCase();
+  if (!keyword) return true;
+  return values.join(' ').toLowerCase().includes(keyword);
+}
+
+function mergePoints(currentPoints: DataConfigPoint[], nextPoints: DataConfigPoint[]) {
+  const existing = new Set(currentPoints.map((point) => point.pointId));
+  return [
+    ...currentPoints,
+    ...nextPoints.filter((point) => !existing.has(point.pointId)),
+  ];
+}
+
+function findDuplicate(values: string[]) {
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) {
+      return value;
+    }
+    seen.add(value);
+  }
+  return null;
 }
 
 function nextDuplicateConfigId(configId: string, existingIds: string[]) {
