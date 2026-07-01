@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use edge_core::EdgeConfigPackage;
 use serde::{Deserialize, Serialize};
@@ -33,11 +33,11 @@ impl ConfigValidator {
             .iter()
             .map(|algorithm| algorithm.id.as_str())
             .collect::<BTreeSet<_>>();
-        let point_ids = package
+        let point_mappings = package
             .point_mappings
             .iter()
-            .map(|mapping| mapping.point_id.as_str())
-            .collect::<BTreeSet<_>>();
+            .map(|mapping| (mapping.point_id.as_str(), mapping))
+            .collect::<BTreeMap<_, _>>();
 
         for mapping in &package.point_mappings {
             if !connections.contains(mapping.protocol_connection_id.as_str()) {
@@ -55,6 +55,61 @@ impl ConfigValidator {
                         mapping.point_id, mapping.device_id
                     ),
                 });
+            }
+        }
+
+        for task in &package.collection_tasks {
+            if task.task_id.trim().is_empty() {
+                errors.push(ValidationError {
+                    message: "collection task id is required".to_string(),
+                });
+            }
+            if task.device_id.trim().is_empty() {
+                errors.push(ValidationError {
+                    message: format!("collection task `{}` device id is required", task.task_id),
+                });
+            } else if !devices.contains(task.device_id.as_str()) {
+                errors.push(ValidationError {
+                    message: format!(
+                        "collection task `{}` references missing device `{}`",
+                        task.task_id, task.device_id
+                    ),
+                });
+            }
+            if task.interval_ms == 0 {
+                errors.push(ValidationError {
+                    message: format!(
+                        "collection task `{}` interval must be greater than zero",
+                        task.task_id
+                    ),
+                });
+            }
+            if task.point_ids.is_empty() {
+                errors.push(ValidationError {
+                    message: format!(
+                        "collection task `{}` must contain at least one point",
+                        task.task_id
+                    ),
+                });
+            }
+            for point_id in &task.point_ids {
+                let Some(mapping) = point_mappings.get(point_id.as_str()) else {
+                    errors.push(ValidationError {
+                        message: format!(
+                            "collection task `{}` references missing point `{}`",
+                            task.task_id, point_id
+                        ),
+                    });
+                    continue;
+                };
+                if mapping.device_id != task.device_id {
+                    errors.push(ValidationError {
+                        message: format!(
+                            "collection task `{}` point `{}` belongs to device `{}`, expected `{}`",
+                            task.task_id, point_id, mapping.device_id, task.device_id
+                        ),
+                    });
+                }
             }
         }
 
@@ -127,7 +182,30 @@ impl ConfigValidator {
                             data_config.config_id
                         ),
                     });
-                } else if !point_ids.contains(point.point_id.as_str()) {
+                } else if let Some(mapping) = point_mappings.get(point.point_id.as_str()) {
+                    if mapping.device_id != data_config.device_id {
+                        errors.push(ValidationError {
+                            message: format!(
+                                "data config `{}` point `{}` belongs to device `{}`, expected `{}`",
+                                data_config.config_id,
+                                point.point_id,
+                                mapping.device_id,
+                                data_config.device_id
+                            ),
+                        });
+                    }
+                    if mapping.protocol_connection_id != data_config.protocol_connection_id {
+                        errors.push(ValidationError {
+                            message: format!(
+                                "data config `{}` point `{}` uses protocol connection `{}`, expected `{}`",
+                                data_config.config_id,
+                                point.point_id,
+                                mapping.protocol_connection_id,
+                                data_config.protocol_connection_id
+                            ),
+                        });
+                    }
+                } else {
                     errors.push(ValidationError {
                         message: format!(
                             "data config `{}` references missing point `{}`",

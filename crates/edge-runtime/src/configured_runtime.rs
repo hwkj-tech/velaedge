@@ -9,9 +9,9 @@ use edge_core::{
 
 use crate::CollectionSchedule;
 use crate::{
-    publish_data_config_mqtt_samples, publish_mqtt_samples, AlgorithmEngine, CollectionReport,
-    ConfiguredMqttCollectionReport, ModbusRtuAdapter, MqttPublisher, ProtocolAdapter,
-    SerialBusFactory,
+    config::validate_config_references, publish_data_config_mqtt_samples, publish_mqtt_samples,
+    AlgorithmEngine, CollectionReport, ConfiguredMqttCollectionReport, ModbusRtuAdapter,
+    MqttPublisher, ProtocolAdapter, SerialBusFactory,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,6 +67,7 @@ where
         if package.version.trim().is_empty() {
             bail!("config version is required");
         }
+        validate_config_references(&package)?;
 
         let mut shadows = BTreeMap::new();
         for device in &package.devices {

@@ -21,7 +21,7 @@ impl AppliedEdgeConfig {
         if package.version.trim().is_empty() {
             bail!("config version is required");
         }
-        validate_data_configs(&package)?;
+        validate_config_references(&package)?;
         Ok(Self { package })
     }
 
@@ -34,7 +34,7 @@ impl AppliedEdgeConfig {
     }
 }
 
-fn validate_data_configs(package: &EdgeConfigPackage) -> Result<()> {
+pub(crate) fn validate_config_references(package: &EdgeConfigPackage) -> Result<()> {
     let device_ids = package
         .devices
         .iter()
@@ -50,16 +50,59 @@ fn validate_data_configs(package: &EdgeConfigPackage) -> Result<()> {
         .iter()
         .map(|uplink| uplink.sink_id.as_str())
         .collect::<BTreeSet<_>>();
-    let point_ids = package
+    let point_mappings = package
         .point_mappings
         .iter()
-        .map(|mapping| mapping.point_id.as_str())
-        .collect::<BTreeSet<_>>();
+        .map(|mapping| (mapping.point_id.as_str(), mapping))
+        .collect::<BTreeMap<_, _>>();
     let algorithm_ids = package
         .algorithms
         .iter()
         .map(|algorithm| algorithm.id.as_str())
         .collect::<BTreeSet<_>>();
+
+    for task in &package.collection_tasks {
+        if task.task_id.trim().is_empty() {
+            bail!("collection task id is required");
+        }
+        if task.interval_ms == 0 {
+            bail!(
+                "collection task {} interval must be greater than zero",
+                task.task_id
+            );
+        }
+        if !device_ids.contains(task.device_id.as_str()) {
+            bail!(
+                "collection task {} references missing device {}",
+                task.task_id,
+                task.device_id
+            );
+        }
+        if task.point_ids.is_empty() {
+            bail!(
+                "collection task {} must include at least one point",
+                task.task_id
+            );
+        }
+        for point_id in &task.point_ids {
+            let Some(mapping) = point_mappings.get(point_id.as_str()) else {
+                bail!(
+                    "collection task {} references missing point {}",
+                    task.task_id,
+                    point_id
+                );
+            };
+            if mapping.device_id != task.device_id {
+                bail!(
+                    "collection task {} point {} belongs to device {}, expected {}",
+                    task.task_id,
+                    point_id,
+                    mapping.device_id,
+                    task.device_id
+                );
+            }
+        }
+    }
 
     for data_config in &package.data_configs {
         if data_config.config_id.trim().is_empty() {
@@ -95,11 +138,29 @@ fn validate_data_configs(package: &EdgeConfigPackage) -> Result<()> {
 
         let mut json_fields = BTreeSet::new();
         for point in &data_config.points {
-            if !point_ids.contains(point.point_id.as_str()) {
+            let Some(mapping) = point_mappings.get(point.point_id.as_str()) else {
                 bail!(
                     "data config {} references missing point {}",
                     data_config.config_id,
                     point.point_id
+                );
+            };
+            if mapping.device_id != data_config.device_id {
+                bail!(
+                    "data config {} point {} belongs to device {}, expected {}",
+                    data_config.config_id,
+                    point.point_id,
+                    mapping.device_id,
+                    data_config.device_id
+                );
+            }
+            if mapping.protocol_connection_id != data_config.protocol_connection_id {
+                bail!(
+                    "data config {} point {} uses protocol connection {}, expected {}",
+                    data_config.config_id,
+                    point.point_id,
+                    mapping.protocol_connection_id,
+                    data_config.protocol_connection_id
                 );
             }
             if !json_fields.insert(point.json_field.as_str()) {

@@ -109,6 +109,63 @@ fn applying_config_rejects_duplicate_data_config_json_fields() {
         .contains("data config pump_status has duplicate json field value"));
 }
 
+#[test]
+fn applying_config_rejects_collection_tasks_with_unknown_points() {
+    let package = package().with_collection_task(CollectionTask::interval(
+        "broken-task",
+        "pump-1",
+        vec!["missing_pressure".to_string()],
+        1000,
+    ));
+
+    let error = AppliedEdgeConfig::apply(package).expect_err("invalid collection task is rejected");
+
+    assert!(error
+        .to_string()
+        .contains("collection task broken-task references missing point missing_pressure"));
+}
+
+#[test]
+fn applying_config_rejects_data_config_points_from_other_connections() {
+    let package = data_config_package()
+        .with_protocol_connection(ProtocolConnection::simulated("sim-secondary"))
+        .with_point_mapping(TelemetryPointMapping::new(
+            "secondary_pressure",
+            "pump-1",
+            "pressure",
+            "sim-secondary",
+            PointAddress::simulated("secondary_pressure"),
+            TelemetryType::Float,
+        ))
+        .with_data_config(
+            DataConfig::new(
+                "pump_status",
+                "泵状态上报",
+                "pump-1",
+                "sim-main",
+                DataConfigCollection::new(1000),
+                DataConfigPublish::new(
+                    "velamq-main",
+                    "factory/{edge_id}/{device_id}/status",
+                    DataConfigPayload::object(),
+                ),
+            )
+            .with_point(DataConfigPoint::new(
+                "secondary_pressure",
+                "pump.secondary_pressure",
+                PointAddress::simulated("secondary_pressure"),
+                TelemetryType::Float,
+                "pressure",
+            )),
+        );
+
+    let error = AppliedEdgeConfig::apply(package).expect_err("invalid data config is rejected");
+
+    assert!(error.to_string().contains(
+        "data config pump_status point secondary_pressure uses protocol connection sim-secondary, expected sim-main"
+    ));
+}
+
 fn data_config_package() -> EdgeConfigPackage {
     package()
         .with_mqtt_uplink(

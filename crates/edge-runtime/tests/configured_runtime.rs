@@ -54,6 +54,26 @@ async fn configured_runtime_collects_modbus_rtu_points_from_cloud_package() {
     assert_eq!(&observed_bus.requests()[0][..6], &[1, 0x03, 0, 0, 0, 1]);
 }
 
+#[test]
+fn configured_runtime_rejects_collection_task_with_unknown_point() {
+    let package = modbus_package().with_collection_task(CollectionTask::interval(
+        "broken-task",
+        "meter-1",
+        vec!["missing_voltage".to_string()],
+        1000,
+    ));
+    let factory = ScriptedSerialBusFactory::new(Vec::new());
+
+    let error = match ConfiguredEdgeRuntime::new(package, factory) {
+        Ok(_) => panic!("invalid runtime config rejected"),
+        Err(error) => error,
+    };
+
+    assert!(error
+        .to_string()
+        .contains("collection task broken-task references missing point missing_voltage"));
+}
+
 #[tokio::test]
 async fn configured_runtime_publishes_modbus_samples_to_mqtt_uplink() {
     let bus = ScriptedSerialBus::new(vec![response(1, &[220])]);
@@ -175,6 +195,14 @@ async fn configured_runtime_publishes_data_config_with_algorithm_outputs() {
             MqttUplinkConfig::velamq("velamq-main", "mqtt://velamq.local:1883", "edge-dev")
                 .with_topic_template("unused/{edge_id}/{device_id}/{telemetry_id}"),
         )
+        .with_point_mapping(TelemetryPointMapping::new(
+            "pressure",
+            "pump-1",
+            "pressure",
+            "sim-main",
+            PointAddress::simulated("pressure"),
+            TelemetryType::Float,
+        ))
         .with_data_config(
             DataConfig::new(
                 "pump_status",
@@ -249,6 +277,54 @@ fn package_with_two_modbus_data_configs() -> EdgeConfigPackage {
             MqttUplinkConfig::velamq("velamq-main", "mqtt://velamq.local:1883", "edge-dev")
                 .with_topic_template("unused/{edge_id}/{device_id}/{telemetry_id}"),
         )
+        .with_point_mapping(TelemetryPointMapping::new(
+            "voltage",
+            "meter-1",
+            "meter.voltage",
+            "meter-rs485-bus-1",
+            PointAddress::modbus_holding_register(40001),
+            TelemetryType::Integer,
+        ))
+        .with_point_mapping(TelemetryPointMapping::new(
+            "running",
+            "meter-1",
+            "meter.running",
+            "meter-rs485-bus-1",
+            PointAddress::modbus_holding_register(40002),
+            TelemetryType::Boolean,
+        ))
+        .with_point_mapping(TelemetryPointMapping::new(
+            "load",
+            "meter-1",
+            "meter.load",
+            "meter-rs485-bus-1",
+            PointAddress::modbus_holding_register(40003),
+            TelemetryType::Integer,
+        ))
+        .with_point_mapping(TelemetryPointMapping::new(
+            "energy_total",
+            "meter-1",
+            "meter.energy_total",
+            "meter-rs485-bus-1",
+            PointAddress::modbus_holding_register(40101),
+            TelemetryType::Integer,
+        ))
+        .with_point_mapping(TelemetryPointMapping::new(
+            "current_a",
+            "meter-1",
+            "meter.current_a",
+            "meter-rs485-bus-1",
+            PointAddress::modbus_holding_register(40102),
+            TelemetryType::Integer,
+        ))
+        .with_point_mapping(TelemetryPointMapping::new(
+            "current_b",
+            "meter-1",
+            "meter.current_b",
+            "meter-rs485-bus-1",
+            PointAddress::modbus_holding_register(40103),
+            TelemetryType::Integer,
+        ))
         .with_data_config(
             DataConfig::new(
                 "meter_status",

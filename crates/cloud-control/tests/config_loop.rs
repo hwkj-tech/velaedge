@@ -139,6 +139,68 @@ fn validator_rejects_data_config_with_missing_point_and_duplicate_json_field() {
 }
 
 #[test]
+fn validator_rejects_collection_task_with_missing_point() {
+    let package = valid_package().with_collection_task(CollectionTask::interval(
+        "broken-task",
+        "pump-1",
+        vec!["missing_pressure".to_string()],
+        1000,
+    ));
+
+    let errors = ConfigValidator::validate_package(&package);
+
+    assert!(errors.iter().any(|error| error
+        .message
+        .contains("collection task `broken-task` references missing point `missing_pressure`")));
+}
+
+#[test]
+fn validator_rejects_data_config_point_from_other_connection() {
+    let package = valid_package()
+        .with_protocol_connection(ProtocolConnection::simulated("sim-secondary"))
+        .with_mqtt_uplink(edge_core::MqttUplinkConfig::velamq(
+            "velamq-main",
+            "mqtt://velamq.local:1883",
+            "edge-dev",
+        ))
+        .with_point_mapping(TelemetryPointMapping::new(
+            "secondary_pressure",
+            "pump-1",
+            "pressure",
+            "sim-secondary",
+            PointAddress::simulated("secondary_pressure"),
+            TelemetryType::Float,
+        ))
+        .with_data_config(
+            DataConfig::new(
+                "pump_status",
+                "泵状态上报",
+                "pump-1",
+                "sim-main",
+                DataConfigCollection::new(1000),
+                DataConfigPublish::new(
+                    "velamq-main",
+                    "factory/{edge_id}/{device_id}/status",
+                    DataConfigPayload::object(),
+                ),
+            )
+            .with_point(DataConfigPoint::new(
+                "secondary_pressure",
+                "pump.secondary_pressure",
+                PointAddress::simulated("secondary_pressure"),
+                TelemetryType::Float,
+                "pressure",
+            )),
+        );
+
+    let errors = ConfigValidator::validate_package(&package);
+
+    assert!(errors.iter().any(|error| error.message.contains(
+        "data config `pump_status` point `secondary_pressure` uses protocol connection `sim-secondary`, expected `sim-main`"
+    )));
+}
+
+#[test]
 fn release_service_tracks_desired_and_reported_versions() {
     let mut store = CloudControlStore::default();
     let release = ReleaseService::create_release(&mut store, valid_package()).unwrap();
