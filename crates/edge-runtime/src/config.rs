@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Result};
 use chrono::Utc;
@@ -21,6 +21,7 @@ impl AppliedEdgeConfig {
         if package.version.trim().is_empty() {
             bail!("config version is required");
         }
+        validate_data_configs(&package)?;
         Ok(Self { package })
     }
 
@@ -31,6 +32,97 @@ impl AppliedEdgeConfig {
     pub fn package(&self) -> &EdgeConfigPackage {
         &self.package
     }
+}
+
+fn validate_data_configs(package: &EdgeConfigPackage) -> Result<()> {
+    let device_ids = package
+        .devices
+        .iter()
+        .map(|device| device.device_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let connection_ids = package
+        .protocol_connections
+        .iter()
+        .map(|connection| connection.connection_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let sink_ids = package
+        .mqtt_uplinks
+        .iter()
+        .map(|uplink| uplink.sink_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let point_ids = package
+        .point_mappings
+        .iter()
+        .map(|mapping| mapping.point_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let algorithm_ids = package
+        .algorithms
+        .iter()
+        .map(|algorithm| algorithm.id.as_str())
+        .collect::<BTreeSet<_>>();
+
+    for data_config in &package.data_configs {
+        if data_config.config_id.trim().is_empty() {
+            bail!("data config id is required");
+        }
+        if data_config.points.is_empty() {
+            bail!(
+                "data config {} must include at least one point",
+                data_config.config_id
+            );
+        }
+        if !device_ids.contains(data_config.device_id.as_str()) {
+            bail!(
+                "data config {} references missing device {}",
+                data_config.config_id,
+                data_config.device_id
+            );
+        }
+        if !connection_ids.contains(data_config.protocol_connection_id.as_str()) {
+            bail!(
+                "data config {} references missing protocol connection {}",
+                data_config.config_id,
+                data_config.protocol_connection_id
+            );
+        }
+        if !sink_ids.contains(data_config.publish.sink_id.as_str()) {
+            bail!(
+                "data config {} references missing mqtt sink {}",
+                data_config.config_id,
+                data_config.publish.sink_id
+            );
+        }
+
+        let mut json_fields = BTreeSet::new();
+        for point in &data_config.points {
+            if !point_ids.contains(point.point_id.as_str()) {
+                bail!(
+                    "data config {} references missing point {}",
+                    data_config.config_id,
+                    point.point_id
+                );
+            }
+            if !json_fields.insert(point.json_field.as_str()) {
+                bail!(
+                    "data config {} has duplicate json field {}",
+                    data_config.config_id,
+                    point.json_field
+                );
+            }
+        }
+
+        for algorithm_id in &data_config.algorithm_ids {
+            if !algorithm_ids.contains(algorithm_id.as_str()) {
+                bail!(
+                    "data config {} references missing algorithm {}",
+                    data_config.config_id,
+                    algorithm_id
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub struct ConfiguredSimulatedRuntime {

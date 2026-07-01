@@ -1,6 +1,7 @@
 use edge_core::{
-    CollectionTask, DeviceInstance, EdgeConfigPackage, PointAddress, ProtocolConnection,
-    TelemetryPointMapping, TelemetryType, TelemetryValue,
+    CollectionTask, DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint,
+    DataConfigPublish, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, PointAddress,
+    ProtocolConnection, TelemetryPointMapping, TelemetryType, TelemetryValue,
 };
 use edge_runtime::{AppliedEdgeConfig, ConfiguredSimulatedRuntime};
 
@@ -37,4 +38,89 @@ async fn applying_config_reports_version_and_collects_named_points() {
         runtime.shadow("pump-1").unwrap().latest_value("pressure"),
         Some(&TelemetryValue::Float(1.0))
     );
+}
+
+#[test]
+fn applying_config_rejects_data_configs_with_unknown_points() {
+    let package = data_config_package().with_data_config(
+        DataConfig::new(
+            "pump_status",
+            "泵状态上报",
+            "pump-1",
+            "sim-main",
+            DataConfigCollection::new(1000),
+            DataConfigPublish::new(
+                "velamq-main",
+                "factory/{edge_id}/{device_id}/status",
+                DataConfigPayload::object(),
+            ),
+        )
+        .with_point(DataConfigPoint::new(
+            "missing_pressure",
+            "pump.missing_pressure",
+            PointAddress::simulated("missing_pressure"),
+            TelemetryType::Float,
+            "pressure",
+        )),
+    );
+
+    let error = AppliedEdgeConfig::apply(package).expect_err("invalid data config is rejected");
+
+    assert!(error
+        .to_string()
+        .contains("data config pump_status references missing point missing_pressure"));
+}
+
+#[test]
+fn applying_config_rejects_duplicate_data_config_json_fields() {
+    let package = data_config_package().with_data_config(
+        DataConfig::new(
+            "pump_status",
+            "泵状态上报",
+            "pump-1",
+            "sim-main",
+            DataConfigCollection::new(1000),
+            DataConfigPublish::new(
+                "velamq-main",
+                "factory/{edge_id}/{device_id}/status",
+                DataConfigPayload::object(),
+            ),
+        )
+        .with_point(DataConfigPoint::new(
+            "pressure",
+            "pump.pressure",
+            PointAddress::simulated("pressure"),
+            TelemetryType::Float,
+            "value",
+        ))
+        .with_point(DataConfigPoint::new(
+            "running",
+            "pump.running",
+            PointAddress::simulated("running"),
+            TelemetryType::Boolean,
+            "value",
+        )),
+    );
+
+    let error = AppliedEdgeConfig::apply(package).expect_err("invalid data config is rejected");
+
+    assert!(error
+        .to_string()
+        .contains("data config pump_status has duplicate json field value"));
+}
+
+fn data_config_package() -> EdgeConfigPackage {
+    package()
+        .with_mqtt_uplink(
+            MqttUplinkConfig::velamq("velamq-main", "mqtt://velamq.local:1883", "edge-dev")
+                .with_topic_template("factory/{edge_id}/{device_id}/telemetry"),
+        )
+        .with_point_mapping(TelemetryPointMapping::new(
+            "running",
+            "pump-1",
+            "running",
+            "sim-main",
+            PointAddress::simulated("running"),
+            TelemetryType::Boolean,
+        ))
 }
