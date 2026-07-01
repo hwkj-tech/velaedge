@@ -1,8 +1,10 @@
 use chrono::{TimeZone, Utc};
 use edge_core::{
-    CollectionTask, DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint,
-    DataConfigPublish, DataQuality, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig,
-    PointAddress, ProtocolConnection, TelemetryPointMapping, TelemetryType, TelemetryValue,
+    AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
+    AlgorithmReportPolicy, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger, CollectionTask,
+    DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish,
+    DataQuality, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, PointAddress,
+    ProtocolConnection, TelemetryPointMapping, TelemetryType, TelemetryValue,
 };
 use edge_runtime::{
     build_data_config_mqtt_publish_messages, build_mqtt_publish_messages, parse_mqtt_broker_target,
@@ -128,6 +130,172 @@ fn data_config_builds_one_json_message_per_config() {
     assert_eq!(payload["values"]["pressure"], 0.82);
     assert_eq!(payload["values"]["running"], true);
     assert_eq!(payload["quality"]["pressure"], "good");
+}
+
+#[test]
+fn data_config_payload_includes_bound_algorithm_outputs() {
+    let package = EdgeConfigPackage::new("edge-dev", "v1")
+        .with_device(DeviceInstance::new("pump-1", "pump"))
+        .with_mqtt_uplink(MqttUplinkConfig::velamq(
+            "velamq-main",
+            "mqtts://velamq.local:8883",
+            "edge-dev-runtime",
+        ))
+        .with_algorithm(AlgorithmSpec::dsl(
+            "pressure-change",
+            "v1",
+            AlgorithmKind::ChangeReport,
+            AlgorithmDsl {
+                inputs: vec![AlgorithmInputBinding::new("p", "pressure")],
+                trigger: AlgorithmTrigger::on_sample(),
+                steps: vec![AlgorithmStep::change_filter("p", 0.1)],
+                outputs: vec![AlgorithmOutput::virtual_point(
+                    "pressureReported",
+                    "pressure.reported",
+                )],
+                report: AlgorithmReportPolicy::new(AlgorithmReportMode::OnChange, "velamq-main"),
+            },
+        ))
+        .with_algorithm(AlgorithmSpec::dsl(
+            "unbound-algorithm",
+            "v1",
+            AlgorithmKind::ChangeReport,
+            AlgorithmDsl {
+                inputs: vec![AlgorithmInputBinding::new("p", "pressure")],
+                trigger: AlgorithmTrigger::on_sample(),
+                steps: vec![AlgorithmStep::change_filter("p", 0.1)],
+                outputs: vec![AlgorithmOutput::virtual_point(
+                    "unboundReported",
+                    "pressure.unbound",
+                )],
+                report: AlgorithmReportPolicy::new(AlgorithmReportMode::OnChange, "velamq-main"),
+            },
+        ))
+        .with_data_config(
+            DataConfig::new(
+                "pump_status",
+                "泵运行状态上报",
+                "pump-1",
+                "modbus-line-a",
+                DataConfigCollection::new(1000),
+                DataConfigPublish::new(
+                    "velamq-main",
+                    "factory/{edge_id}/{device_id}/status",
+                    DataConfigPayload::object(),
+                ),
+            )
+            .with_point(DataConfigPoint::new(
+                "pressure",
+                "pump.pressure",
+                PointAddress::modbus_holding_register(40001),
+                TelemetryType::Float,
+                "pressure",
+            ))
+            .with_algorithm("pressure-change"),
+        );
+
+    let timestamp = Utc.with_ymd_and_hms(2026, 7, 1, 8, 30, 0).unwrap();
+    let samples = vec![
+        edge_core::TelemetrySample::new(
+            "pump-1",
+            "pressure",
+            TelemetryValue::Float(0.82),
+            DataQuality::Good,
+            timestamp,
+        ),
+        edge_core::TelemetrySample::new(
+            "pump-1",
+            "pressure.reported",
+            TelemetryValue::Float(0.82),
+            DataQuality::Good,
+            timestamp,
+        ),
+        edge_core::TelemetrySample::new(
+            "pump-1",
+            "pressure.unbound",
+            TelemetryValue::Float(0.99),
+            DataQuality::Good,
+            timestamp,
+        ),
+    ];
+
+    let messages = build_data_config_mqtt_publish_messages(&package, &samples).unwrap();
+
+    assert_eq!(messages.len(), 1);
+    let payload: serde_json::Value = serde_json::from_slice(&messages[0].payload).unwrap();
+    assert_eq!(payload["values"]["pressure"], 0.82);
+    assert_eq!(payload["values"]["pressureReported"], 0.82);
+    assert!(payload["values"].get("unboundReported").is_none());
+}
+
+#[test]
+fn data_config_payload_rejects_algorithm_output_json_field_collisions() {
+    let package = EdgeConfigPackage::new("edge-dev", "v1")
+        .with_device(DeviceInstance::new("pump-1", "pump"))
+        .with_mqtt_uplink(MqttUplinkConfig::velamq(
+            "velamq-main",
+            "mqtts://velamq.local:8883",
+            "edge-dev-runtime",
+        ))
+        .with_algorithm(AlgorithmSpec::dsl(
+            "pressure-change",
+            "v1",
+            AlgorithmKind::ChangeReport,
+            AlgorithmDsl {
+                inputs: vec![AlgorithmInputBinding::new("p", "pressure")],
+                trigger: AlgorithmTrigger::on_sample(),
+                steps: vec![AlgorithmStep::change_filter("p", 0.1)],
+                outputs: vec![AlgorithmOutput::virtual_point("pressure", "pressure.reported")],
+                report: AlgorithmReportPolicy::new(AlgorithmReportMode::OnChange, "velamq-main"),
+            },
+        ))
+        .with_data_config(
+            DataConfig::new(
+                "pump_status",
+                "泵运行状态上报",
+                "pump-1",
+                "modbus-line-a",
+                DataConfigCollection::new(1000),
+                DataConfigPublish::new(
+                    "velamq-main",
+                    "factory/{edge_id}/{device_id}/status",
+                    DataConfigPayload::object(),
+                ),
+            )
+            .with_point(DataConfigPoint::new(
+                "pressure",
+                "pump.pressure",
+                PointAddress::modbus_holding_register(40001),
+                TelemetryType::Float,
+                "pressure",
+            ))
+            .with_algorithm("pressure-change"),
+        );
+
+    let timestamp = Utc.with_ymd_and_hms(2026, 7, 1, 8, 30, 0).unwrap();
+    let samples = vec![
+        edge_core::TelemetrySample::new(
+            "pump-1",
+            "pressure",
+            TelemetryValue::Float(0.82),
+            DataQuality::Good,
+            timestamp,
+        ),
+        edge_core::TelemetrySample::new(
+            "pump-1",
+            "pressure.reported",
+            TelemetryValue::Float(0.82),
+            DataQuality::Good,
+            timestamp,
+        ),
+    ];
+
+    let error = build_data_config_mqtt_publish_messages(&package, &samples)
+        .expect_err("duplicate algorithm output json field is rejected");
+
+    assert!(error
+        .to_string()
+        .contains("data config pump_status has duplicate json field pressure"));
 }
 
 #[tokio::test]

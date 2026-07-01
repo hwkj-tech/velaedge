@@ -166,6 +166,69 @@ async fn configured_runtime_publishes_algorithm_virtual_points_to_mqtt_uplink() 
     );
 }
 
+#[tokio::test]
+async fn configured_runtime_publishes_data_config_with_algorithm_outputs() {
+    let package = EdgeConfigPackage::new("edge-dev", "2026.07.01-data-dsl")
+        .with_device(DeviceInstance::new("pump-1", "pump"))
+        .with_protocol_connection(ProtocolConnection::simulated("sim-main"))
+        .with_mqtt_uplink(
+            MqttUplinkConfig::velamq("velamq-main", "mqtt://velamq.local:1883", "edge-dev")
+                .with_topic_template("unused/{edge_id}/{device_id}/{telemetry_id}"),
+        )
+        .with_data_config(
+            DataConfig::new(
+                "pump_status",
+                "泵运行状态上报",
+                "pump-1",
+                "sim-main",
+                DataConfigCollection::new(1000),
+                DataConfigPublish::new(
+                    "velamq-main",
+                    "velamq/{edge_id}/{device_id}/status",
+                    DataConfigPayload::object(),
+                ),
+            )
+            .with_point(DataConfigPoint::new(
+                "pressure",
+                "pump.pressure",
+                PointAddress::simulated("pressure"),
+                TelemetryType::Float,
+                "pressure",
+            ))
+            .with_algorithm("pressure-change"),
+        )
+        .with_algorithm(AlgorithmSpec::dsl(
+            "pressure-change",
+            "v1",
+            AlgorithmKind::ChangeReport,
+            AlgorithmDsl {
+                inputs: vec![AlgorithmInputBinding::new("p", "pressure")],
+                trigger: AlgorithmTrigger::on_sample(),
+                steps: vec![AlgorithmStep::change_filter("p", 0.1)],
+                outputs: vec![AlgorithmOutput::virtual_point(
+                    "pressureReported",
+                    "pressure.reported",
+                )],
+                report: AlgorithmReportPolicy::new(AlgorithmReportMode::OnChange, "velamq-main"),
+            },
+        ));
+    let mut runtime = ConfiguredEdgeRuntime::new(package, ScriptedSerialBusFactory::new(vec![]))
+        .expect("runtime builds");
+    let mut publisher = RecordingMqttPublisher::default();
+
+    let report = runtime
+        .collect_data_configs_once_and_publish_mqtt(&mut publisher)
+        .await
+        .unwrap();
+
+    assert_eq!(report.collection.samples_collected, 2);
+    assert_eq!(report.mqtt_messages_published, 1);
+    let payload: serde_json::Value =
+        serde_json::from_slice(&publisher.messages()[0].payload).unwrap();
+    assert_eq!(payload["values"]["pressure"], 1.0);
+    assert_eq!(payload["values"]["pressureReported"], 1.0);
+}
+
 fn response(slave_id: u8, registers: &[u16]) -> Vec<u8> {
     let mut frame = vec![slave_id, 0x03, (registers.len() * 2) as u8];
     for register in registers {

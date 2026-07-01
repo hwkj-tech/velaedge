@@ -3,8 +3,8 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use edge_core::{
-    DataConfig, DataConfigPayloadMode, DataConfigPoint, EdgeConfigPackage, MqttUplinkConfig,
-    TelemetrySample, TelemetryValue,
+    AlgorithmSpec, DataConfig, DataConfigPayloadMode, DataConfigPoint, EdgeConfigPackage,
+    MqttUplinkConfig, PointAddress, TelemetrySample, TelemetryType, TelemetryValue,
 };
 use rumqttc::{AsyncClient, EventLoop, MqttOptions, QoS, Transport};
 use serde::Serialize;
@@ -154,19 +154,8 @@ pub fn build_data_config_mqtt_publish_messages(
         validate_uplink(uplink)?;
         validate_qos(data_config.publish.qos)?;
 
-        let selected = data_config
-            .points
-            .iter()
-            .filter_map(|point| {
-                samples
-                    .iter()
-                    .find(|sample| {
-                        sample.device_id == data_config.device_id
-                            && sample.telemetry_id == point.point_id
-                    })
-                    .map(|sample| (point, sample))
-            })
-            .collect::<Vec<_>>();
+        let synthetic_points = algorithm_output_points(package, data_config, samples);
+        let selected = data_config_selected_samples(data_config, samples, &synthetic_points);
 
         if selected.is_empty() {
             continue;
@@ -182,6 +171,104 @@ pub fn build_data_config_mqtt_publish_messages(
         });
     }
     Ok(messages)
+}
+
+fn data_config_selected_samples<'a>(
+    data_config: &'a DataConfig,
+    samples: &'a [TelemetrySample],
+    synthetic_points: &'a [DataConfigPoint],
+) -> Vec<(&'a DataConfigPoint, &'a TelemetrySample)> {
+    data_config
+        .points
+        .iter()
+        .chain(synthetic_points.iter())
+        .filter_map(|point| {
+            samples
+                .iter()
+                .find(|sample| {
+                    sample.device_id == data_config.device_id
+                        && sample.telemetry_id == point.point_id
+                })
+                .map(|sample| (point, sample))
+        })
+        .collect()
+}
+
+fn algorithm_output_points(
+    package: &EdgeConfigPackage,
+    data_config: &DataConfig,
+    samples: &[TelemetrySample],
+) -> Vec<DataConfigPoint> {
+    let configured_point_ids = data_config
+        .points
+        .iter()
+        .map(|point| point.point_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    package
+        .algorithms
+        .iter()
+        .filter(|algorithm| data_config.algorithm_ids.contains(&algorithm.id))
+        .flat_map(|algorithm| {
+            algorithm_outputs_for_samples(algorithm, samples, &configured_point_ids)
+        })
+        .collect()
+}
+
+fn algorithm_outputs_for_samples(
+    algorithm: &AlgorithmSpec,
+    samples: &[TelemetrySample],
+    configured_point_ids: &std::collections::BTreeSet<&str>,
+) -> Vec<DataConfigPoint> {
+    algorithm
+        .dsl
+        .outputs
+        .iter()
+        .filter(|output| !configured_point_ids.contains(output.point_id.as_str()))
+        .filter_map(|output| {
+            samples
+                .iter()
+                .find(|sample| sample.telemetry_id == output.point_id)
+                .map(|sample| {
+                    DataConfigPoint::new(
+                        output.point_id.clone(),
+                        output.point_id.clone(),
+                        PointAddress {
+                            kind: "algorithm".to_string(),
+                            value: algorithm.id.clone(),
+                        },
+                        telemetry_type_from_value(&sample.value),
+                        if output.name.trim().is_empty() {
+                            json_field_from_point_id(&output.point_id)
+                        } else {
+                            output.name.clone()
+                        },
+                    )
+                })
+        })
+        .collect()
+}
+
+fn telemetry_type_from_value(value: &TelemetryValue) -> TelemetryType {
+    match value {
+        TelemetryValue::Float(_) => TelemetryType::Float,
+        TelemetryValue::Integer(_) => TelemetryType::Integer,
+        TelemetryValue::Boolean(_) => TelemetryType::Boolean,
+        TelemetryValue::Text(_) => TelemetryType::Text,
+    }
+}
+
+fn json_field_from_point_id(point_id: &str) -> String {
+    point_id
+        .chars()
+        .map(|value| {
+            if value.is_ascii_alphanumeric() {
+                value
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 pub async fn publish_mqtt_samples<P>(
@@ -308,6 +395,8 @@ fn build_data_config_payload(
     data_config: &DataConfig,
     selected: &[(&DataConfigPoint, &TelemetrySample)],
 ) -> Result<Vec<u8>> {
+    ensure_unique_json_fields(data_config, selected)?;
+
     let timestamp = selected
         .iter()
         .map(|(_, sample)| sample.timestamp)
@@ -374,6 +463,23 @@ fn build_data_config_payload(
     }
 
     Ok(serde_json::to_vec(&serde_json::Value::Object(payload))?)
+}
+
+fn ensure_unique_json_fields(
+    data_config: &DataConfig,
+    selected: &[(&DataConfigPoint, &TelemetrySample)],
+) -> Result<()> {
+    let mut fields = std::collections::BTreeSet::new();
+    for (point, _) in selected {
+        if !fields.insert(point.json_field.as_str()) {
+            bail!(
+                "data config {} has duplicate json field {}",
+                data_config.config_id,
+                point.json_field
+            );
+        }
+    }
+    Ok(())
 }
 
 fn telemetry_value_to_json(value: &TelemetryValue) -> serde_json::Value {
