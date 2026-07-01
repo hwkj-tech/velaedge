@@ -2,17 +2,17 @@ use std::collections::BTreeMap;
 
 use anyhow::{bail, Result};
 use edge_core::{
-    CollectionTask, DataQuality, DeviceShadow, EdgeConfigPackage, EdgeRuntimeEvent,
+    CollectionTask, DataConfig, DataQuality, DeviceShadow, EdgeConfigPackage, EdgeRuntimeEvent,
     ProtocolConnection, ProtocolType, RuntimeEventCategory, RuntimeEventSeverity,
     TelemetryPointMapping, TelemetrySample, TelemetryValue,
 };
 
-use crate::CollectionSchedule;
 use crate::{
     config::validate_config_references, publish_data_config_mqtt_samples, publish_mqtt_samples,
     AlgorithmEngine, CollectionReport, ConfiguredMqttCollectionReport, ModbusRtuAdapter,
     MqttPublisher, ProtocolAdapter, SerialBusFactory,
 };
+use crate::{CollectionSchedule, DataConfigSchedule};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScheduledCollectionReport {
@@ -47,6 +47,43 @@ pub struct ResilientScheduledCollectionReport {
     pub tasks_failed: usize,
     pub samples_collected: usize,
     pub failures: Vec<ScheduledCollectionFailure>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScheduledDataConfigPublishReport {
+    pub data_configs_run: usize,
+    pub samples_collected: usize,
+    pub mqtt_messages_published: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScheduledDataConfigFailure {
+    pub config_id: String,
+    pub reason: String,
+}
+
+impl ScheduledDataConfigFailure {
+    pub fn to_runtime_event(&self, edge_id: &str) -> EdgeRuntimeEvent {
+        EdgeRuntimeEvent::new(
+            edge_id,
+            RuntimeEventSeverity::Warning,
+            RuntimeEventCategory::Collection,
+            "data_config.publish_failed",
+            format!("Data config {} failed", self.config_id),
+        )
+        .with_context("config_id", self.config_id.clone())
+        .with_context("reason", self.reason.clone())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResilientScheduledDataConfigPublishReport {
+    pub data_configs_run: usize,
+    pub data_configs_succeeded: usize,
+    pub data_configs_failed: usize,
+    pub samples_collected: usize,
+    pub mqtt_messages_published: usize,
+    pub failures: Vec<ScheduledDataConfigFailure>,
 }
 
 pub struct ConfiguredEdgeRuntime<F> {
@@ -211,6 +248,94 @@ where
         })
     }
 
+    pub async fn collect_due_data_configs_once_and_publish_mqtt<P>(
+        &mut self,
+        schedule: &mut DataConfigSchedule,
+        now_ms: u64,
+        publisher: &mut P,
+    ) -> Result<ScheduledDataConfigPublishReport>
+    where
+        P: MqttPublisher + ?Sized,
+    {
+        let due_config_ids = schedule
+            .due_config_ids(now_ms)
+            .into_iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let mut samples_collected = 0;
+        let mut mqtt_messages_published = 0;
+
+        for config_id in &due_config_ids {
+            let samples = self.collect_data_config_samples(config_id).await?;
+            samples_collected += samples.len();
+            mqtt_messages_published += self
+                .publish_data_config_samples(config_id, &samples, publisher)
+                .await?;
+            schedule.mark_ran(config_id, now_ms)?;
+        }
+
+        Ok(ScheduledDataConfigPublishReport {
+            data_configs_run: due_config_ids.len(),
+            samples_collected,
+            mqtt_messages_published,
+        })
+    }
+
+    pub async fn collect_due_data_configs_resilient_once<P>(
+        &mut self,
+        schedule: &mut DataConfigSchedule,
+        now_ms: u64,
+        publisher: &mut P,
+    ) -> Result<ResilientScheduledDataConfigPublishReport>
+    where
+        P: MqttPublisher + ?Sized,
+    {
+        let due_config_ids = schedule
+            .due_config_ids(now_ms)
+            .into_iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let mut data_configs_succeeded = 0;
+        let mut samples_collected = 0;
+        let mut mqtt_messages_published = 0;
+        let mut failures = Vec::new();
+
+        for config_id in &due_config_ids {
+            match self.collect_data_config_samples(config_id).await {
+                Ok(samples) => {
+                    samples_collected += samples.len();
+                    match self
+                        .publish_data_config_samples(config_id, &samples, publisher)
+                        .await
+                    {
+                        Ok(published) => {
+                            data_configs_succeeded += 1;
+                            mqtt_messages_published += published;
+                        }
+                        Err(error) => failures.push(ScheduledDataConfigFailure {
+                            config_id: config_id.clone(),
+                            reason: error.to_string(),
+                        }),
+                    }
+                }
+                Err(error) => failures.push(ScheduledDataConfigFailure {
+                    config_id: config_id.clone(),
+                    reason: error.to_string(),
+                }),
+            }
+            schedule.mark_ran(config_id, now_ms)?;
+        }
+
+        Ok(ResilientScheduledDataConfigPublishReport {
+            data_configs_run: due_config_ids.len(),
+            data_configs_succeeded,
+            data_configs_failed: failures.len(),
+            samples_collected,
+            mqtt_messages_published,
+            failures,
+        })
+    }
+
     pub fn reported_version(&self) -> &str {
         &self.package.version
     }
@@ -250,27 +375,67 @@ where
             if !data_config.enabled {
                 continue;
             }
-
-            let mappings = data_config
-                .points
-                .iter()
-                .map(|point| {
-                    TelemetryPointMapping::new(
-                        point.point_id.clone(),
-                        data_config.device_id.clone(),
-                        point.semantic_id.clone(),
-                        data_config.protocol_connection_id.clone(),
-                        point.address.clone(),
-                        point.value_type,
-                    )
-                    .with_interval_ms(data_config.collection.period_ms)
-                })
-                .collect::<Vec<_>>();
-
-            samples.append(&mut self.collect_mappings(mappings).await?);
+            samples.append(&mut self.collect_samples_for_data_config(&data_config).await?);
         }
 
         self.apply_algorithm_samples(samples)
+    }
+
+    async fn collect_data_config_samples(
+        &mut self,
+        config_id: &str,
+    ) -> Result<Vec<TelemetrySample>> {
+        let data_config = self
+            .package
+            .data_configs
+            .iter()
+            .find(|data_config| data_config.config_id == config_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("data config not found: {config_id}"))?;
+        if !data_config.enabled {
+            return Ok(Vec::new());
+        }
+        let samples = self.collect_samples_for_data_config(&data_config).await?;
+        self.apply_algorithm_samples(samples)
+    }
+
+    async fn collect_samples_for_data_config(
+        &mut self,
+        data_config: &DataConfig,
+    ) -> Result<Vec<TelemetrySample>> {
+        let mappings = data_config
+            .points
+            .iter()
+            .map(|point| {
+                TelemetryPointMapping::new(
+                    point.point_id.clone(),
+                    data_config.device_id.clone(),
+                    point.semantic_id.clone(),
+                    data_config.protocol_connection_id.clone(),
+                    point.address.clone(),
+                    point.value_type,
+                )
+                .with_interval_ms(data_config.collection.period_ms)
+            })
+            .collect::<Vec<_>>();
+
+        self.collect_mappings(mappings).await
+    }
+
+    async fn publish_data_config_samples<P>(
+        &self,
+        config_id: &str,
+        samples: &[TelemetrySample],
+        publisher: &mut P,
+    ) -> Result<usize>
+    where
+        P: MqttPublisher + ?Sized,
+    {
+        let mut package = self.package.clone();
+        package
+            .data_configs
+            .retain(|data_config| data_config.config_id == config_id);
+        publish_data_config_mqtt_samples(&package, samples, publisher).await
     }
 
     async fn collect_mappings(

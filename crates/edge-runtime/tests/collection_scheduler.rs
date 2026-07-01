@@ -1,10 +1,13 @@
 use edge_core::{
-    CollectionTask, DeviceInstance, EdgeConfigPackage, PointAddress, ProtocolConnection,
-    SerialConnectionSettings, TelemetryPointMapping, TelemetryType, TelemetryValue,
+    CollectionTask, DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint,
+    DataConfigPublish, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, PointAddress,
+    ProtocolConnection, SerialConnectionSettings, TelemetryPointMapping, TelemetryType,
+    TelemetryValue,
 };
 use edge_runtime::{
     append_modbus_rtu_crc, CollectionRunStats, CollectionSchedule, ConfiguredEdgeRuntime,
-    ScheduledCollectionFailure, ScriptedSerialBus, ScriptedSerialBusFactory,
+    DataConfigSchedule, RecordingMqttPublisher, ScheduledCollectionFailure, ScriptedSerialBus,
+    ScriptedSerialBusFactory,
 };
 
 fn package() -> EdgeConfigPackage {
@@ -86,6 +89,77 @@ fn two_connection_package() -> EdgeConfigPackage {
         ))
 }
 
+fn data_config_package() -> EdgeConfigPackage {
+    EdgeConfigPackage::new("edge-dev", "2026.07.01-data-scheduler")
+        .with_device(DeviceInstance::new("meter-1", "power-meter"))
+        .with_protocol_connection(ProtocolConnection::modbus_rtu_serial(
+            "meter-rs485-bus-1",
+            SerialConnectionSettings::new("/dev/ttyUSB0", 9600),
+        ))
+        .with_mqtt_uplink(
+            MqttUplinkConfig::velamq("velamq-main", "mqtt://velamq.local:1883", "edge-dev")
+                .with_topic_template("unused/{edge_id}/{device_id}/{telemetry_id}"),
+        )
+        .with_point_mapping(TelemetryPointMapping::new(
+            "voltage",
+            "meter-1",
+            "meter.voltage",
+            "meter-rs485-bus-1",
+            PointAddress::modbus_holding_register(40001),
+            TelemetryType::Integer,
+        ))
+        .with_point_mapping(TelemetryPointMapping::new(
+            "current",
+            "meter-1",
+            "meter.current",
+            "meter-rs485-bus-1",
+            PointAddress::modbus_holding_register(40002),
+            TelemetryType::Integer,
+        ))
+        .with_data_config(
+            DataConfig::new(
+                "meter_status_fast",
+                "电表状态",
+                "meter-1",
+                "meter-rs485-bus-1",
+                DataConfigCollection::new(1000),
+                DataConfigPublish::new(
+                    "velamq-main",
+                    "factory/{edge_id}/{device_id}/status",
+                    DataConfigPayload::object(),
+                ),
+            )
+            .with_point(DataConfigPoint::new(
+                "voltage",
+                "meter.voltage",
+                PointAddress::modbus_holding_register(40001),
+                TelemetryType::Integer,
+                "voltage",
+            )),
+        )
+        .with_data_config(
+            DataConfig::new(
+                "meter_current_slow",
+                "电表电流",
+                "meter-1",
+                "meter-rs485-bus-1",
+                DataConfigCollection::new(5000),
+                DataConfigPublish::new(
+                    "velamq-main",
+                    "factory/{edge_id}/{device_id}/current",
+                    DataConfigPayload::object(),
+                ),
+            )
+            .with_point(DataConfigPoint::new(
+                "current",
+                "meter.current",
+                PointAddress::modbus_holding_register(40002),
+                TelemetryType::Integer,
+                "current",
+            )),
+        )
+}
+
 #[tokio::test]
 async fn configured_runtime_collects_only_points_in_selected_task() {
     let bus = ScriptedSerialBus::new(vec![response(1, &[220])]);
@@ -124,6 +198,69 @@ fn collection_schedule_tracks_due_tasks_by_interval() {
     assert_eq!(
         schedule.due_task_ids(5000),
         vec!["voltage-fast", "current-slow"]
+    );
+}
+
+#[test]
+fn data_config_schedule_tracks_due_configs_by_period() {
+    let mut schedule = DataConfigSchedule::from_package(&data_config_package()).unwrap();
+
+    assert_eq!(
+        schedule.due_config_ids(0),
+        vec!["meter_status_fast", "meter_current_slow"]
+    );
+    schedule.mark_ran("meter_status_fast", 0).unwrap();
+    schedule.mark_ran("meter_current_slow", 0).unwrap();
+
+    assert!(schedule.due_config_ids(999).is_empty());
+    assert_eq!(schedule.due_config_ids(1000), vec!["meter_status_fast"]);
+    assert_eq!(
+        schedule.due_config_ids(5000),
+        vec!["meter_status_fast", "meter_current_slow"]
+    );
+}
+
+#[tokio::test]
+async fn configured_runtime_publishes_due_data_configs_by_period() {
+    let bus = ScriptedSerialBus::new(vec![
+        response(1, &[220]),
+        response(1, &[7]),
+        response(1, &[221]),
+    ]);
+    let factory = ScriptedSerialBusFactory::new(vec![("meter-rs485-bus-1".to_string(), bus)]);
+    let package = data_config_package();
+    let mut schedule = DataConfigSchedule::from_package(&package).unwrap();
+    let mut runtime = ConfiguredEdgeRuntime::new(package, factory).unwrap();
+    let mut publisher = RecordingMqttPublisher::default();
+
+    let first = runtime
+        .collect_due_data_configs_once_and_publish_mqtt(&mut schedule, 0, &mut publisher)
+        .await
+        .unwrap();
+    assert_eq!(first.data_configs_run, 2);
+    assert_eq!(first.samples_collected, 2);
+    assert_eq!(first.mqtt_messages_published, 2);
+    assert_eq!(publisher.messages().len(), 2);
+    assert_eq!(
+        publisher.messages()[0].topic,
+        "factory/edge-dev/meter-1/status"
+    );
+    assert_eq!(
+        publisher.messages()[1].topic,
+        "factory/edge-dev/meter-1/current"
+    );
+
+    let second = runtime
+        .collect_due_data_configs_once_and_publish_mqtt(&mut schedule, 1000, &mut publisher)
+        .await
+        .unwrap();
+    assert_eq!(second.data_configs_run, 1);
+    assert_eq!(second.samples_collected, 1);
+    assert_eq!(second.mqtt_messages_published, 1);
+    assert_eq!(publisher.messages().len(), 3);
+    assert_eq!(
+        publisher.messages()[2].topic,
+        "factory/edge-dev/meter-1/status"
     );
 }
 

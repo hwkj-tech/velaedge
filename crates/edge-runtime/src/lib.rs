@@ -22,8 +22,9 @@ pub use algorithm::{AlgorithmEngine, AlgorithmExecutionReport};
 pub use capability::RuntimeCapabilityConfig;
 pub use config::{AppliedEdgeConfig, ConfiguredMqttCollectionReport, ConfiguredSimulatedRuntime};
 pub use configured_runtime::{
-    ConfiguredEdgeRuntime, ResilientScheduledCollectionReport, ScheduledCollectionFailure,
-    ScheduledCollectionReport,
+    ConfiguredEdgeRuntime, ResilientScheduledCollectionReport,
+    ResilientScheduledDataConfigPublishReport, ScheduledCollectionFailure,
+    ScheduledCollectionReport, ScheduledDataConfigFailure, ScheduledDataConfigPublishReport,
 };
 pub use discovery::SimulatedSerialDiscovery;
 pub use edgelink_client::{
@@ -45,7 +46,7 @@ pub use mqtt_uplink::{
 pub use protocol::{ProtocolAdapter, SimulatedProtocolAdapter};
 pub use reporting::{report_runtime_status_once, HttpRuntimeStatusReporter, RuntimeStatusReporter};
 pub use runtime::{CollectionReport, EdgeRuntime};
-pub use scheduler::CollectionSchedule;
+pub use scheduler::{CollectionSchedule, DataConfigSchedule};
 pub use serial::{
     require_serial_endpoint, ScriptedSerialBus, ScriptedSerialBusFactory, SerialBus,
     SerialBusFactory, TokioSerialBus, TokioSerialBusFactory,
