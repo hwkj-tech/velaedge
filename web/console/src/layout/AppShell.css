@@ -1167,6 +1167,53 @@
   border-bottom: 0;
 }
 
+.edge-config-inline {
+  display: grid;
+  min-width: 240px;
+  gap: 7px;
+}
+
+.edge-config-inline-meter {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e9eff7;
+}
+
+.edge-config-inline-meter span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2f6fc6 0%, #20a66a 100%);
+}
+
+.edge-config-inline-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.edge-config-inline-tags span {
+  display: inline-flex;
+  min-height: 20px;
+  align-items: center;
+  border-radius: 6px;
+  background: #f4f7fb;
+  color: #42526b;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+
+.edge-config-inline-tags .tag {
+  min-height: 20px;
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 0 6px;
+}
+
 .tag {
   display: inline-flex;
   min-height: 24px;

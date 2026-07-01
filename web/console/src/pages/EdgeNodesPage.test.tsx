@@ -24,16 +24,35 @@ describe('EdgeNodesPage', () => {
 
     render(
       <EdgeNodesPage
+        configSummaries={[
+          {
+            collectionTaskCount: 1,
+            dataConfigCount: 1,
+            edgeId: 'edge-dev',
+            mqttSinkId: 'velamq-main',
+            pointCount: 4,
+            protocolCount: 2,
+            releaseStatus: '已发布',
+          },
+        ]}
         edges={edges}
         onConfigureEdge={onConfigureEdge}
         onMonitorEdge={onMonitorEdge}
       />,
     );
 
+    expect(screen.getByRole('columnheader', { name: '配置摘要' })).toBeInTheDocument();
+    expect(screen.getByText('2 协议')).toBeInTheDocument();
+    expect(screen.getByText('4 点位')).toBeInTheDocument();
+    expect(screen.getByText('1 任务')).toBeInTheDocument();
+    expect(screen.getByText('1 上报')).toBeInTheDocument();
+    expect(screen.getByText('已发布')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '配置 edge-dev' }));
     expect(screen.getByRole('dialog', { name: '配置边端' })).toBeInTheDocument();
     expect(screen.getByText('配置完整度')).toBeInTheDocument();
-    expect(screen.getByText('建议先补齐采集连接')).toBeInTheDocument();
+    expect(screen.getByText('100%')).toBeInTheDocument();
+    expect(screen.getByText('配置链路状态良好')).toBeInTheDocument();
+    expect(screen.getByText('采集、处理、上报和发布链路基本闭环')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '打开配置总览' }));
     fireEvent.click(screen.getByRole('button', { name: '运行监控 edge-dev' }));
 

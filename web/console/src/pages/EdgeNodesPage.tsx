@@ -97,64 +97,72 @@ export function EdgeNodesPage({
                 <th>站点/分组</th>
                 <th>Runtime</th>
                 <th>状态</th>
+                <th>配置摘要</th>
                 <th>CPU / 内存 / 磁盘</th>
                 <th>心跳</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody>
-              {visibleEdges.map((edge) => (
-                <tr key={edge.edgeId}>
-                  <td>{edge.edgeId}</td>
-                  <td>{edge.displayName}</td>
-                  <td>{edge.site}</td>
-                  <td>{edge.runtimeId}</td>
-                  <td>
-                    <span className={edge.status === '健康' ? 'tag ok' : 'tag warn'}>
-                      {edge.status}
-                    </span>
-                  </td>
-                  <td>{edge.resources}</td>
-                  <td>{edge.heartbeat}</td>
-                  <td>
-                    <div className="row-actions">
-                      <button
-                        aria-label={`配置 ${edge.edgeId}`}
-                        className="secondary-button compact"
-                        onClick={() => setConfigDialog(edge)}
-                        type="button"
-                      >
-                        <Settings2 size={14} aria-hidden="true" />
-                        配置
-                      </button>
-                      <button
-                        aria-label={`运行监控 ${edge.edgeId}`}
-                        className="secondary-button compact"
-                        onClick={() => onMonitorEdge?.(edge.edgeId)}
-                        type="button"
-                      >
-                        <Activity size={14} aria-hidden="true" />
-                        监控
-                      </button>
-                      <button
-                        aria-label={`MQTT 配置 ${edge.edgeId}`}
-                        className="secondary-button compact"
-                        onClick={() => {
-                          setSaveState('idle');
-                          setMqttDialog({
-                            edgeId: edge.edgeId,
-                            form: mqttUplink ?? defaultMqttUplink(edge.edgeId),
-                          });
-                        }}
-                        type="button"
-                      >
-                        <Radio size={14} aria-hidden="true" />
-                        MQTT
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {visibleEdges.map((edge) => {
+                const summary = findConfigSummary(configSummaries, edge.edgeId);
+
+                return (
+                  <tr key={edge.edgeId}>
+                    <td>{edge.edgeId}</td>
+                    <td>{edge.displayName}</td>
+                    <td>{edge.site}</td>
+                    <td>{edge.runtimeId}</td>
+                    <td>
+                      <span className={edge.status === '健康' ? 'tag ok' : 'tag warn'}>
+                        {edge.status}
+                      </span>
+                    </td>
+                    <td>
+                      <EdgeConfigSummaryInline summary={summary} />
+                    </td>
+                    <td>{edge.resources}</td>
+                    <td>{edge.heartbeat}</td>
+                    <td>
+                      <div className="row-actions">
+                        <button
+                          aria-label={`配置 ${edge.edgeId}`}
+                          className="secondary-button compact"
+                          onClick={() => setConfigDialog(edge)}
+                          type="button"
+                        >
+                          <Settings2 size={14} aria-hidden="true" />
+                          配置
+                        </button>
+                        <button
+                          aria-label={`运行监控 ${edge.edgeId}`}
+                          className="secondary-button compact"
+                          onClick={() => onMonitorEdge?.(edge.edgeId)}
+                          type="button"
+                        >
+                          <Activity size={14} aria-hidden="true" />
+                          监控
+                        </button>
+                        <button
+                          aria-label={`MQTT 配置 ${edge.edgeId}`}
+                          className="secondary-button compact"
+                          onClick={() => {
+                            setSaveState('idle');
+                            setMqttDialog({
+                              edgeId: edge.edgeId,
+                              form: mqttUplink ?? defaultMqttUplink(edge.edgeId),
+                            });
+                          }}
+                          type="button"
+                        >
+                          <Radio size={14} aria-hidden="true" />
+                          MQTT
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -239,6 +247,26 @@ export function EdgeNodesPage({
           </form>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function EdgeConfigSummaryInline({ summary }: { summary: EdgeConfigSummary }) {
+  const completion = calculateConfigCompletion(summary);
+  const releaseClass = summary.releaseStatus.includes('待') ? 'tag warn' : 'tag ok';
+
+  return (
+    <div className="edge-config-inline">
+      <div className="edge-config-inline-meter" aria-label="边端配置完整度">
+        <span style={{ width: `${completion}%` }} />
+      </div>
+      <div className="edge-config-inline-tags">
+        <span>{summary.protocolCount} 协议</span>
+        <span>{summary.pointCount} 点位</span>
+        <span>{summary.collectionTaskCount} 任务</span>
+        <span>{summary.dataConfigCount} 上报</span>
+        <span className={releaseClass}>{summary.releaseStatus}</span>
+      </div>
     </div>
   );
 }
