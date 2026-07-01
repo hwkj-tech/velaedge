@@ -2,9 +2,9 @@ use cloud_control::{
     AuditAction, CloudControlStore, ConfigValidator, ReleaseService, ReleaseStatus,
 };
 use edge_core::{
-    CollectionTask, DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPublish,
-    DeviceInstance, DeviceSpec, EdgeConfigPackage, PointAddress, ProtocolConnection,
-    TelemetryPoint, TelemetryPointMapping, TelemetryType,
+    CollectionTask, DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint,
+    DataConfigPublish, DeviceInstance, DeviceSpec, EdgeConfigPackage, PointAddress,
+    ProtocolConnection, TelemetryPoint, TelemetryPointMapping, TelemetryType,
 };
 
 fn valid_package() -> EdgeConfigPackage {
@@ -81,6 +81,61 @@ fn validator_rejects_data_config_with_missing_mqtt_sink() {
     assert!(errors
         .iter()
         .any(|error| error.message.contains("missing-sink")));
+}
+
+#[test]
+fn validator_rejects_data_config_with_missing_point_and_duplicate_json_field() {
+    let package = valid_package()
+        .with_mqtt_uplink(edge_core::MqttUplinkConfig::velamq(
+            "velamq-main",
+            "mqtt://velamq.local:1883",
+            "edge-dev",
+        ))
+        .with_point_mapping(TelemetryPointMapping::new(
+            "running",
+            "pump-1",
+            "running",
+            "sim-main",
+            PointAddress::simulated("running"),
+            TelemetryType::Boolean,
+        ))
+        .with_data_config(
+            DataConfig::new(
+                "pump_status",
+                "泵状态上报",
+                "pump-1",
+                "sim-main",
+                DataConfigCollection::new(1000),
+                DataConfigPublish::new(
+                    "velamq-main",
+                    "factory/{edge_id}/{device_id}/status",
+                    DataConfigPayload::object(),
+                ),
+            )
+            .with_point(DataConfigPoint::new(
+                "pressure",
+                "pump.pressure",
+                PointAddress::simulated("pressure"),
+                TelemetryType::Float,
+                "value",
+            ))
+            .with_point(DataConfigPoint::new(
+                "missing_point",
+                "pump.missing",
+                PointAddress::simulated("missing_point"),
+                TelemetryType::Float,
+                "value",
+            )),
+        );
+
+    let errors = ConfigValidator::validate_package(&package);
+
+    assert!(errors
+        .iter()
+        .any(|error| error.message.contains("missing point `missing_point`")));
+    assert!(errors
+        .iter()
+        .any(|error| error.message.contains("duplicate json field `value`")));
 }
 
 #[test]

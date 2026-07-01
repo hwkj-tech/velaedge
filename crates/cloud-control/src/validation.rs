@@ -33,6 +33,11 @@ impl ConfigValidator {
             .iter()
             .map(|algorithm| algorithm.id.as_str())
             .collect::<BTreeSet<_>>();
+        let point_ids = package
+            .point_mappings
+            .iter()
+            .map(|mapping| mapping.point_id.as_str())
+            .collect::<BTreeSet<_>>();
 
         for mapping in &package.point_mappings {
             if !connections.contains(mapping.protocol_connection_id.as_str()) {
@@ -113,6 +118,7 @@ impl ConfigValidator {
                     ),
                 });
             }
+            let mut json_fields = BTreeSet::new();
             for point in &data_config.points {
                 if point.point_id.trim().is_empty() {
                     errors.push(ValidationError {
@@ -121,12 +127,26 @@ impl ConfigValidator {
                             data_config.config_id
                         ),
                     });
+                } else if !point_ids.contains(point.point_id.as_str()) {
+                    errors.push(ValidationError {
+                        message: format!(
+                            "data config `{}` references missing point `{}`",
+                            data_config.config_id, point.point_id
+                        ),
+                    });
                 }
                 if point.json_field.trim().is_empty() {
                     errors.push(ValidationError {
                         message: format!(
                             "data config `{}` point `{}` json field is required",
                             data_config.config_id, point.point_id
+                        ),
+                    });
+                } else if !json_fields.insert(point.json_field.as_str()) {
+                    errors.push(ValidationError {
+                        message: format!(
+                            "data config `{}` has duplicate json field `{}`",
+                            data_config.config_id, point.json_field
                         ),
                     });
                 }
