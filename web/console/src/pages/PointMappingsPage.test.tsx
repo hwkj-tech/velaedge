@@ -16,6 +16,16 @@ describe('PointMappingsPage', () => {
     expect(screen.queryByText(/草稿/)).not.toBeInTheDocument();
   });
 
+  it('shows an explicit row action for editing point mappings', () => {
+    render(<PointMappingsPage selectedEdgeId="edge-dev" />);
+
+    expect(screen.getByRole('columnheader', { name: '操作' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '修改点位 pressure' }));
+
+    expect(screen.getByRole('dialog', { name: '编辑点位 pressure' })).toBeInTheDocument();
+    expect(screen.getByLabelText('地址值')).toHaveValue('40001');
+  });
+
   it('saves edited point mapping drafts from the editor drawer', async () => {
     const onSavePoint = vi.fn().mockResolvedValue(undefined);
 

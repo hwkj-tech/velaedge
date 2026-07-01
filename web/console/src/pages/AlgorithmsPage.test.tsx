@@ -17,6 +17,16 @@ describe('AlgorithmsPage', () => {
     expect(screen.getByLabelText('DSL 预览')).toHaveTextContent('changeFilter');
   });
 
+  it('shows an explicit row action for editing algorithms', () => {
+    render(<AlgorithmsPage selectedEdgeId="edge-dev" />);
+
+    expect(screen.getByRole('columnheader', { name: '操作' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '修改算法 pressure-change-report' }));
+
+    expect(screen.getByRole('dialog', { name: '编辑算法 pressure-change-report' })).toBeInTheDocument();
+    expect(screen.getByLabelText('算法类型')).toHaveValue('ChangeReport');
+  });
+
   it('saves edited algorithm drafts from the editor drawer', async () => {
     const onSaveAlgorithm = vi.fn().mockResolvedValue(undefined);
 

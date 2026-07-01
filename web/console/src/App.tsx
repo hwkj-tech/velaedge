@@ -67,6 +67,7 @@ import type {
 } from './api/types';
 import { AppShell, type PageKey } from './layout/AppShell';
 import { AgentAssistantPage } from './pages/AgentAssistantPage';
+import { AlgorithmsPage } from './pages/AlgorithmsPage';
 import { AuditLogPage } from './pages/AuditLogPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { DataConfigsPage } from './pages/DataConfigsPage';
@@ -578,6 +579,7 @@ export default function App() {
         handleAssessAlgorithmRisk,
         handleConfigureEdge,
         handleCreateAlgorithm,
+        handleSaveAlgorithm,
         handleCreateCollectionTask,
         handleCreateDeviceModel,
         handleSaveDeviceModel,
@@ -738,6 +740,11 @@ function renderPage(
     edgeId: string,
     request: CreateAlgorithmRequest,
   ) => Promise<AlgorithmResponse>,
+  onSaveAlgorithm: (
+    edgeId: string,
+    algorithmId: string,
+    request: SaveAlgorithmRequest,
+  ) => Promise<void>,
   onCreateCollectionTask: (
     edgeId: string,
     request: CreateCollectionTaskRequest,
@@ -853,6 +860,8 @@ function renderPage(
           edges={edgeNodes}
           initialTab={edgeConfigInitialTab}
           mqttUplink={mqttUplink}
+          onAssessAlgorithmRisk={onAssessAlgorithmRisk}
+          onCreateAlgorithm={onCreateAlgorithm}
           onCreateCollectionTask={onCreateCollectionTask}
           onCreatePoint={onCreatePoint}
           onCreateProtocolConnection={onCreateProtocolConnection}
@@ -862,6 +871,7 @@ function renderPage(
           onPublish={onPublish}
           onReleaseDiff={onReleaseDiff}
           onRunDiscovery={onRunDiscovery}
+          onSaveAlgorithm={onSaveAlgorithm}
           onSaveCollectionTask={onSaveCollectionTask}
           onSaveDataConfig={onSaveDataConfig}
           onSaveMqttUplink={onSaveMqttUplink}
@@ -949,6 +959,7 @@ type EdgeConfigTab =
   | 'protocol'
   | 'points'
   | 'collection'
+  | 'algorithms'
   | 'reports'
   | 'mqtt'
   | 'discovery'
@@ -964,8 +975,10 @@ function EdgeConfigWorkspace({
   initialTab,
   mqttUplink,
   onCreateCollectionTask,
+  onCreateAlgorithm,
   onCreatePoint,
   onCreateProtocolConnection,
+  onAssessAlgorithmRisk,
   onDeleteDataConfig,
   onGenerateSchedule,
   onImportPoints,
@@ -973,6 +986,7 @@ function EdgeConfigWorkspace({
   onReleaseDiff,
   onRunDiscovery,
   onSaveCollectionTask,
+  onSaveAlgorithm,
   onSaveDataConfig,
   onSaveMqttUplink,
   onSavePoint,
@@ -994,6 +1008,10 @@ function EdgeConfigWorkspace({
     edgeId: string,
     request: CreateCollectionTaskRequest,
   ) => Promise<CollectionTaskResponse>;
+  onCreateAlgorithm: (
+    edgeId: string,
+    request: CreateAlgorithmRequest,
+  ) => Promise<AlgorithmResponse>;
   onCreatePoint: (
     edgeId?: string,
     request?: CreatePointMappingRequest,
@@ -1002,6 +1020,7 @@ function EdgeConfigWorkspace({
     edgeId: string,
     request: CreateProtocolConnectionRequest,
   ) => Promise<ProtocolConnectionResponse>;
+  onAssessAlgorithmRisk: (edgeId: string) => Promise<ManagementActionResponse>;
   onDeleteDataConfig: (edgeId: string, configId: string) => Promise<void>;
   onGenerateSchedule: (edgeId: string) => Promise<ManagementActionResponse>;
   onImportPoints: (edgeId: string) => Promise<ManagementActionResponse>;
@@ -1015,6 +1034,11 @@ function EdgeConfigWorkspace({
     edgeId: string,
     taskId: string,
     request: SaveCollectionTaskRequest,
+  ) => Promise<void>;
+  onSaveAlgorithm: (
+    edgeId: string,
+    algorithmId: string,
+    request: SaveAlgorithmRequest,
   ) => Promise<void>;
   onSaveDataConfig: (
     edgeId: string,
@@ -1047,6 +1071,7 @@ function EdgeConfigWorkspace({
     { key: 'protocol', label: '协议连接' },
     { key: 'points', label: '点位配置' },
     { key: 'collection', label: '采集任务' },
+    { key: 'algorithms', label: '算法配置' },
     { key: 'reports', label: '数据上报' },
     { key: 'mqtt', label: 'MQTT' },
     { key: 'discovery', label: '点位探测' },
@@ -1139,6 +1164,18 @@ function EdgeConfigWorkspace({
             onSaveTask={onSaveCollectionTask}
             selectedEdgeId={edgeId}
             tasks={collectionTasks}
+          />
+        ) : null}
+        {activeTab === 'algorithms' ? (
+          <AlgorithmsPage
+            algorithms={algorithms}
+            edges={edges}
+            embedded
+            mode="configure"
+            onAssessRisk={onAssessAlgorithmRisk}
+            onCreateAlgorithm={onCreateAlgorithm}
+            onSaveAlgorithm={onSaveAlgorithm}
+            selectedEdgeId={edgeId}
           />
         ) : null}
         {activeTab === 'reports' ? (

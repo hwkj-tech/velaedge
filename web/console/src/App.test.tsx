@@ -862,6 +862,16 @@ describe('App cloud console write actions', () => {
     expect(screen.queryByRole('button', { name: '维护模式 edge-dev' })).not.toBeInTheDocument();
   });
 
+  it('opens edge-scoped algorithm configuration from the edge workspace', async () => {
+    render(<App />);
+    await openEdgeConfiguration();
+
+    fireEvent.click(screen.getByRole('tab', { name: '算法配置' }));
+
+    expect(await screen.findByRole('heading', { name: '算法模板', level: 3 })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '修改算法 pump-anomaly-v1' })).toBeInTheDocument();
+  });
+
   it.skip('saves algorithm drafts through the selected edge API', async () => {
     vi.mocked(fetchEdgeAlgorithms)
       .mockResolvedValueOnce(algorithms)

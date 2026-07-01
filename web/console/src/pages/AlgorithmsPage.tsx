@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
-import { Plus, ShieldCheck, X } from 'lucide-react';
+import { Edit3, Plus, ShieldCheck, X } from 'lucide-react';
 
 import type {
   AlgorithmDsl,
@@ -288,6 +288,7 @@ export function AlgorithmsPage({
                   <th>输入点位</th>
                   <th>输出点位</th>
                   <th>校验</th>
+                  {isConfigureMode ? <th>操作</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -323,6 +324,22 @@ export function AlgorithmsPage({
                         {algorithm.validation}
                       </span>
                     </td>
+                    {isConfigureMode ? (
+                      <td>
+                        <button
+                          aria-label={`修改算法 ${algorithm.algorithmId}`}
+                          className="secondary-button compact"
+                          onClick={() => {
+                            setSelectedAlgorithmId(algorithm.algorithmId);
+                            setEditDialogOpen(true);
+                          }}
+                          type="button"
+                        >
+                          <Edit3 size={14} aria-hidden="true" />
+                          修改
+                        </button>
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>

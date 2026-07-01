@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { FileInput, Plus, ShieldCheck, X } from 'lucide-react';
+import { Edit3, FileInput, Plus, ShieldCheck, X } from 'lucide-react';
 
 import type {
   CreatePointMappingRequest,
@@ -659,6 +659,26 @@ function pointColumns(
       width: '90px',
       render: (row) => <span className="tag ok">{row.status}</span>,
     },
+    ...(isConfigureMode
+      ? [
+          {
+            key: 'actions',
+            header: '操作',
+            width: '110px',
+            render: (row: PointMappingResponse) => (
+              <button
+                aria-label={`修改点位 ${row.pointId}`}
+                className="secondary-button compact"
+                onClick={() => onSelectPoint(row.pointId)}
+                type="button"
+              >
+                <Edit3 size={14} aria-hidden="true" />
+                修改
+              </button>
+            ),
+          },
+        ]
+      : []),
   ];
 }
 

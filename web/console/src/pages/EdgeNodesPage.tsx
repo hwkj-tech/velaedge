@@ -31,6 +31,7 @@ export type EdgeConfigTabKey =
   | 'protocol'
   | 'points'
   | 'collection'
+  | 'algorithms'
   | 'reports'
   | 'mqtt'
   | 'release';
@@ -282,6 +283,13 @@ function EdgeConfigSelectionDialog({
       label: '采集任务',
       status: `${summary.collectionTaskCount} 个任务`,
       tab: 'collection',
+    },
+    {
+      action: '配置算法',
+      description: 'DSL 规则、窗口聚合、变化上报和虚拟点位输出',
+      label: '算法配置',
+      status: 'DSL',
+      tab: 'algorithms',
     },
     {
       action: '配置上报',
