@@ -1,6 +1,7 @@
 use chrono::Utc;
 use edge_core::{
     decode_edgelink_frame, encode_edgelink_frame, CloudSyncMetrics, CollectionRuntimeMetrics,
+    DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish,
     DeviceInstance, EdgeConfigPackage, EdgeHealth, EdgeLinkMessage, EdgeLinkMessageKind,
     EdgeLinkPayload, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, LocalStoreMetrics,
     MqttUplinkConfig, PointAddress, ProtocolConnection, ProtocolRuntimeMetrics,
@@ -355,6 +356,64 @@ async fn runtime_client_publishes_mqtt_after_edgelink_config_deploy() {
     gateway.await.expect("gateway task should finish");
 }
 
+#[tokio::test]
+async fn runtime_client_publishes_data_config_json_after_edgelink_config_deploy() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let gateway_addr = listener.local_addr().expect("listener should expose addr");
+
+    let gateway = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("runtime should connect");
+
+        let hello = read_one_message(&mut stream).await;
+        write_ack_for(&mut stream, &hello).await;
+
+        let deploy = EdgeLinkMessage::config_deploy(
+            "edge-dev",
+            "runtime-dev",
+            2,
+            data_config_deploy_package(),
+        );
+        let deploy_frame = encode_edgelink_frame(&deploy).expect("deploy should encode");
+        stream
+            .write_all(&deploy_frame)
+            .await
+            .expect("deploy should be written");
+
+        let report = read_one_message(&mut stream).await;
+        write_ack_for(&mut stream, &report).await;
+
+        let metrics = read_one_message(&mut stream).await;
+        write_ack_for(&mut stream, &metrics).await;
+    });
+
+    let mut mqtt = RecordingMqttPublisher::default();
+    let report = publish_edgelink_runtime_status_with_mqtt_publisher_once(
+        &gateway_addr.to_string(),
+        "edge-dev",
+        "runtime-dev",
+        "0.1.0",
+        runtime_metrics("edge-dev", "runtime-dev"),
+        Vec::new(),
+        &mut mqtt,
+    )
+    .await
+    .expect("runtime status should publish");
+
+    assert_eq!(
+        report.applied_config_version.as_deref(),
+        Some("2026.06.27-041")
+    );
+    assert_eq!(report.mqtt_messages_published, 1);
+    assert_eq!(mqtt.messages().len(), 1);
+    assert_eq!(mqtt.messages()[0].topic, "factory/edge-dev/pump-1/status");
+    let payload: serde_json::Value = serde_json::from_slice(&mqtt.messages()[0].payload).unwrap();
+    assert_eq!(payload["config_id"], "pump_status");
+    assert_eq!(payload["values"]["pressure"], 1.0);
+    gateway.await.expect("gateway task should finish");
+}
+
 async fn read_one_message(stream: &mut TcpStream) -> EdgeLinkMessage {
     let mut header = [0_u8; 4];
     stream
@@ -449,4 +508,41 @@ fn mqtt_deploy_package() -> EdgeConfigPackage {
             PointAddress::simulated("pressure"),
             TelemetryType::Float,
         ))
+}
+
+fn data_config_deploy_package() -> EdgeConfigPackage {
+    mqtt_deploy_package()
+        .with_data_config(
+            DataConfig::new(
+                "pump_status",
+                "泵状态上报",
+                "pump-1",
+                "sim-main",
+                DataConfigCollection::new(1000),
+                DataConfigPublish::new(
+                    "velamq-main",
+                    "factory/{edge_id}/{device_id}/status",
+                    DataConfigPayload::object(),
+                ),
+            )
+            .with_point(DataConfigPoint::new(
+                "pressure",
+                "pump.pressure",
+                PointAddress::simulated("pressure"),
+                TelemetryType::Float,
+                "pressure",
+            )),
+        )
+        .tap_version("2026.06.27-041")
+}
+
+trait TestPackageVersionExt {
+    fn tap_version(self, version: &str) -> Self;
+}
+
+impl TestPackageVersionExt for EdgeConfigPackage {
+    fn tap_version(mut self, version: &str) -> Self {
+        self.version = version.to_string();
+        self
+    }
 }

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use edge_core::{
-    CollectionTask, DeviceInstance, EdgeConfigPackage, EdgeRuntimeEvent,
+    CollectionTask, DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint,
+    DataConfigPublish, DeviceInstance, EdgeConfigPackage, EdgeRuntimeEvent,
     EdgeRuntimeMetricsSnapshot, MqttUplinkConfig, PointAddress, ProtocolConnection,
     TelemetryPointMapping, TelemetryType,
 };
@@ -144,5 +145,64 @@ async fn sync_and_report_with_mqtt_publisher_uploads_collected_samples() {
     assert_eq!(report.mqtt_messages_published, 1);
     assert_eq!(mqtt.messages().len(), 1);
     assert_eq!(mqtt.messages()[0].topic, "velamq/edge-dev/pump-1/pressure");
+    assert_eq!(reporter.metrics.len(), 1);
+}
+
+#[tokio::test]
+async fn sync_and_report_with_mqtt_publisher_prefers_data_config_json_topics() {
+    let mut package = package();
+    package.mqtt_uplinks.push(
+        MqttUplinkConfig::velamq("velamq-main", "mqtt://velamq.local:1883", "edge-dev")
+            .with_topic_template("legacy/{edge_id}/{device_id}/{telemetry_id}"),
+    );
+    package.data_configs.push(
+        DataConfig::new(
+            "pump_status",
+            "泵状态上报",
+            "pump-1",
+            "sim-main",
+            DataConfigCollection::new(1000),
+            DataConfigPublish::new(
+                "velamq-main",
+                "factory/{edge_id}/{device_id}/status",
+                DataConfigPayload::object(),
+            ),
+        )
+        .with_point(DataConfigPoint::new(
+            "pressure",
+            "pump.pressure",
+            PointAddress::simulated("pressure"),
+            TelemetryType::Float,
+            "pressure",
+        )),
+    );
+    let mut client = MemorySyncClient {
+        desired: EdgeDesiredConfig {
+            desired_version: "2026.06.26-002".to_string(),
+            package,
+        },
+        reported: Vec::new(),
+    };
+    let mut reporter = MemoryRuntimeReporter::default();
+    let mut mqtt = RecordingMqttPublisher::default();
+
+    let report = sync_and_report_with_mqtt_publisher_once(
+        "edge-dev",
+        "runtime-sync",
+        &mut client,
+        &mut reporter,
+        &mut mqtt,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(report.applied_version, "2026.06.26-002");
+    assert_eq!(report.samples_collected, 1);
+    assert_eq!(report.mqtt_messages_published, 1);
+    assert_eq!(mqtt.messages().len(), 1);
+    assert_eq!(mqtt.messages()[0].topic, "factory/edge-dev/pump-1/status");
+    let payload: serde_json::Value = serde_json::from_slice(&mqtt.messages()[0].payload).unwrap();
+    assert_eq!(payload["config_id"], "pump_status");
+    assert_eq!(payload["values"]["pressure"], 1.0);
     assert_eq!(reporter.metrics.len(), 1);
 }

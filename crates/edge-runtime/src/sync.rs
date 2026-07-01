@@ -170,9 +170,15 @@ where
     let mut runtime = ConfiguredEdgeRuntime::new(applied.package().clone(), TokioSerialBusFactory)?;
     let collection = if let Some(uplink) = applied.package().mqtt_uplinks.first() {
         let mut publisher = RumqttcMqttPublisher::connect_from_uplink(uplink)?;
-        runtime
-            .collect_once_and_publish_mqtt(&mut publisher)
-            .await?
+        if applied.package().data_configs.is_empty() {
+            runtime
+                .collect_once_and_publish_mqtt(&mut publisher)
+                .await?
+        } else {
+            runtime
+                .collect_data_configs_once_and_publish_mqtt(&mut publisher)
+                .await?
+        }
     } else {
         let collection = runtime.collect_once().await?;
         crate::ConfiguredMqttCollectionReport {
@@ -232,7 +238,13 @@ where
     let desired = client.fetch_desired_config(edge_id).await?;
     let applied = apply_desired_config(edge_id, desired)?;
     let mut runtime = ConfiguredSimulatedRuntime::new(applied.clone());
-    let collection = runtime.collect_once_and_publish_mqtt(publisher).await?;
+    let collection = if applied.package().data_configs.is_empty() {
+        runtime.collect_once_and_publish_mqtt(publisher).await?
+    } else {
+        runtime
+            .collect_data_configs_once_and_publish_mqtt(publisher)
+            .await?
+    };
     let applied_version = runtime.reported_version().to_string();
 
     client

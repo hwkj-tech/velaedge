@@ -489,16 +489,28 @@ async fn collect_after_config_deploy(
 ) -> Result<ConfiguredMqttCollectionReport> {
     match mqtt_mode {
         EdgeLinkMqttMode::Provided(publisher) => {
-            runtime.collect_once_and_publish_mqtt(publisher).await
+            if applied.package().data_configs.is_empty() {
+                runtime.collect_once_and_publish_mqtt(publisher).await
+            } else {
+                runtime
+                    .collect_data_configs_once_and_publish_mqtt(publisher)
+                    .await
+            }
         }
         EdgeLinkMqttMode::ConfiguredUplink => {
             if let Some(uplink) = applied.package().mqtt_uplinks.first() {
                 let mut publisher = RumqttcMqttPublisher::connect_from_uplink(uplink)?;
                 let mut configured_runtime =
                     ConfiguredEdgeRuntime::new(applied.package().clone(), TokioSerialBusFactory)?;
-                configured_runtime
-                    .collect_once_and_publish_mqtt(&mut publisher)
-                    .await
+                if applied.package().data_configs.is_empty() {
+                    configured_runtime
+                        .collect_once_and_publish_mqtt(&mut publisher)
+                        .await
+                } else {
+                    configured_runtime
+                        .collect_data_configs_once_and_publish_mqtt(&mut publisher)
+                        .await
+                }
             } else {
                 collect_without_mqtt(runtime).await
             }

@@ -4,7 +4,9 @@ use anyhow::{bail, Result};
 use chrono::Utc;
 use edge_core::{DataQuality, DeviceShadow, EdgeConfigPackage, TelemetrySample, TelemetryValue};
 
-use crate::{publish_mqtt_samples, CollectionReport, MqttPublisher};
+use crate::{
+    publish_data_config_mqtt_samples, publish_mqtt_samples, CollectionReport, MqttPublisher,
+};
 
 #[derive(Clone, Debug)]
 pub struct AppliedEdgeConfig {
@@ -79,6 +81,24 @@ impl ConfiguredSimulatedRuntime {
         })
     }
 
+    pub async fn collect_data_configs_once_and_publish_mqtt<P>(
+        &mut self,
+        publisher: &mut P,
+    ) -> Result<ConfiguredMqttCollectionReport>
+    where
+        P: MqttPublisher + ?Sized,
+    {
+        let samples = self.collect_data_config_samples_once().await;
+        let mqtt_messages_published =
+            publish_data_config_mqtt_samples(self.applied.package(), &samples, publisher).await?;
+        Ok(ConfiguredMqttCollectionReport {
+            collection: CollectionReport {
+                samples_collected: samples.len(),
+            },
+            mqtt_messages_published,
+        })
+    }
+
     async fn collect_samples_once(&mut self) -> Vec<TelemetrySample> {
         let mut samples = Vec::new();
         let mut samples_collected = 0;
@@ -97,6 +117,30 @@ impl ConfiguredSimulatedRuntime {
             }
         }
         debug_assert_eq!(samples_collected, samples.len());
+        samples
+    }
+
+    async fn collect_data_config_samples_once(&mut self) -> Vec<TelemetrySample> {
+        let mut samples = Vec::new();
+        for data_config in &self.applied.package().data_configs {
+            if !data_config.enabled {
+                continue;
+            }
+
+            for point in &data_config.points {
+                let sample = TelemetrySample::new(
+                    &data_config.device_id,
+                    &point.point_id,
+                    TelemetryValue::Float(1.0),
+                    DataQuality::Good,
+                    Utc::now(),
+                );
+                if let Some(shadow) = self.shadows.get_mut(&data_config.device_id) {
+                    shadow.update(sample.clone());
+                    samples.push(sample);
+                }
+            }
+        }
         samples
     }
 

@@ -245,7 +245,10 @@ fn data_config_payload_rejects_algorithm_output_json_field_collisions() {
                 inputs: vec![AlgorithmInputBinding::new("p", "pressure")],
                 trigger: AlgorithmTrigger::on_sample(),
                 steps: vec![AlgorithmStep::change_filter("p", 0.1)],
-                outputs: vec![AlgorithmOutput::virtual_point("pressure", "pressure.reported")],
+                outputs: vec![AlgorithmOutput::virtual_point(
+                    "pressure",
+                    "pressure.reported",
+                )],
                 report: AlgorithmReportPolicy::new(AlgorithmReportMode::OnChange, "velamq-main"),
             },
         ))
