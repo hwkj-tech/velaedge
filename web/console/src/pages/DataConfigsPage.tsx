@@ -88,6 +88,7 @@ export function DataConfigsPage({
   >();
   const [step, setStep] = useState(0);
   const [status, setStatus] = useState('');
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const activeConfigs = configs.filter((config) => config.edgeId === selectedEdgeId);
   const activeAlgorithms = algorithms.filter((algorithm) => algorithm.edgeId === selectedEdgeId);
   const activePointMappings = pointMappings.filter((point) => point.edgeId === selectedEdgeId);
@@ -169,12 +170,14 @@ export function DataConfigsPage({
   const openCreate = () => {
     setStep(0);
     setStatus('');
+    setValidationErrors([]);
     setDialog({ mode: 'create', form: createDefaultForm(selectedEdgeId, mqttUplink, protocolConnections) });
   };
 
   function openEdit(config: DataConfigResponse) {
     setStep(0);
     setStatus('');
+    setValidationErrors([]);
     setDialog({ configId: config.configId, form: responseToSave(config), mode: 'edit' });
   }
 
@@ -230,6 +233,12 @@ export function DataConfigsPage({
 
   const handleSave = async () => {
     if (!dialog) return;
+    const nextErrors = validateDataConfigForm(dialog.form);
+    setValidationErrors(nextErrors);
+    if (nextErrors.length > 0) {
+      setStatus('请先修正配置');
+      return;
+    }
     setStatus('保存中');
     try {
       await onSaveConfig?.(
@@ -310,7 +319,10 @@ export function DataConfigsPage({
                 <button
                   className={index === step ? 'step-tab active' : 'step-tab'}
                   key={label}
-                  onClick={() => setStep(index)}
+                  onClick={() => {
+                    setStep(index);
+                    setValidationErrors([]);
+                  }}
                   type="button"
                 >
                   {index + 1}. {label}
@@ -331,6 +343,16 @@ export function DataConfigsPage({
               updatePublish={updatePublish}
               algorithms={activeAlgorithms}
             />
+            {validationErrors.length ? (
+              <div className="form-validation-panel" role="alert">
+                <strong>保存前需要处理</strong>
+                <ul>
+                  {validationErrors.map((message) => (
+                    <li key={message}>{message}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <div className="drawer-footer">
               <span className="editor-status">{status}</span>
               <button className="secondary-button" onClick={() => setDialog(undefined)} type="button">取消</button>
@@ -715,6 +737,32 @@ function sanitizeForm(form: SaveDataConfigRequest): SaveDataConfigRequest {
       qos: Math.min(Math.max(Number(form.publish.qos) || 0, 0), 2),
     },
   };
+}
+
+function validateDataConfigForm(form: SaveDataConfigRequest) {
+  const errors: string[] = [];
+  if (!form.configId.trim()) {
+    errors.push('配置 ID 不能为空');
+  }
+  if (!form.name.trim()) {
+    errors.push('配置名称不能为空');
+  }
+  if (!form.deviceId.trim()) {
+    errors.push('设备 ID 不能为空');
+  }
+  if (!form.protocolConnectionId.trim()) {
+    errors.push('协议连接不能为空');
+  }
+  if (form.points.length === 0 || form.points.every((point) => !point.pointId.trim())) {
+    errors.push('至少选择 1 个上报点位');
+  }
+  if (!form.publish.sinkId.trim()) {
+    errors.push('MQTT Sink 不能为空');
+  }
+  if (!form.publish.topicTemplate.trim()) {
+    errors.push('MQTT Topic 不能为空');
+  }
+  return errors;
 }
 
 function buildPreview(form: SaveDataConfigRequest) {

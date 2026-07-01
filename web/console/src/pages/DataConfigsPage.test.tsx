@@ -93,4 +93,32 @@ describe('DataConfigsPage', () => {
       }),
     );
   });
+
+  it('blocks save and explains missing publish fields before calling the API', () => {
+    const onSave = vi.fn();
+
+    render(
+      <DataConfigsPage
+        configs={[]}
+        mqttUplink={{ sinkId: 'velamq-main', qos: 1 } as any}
+        onSaveConfig={onSave}
+        protocolConnections={[
+          { connectionId: 'modbus-line-a', protocol: 'Modbus RTU' } as any,
+        ]}
+        selectedEdgeId="edge-dev"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '新建数据上报' }));
+    const dialog = screen.getByRole('dialog', { name: '新建数据上报' });
+    fireEvent.click(within(dialog).getByRole('button', { name: '3. 上报规则' }));
+    fireEvent.change(within(dialog).getByLabelText('MQTT Topic'), {
+      target: { value: '' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '4. JSON 预览' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('MQTT Topic 不能为空');
+    expect(onSave).not.toHaveBeenCalled();
+  });
 });
