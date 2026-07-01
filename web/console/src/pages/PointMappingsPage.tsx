@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Edit3, FileInput, Plus, ShieldCheck, X } from 'lucide-react';
+import { Edit3, FileInput, Plus, ShieldCheck, Trash2, X } from 'lucide-react';
 
 import type {
   CreatePointMappingRequest,
@@ -71,6 +71,7 @@ export function PointMappingsPage({
   embedded = false,
   mode = 'configure',
   onCreatePoint,
+  onDeletePoint,
   onImportPoints,
   onSavePoint,
   onValidateDraft,
@@ -84,6 +85,7 @@ export function PointMappingsPage({
     edgeId: string,
     request: CreatePointMappingRequest,
   ) => Promise<PointMappingResponse> | PointMappingResponse;
+  onDeletePoint?: (edgeId: string, pointId: string) => Promise<void> | void;
   onImportPoints?: (
     edgeId: string,
   ) => Promise<ManagementActionResponse> | ManagementActionResponse;
@@ -127,14 +129,6 @@ export function PointMappingsPage({
     'idle' | 'importing' | 'validating' | 'creating'
   >('idle');
   const isConfigureMode = mode === 'configure';
-  const columns = pointColumns(
-    selectedPoint.pointId,
-    (pointId) => {
-      setSelectedPointId(pointId);
-      setEditDialogOpen(true);
-    },
-    isConfigureMode,
-  );
   const activeEdge =
     edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
 
@@ -212,6 +206,30 @@ export function PointMappingsPage({
       setActionState('idle');
     }
   };
+
+  const handleDeletePoint = async (pointId: string) => {
+    setToolbarMessage('');
+
+    try {
+      await onDeletePoint?.(selectedEdgeId, pointId);
+      setToolbarMessage(`已删除点位 ${pointId}`);
+      setEditDialogOpen(false);
+    } catch {
+      setToolbarMessage('删除点位失败：请先解除采集任务、数据上报或算法引用');
+    }
+  };
+
+  const columns = pointColumns(
+    selectedPoint.pointId,
+    (pointId) => {
+      setSelectedPointId(pointId);
+      setEditDialogOpen(true);
+    },
+    (pointId) => {
+      void handleDeletePoint(pointId);
+    },
+    isConfigureMode,
+  );
 
   return (
     <div className="page-stack">
@@ -613,6 +631,7 @@ export function PointMappingsPage({
 function pointColumns(
   selectedPointId: string,
   onSelectPoint: (pointId: string) => void,
+  onDeletePoint: (pointId: string) => void,
   isConfigureMode: boolean,
 ): Array<DataTableColumn<PointMappingResponse>> {
   return [
@@ -666,15 +685,26 @@ function pointColumns(
             header: '操作',
             width: '110px',
             render: (row: PointMappingResponse) => (
-              <button
-                aria-label={`修改点位 ${row.pointId}`}
-                className="secondary-button compact"
-                onClick={() => onSelectPoint(row.pointId)}
-                type="button"
-              >
-                <Edit3 size={14} aria-hidden="true" />
-                修改
-              </button>
+              <div className="row-actions">
+                <button
+                  aria-label={`修改点位 ${row.pointId}`}
+                  className="secondary-button compact"
+                  onClick={() => onSelectPoint(row.pointId)}
+                  type="button"
+                >
+                  <Edit3 size={14} aria-hidden="true" />
+                  修改
+                </button>
+                <button
+                  aria-label={`删除点位 ${row.pointId}`}
+                  className="danger-button compact"
+                  onClick={() => onDeletePoint(row.pointId)}
+                  type="button"
+                >
+                  <Trash2 size={14} aria-hidden="true" />
+                  删除
+                </button>
+              </div>
             ),
           },
         ]

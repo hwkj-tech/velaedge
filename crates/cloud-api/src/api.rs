@@ -45,7 +45,7 @@ pub fn app(state: AppState) -> Router {
         )
         .route(
             "/api/edges/{edge_id}/protocol-connections/{connection_id}",
-            put(save_edge_protocol_connection),
+            put(save_edge_protocol_connection).delete(delete_edge_protocol_connection),
         )
         .route("/api/collection-tasks", get(collection_tasks))
         .route(
@@ -62,7 +62,7 @@ pub fn app(state: AppState) -> Router {
         )
         .route(
             "/api/edges/{edge_id}/collection-tasks/{task_id}",
-            put(save_edge_collection_task),
+            put(save_edge_collection_task).delete(delete_edge_collection_task),
         )
         .route("/api/algorithms", get(algorithms))
         .route(
@@ -71,7 +71,7 @@ pub fn app(state: AppState) -> Router {
         )
         .route(
             "/api/edges/{edge_id}/algorithms/{algorithm_id}",
-            put(save_edge_algorithm),
+            put(save_edge_algorithm).delete(delete_edge_algorithm),
         )
         .route("/api/audit-records", get(audit_records))
         .route("/api/runtime-status", get(runtime_status))
@@ -115,7 +115,7 @@ pub fn app(state: AppState) -> Router {
         )
         .route(
             "/api/edges/{edge_id}/point-mappings/{point_id}",
-            put(save_edge_point_mapping),
+            put(save_edge_point_mapping).delete(delete_edge_point_mapping),
         )
         .route("/api/releases", get(releases).post(create_release))
         .route(
@@ -1212,6 +1212,73 @@ async fn save_edge_point_mapping(
     save_point_mapping_for_edge_id(state, &edge_id, point_id, request).await
 }
 
+async fn delete_edge_point_mapping(
+    State(state): State<AppState>,
+    Path((edge_id, point_id)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let package = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut package = store
+            .latest_config_package_for_edge(&edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+
+        if package.collection_tasks.iter().any(|task| {
+            task.point_ids
+                .iter()
+                .any(|candidate| candidate == &point_id)
+        }) {
+            return Err(error(
+                StatusCode::CONFLICT,
+                format!("point `{point_id}` is referenced by collection tasks"),
+            ));
+        }
+        if package.data_configs.iter().any(|data_config| {
+            data_config
+                .points
+                .iter()
+                .any(|point| point.point_id == point_id)
+        }) {
+            return Err(error(
+                StatusCode::CONFLICT,
+                format!("point `{point_id}` is referenced by data configs"),
+            ));
+        }
+        if package.algorithms.iter().any(|algorithm| {
+            algorithm
+                .dsl
+                .inputs
+                .iter()
+                .any(|input| input.point_id == point_id)
+        }) {
+            return Err(error(
+                StatusCode::CONFLICT,
+                format!("point `{point_id}` is referenced by algorithms"),
+            ));
+        }
+
+        let before = package.point_mappings.len();
+        package
+            .point_mappings
+            .retain(|mapping| mapping.point_id != point_id);
+        if package.point_mappings.len() == before {
+            return Err(error(StatusCode::NOT_FOUND, "missing point mapping"));
+        }
+
+        package.version = next_version(&package.version);
+        store.upsert_config_package(package.clone());
+        store.push_audit(AuditAction::UpdateConfig, edge_id);
+        package
+    };
+
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn save_point_mapping_for_edge_id(
     state: AppState,
     edge_id: &str,
@@ -1323,6 +1390,39 @@ async fn save_edge_collection_task(
     Ok(Json(response))
 }
 
+async fn delete_edge_collection_task(
+    State(state): State<AppState>,
+    Path((edge_id, task_id)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let package = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut package = store
+            .latest_config_package_for_edge(&edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+
+        let before = package.collection_tasks.len();
+        package
+            .collection_tasks
+            .retain(|task| task.task_id != task_id);
+        if package.collection_tasks.len() == before {
+            return Err(error(StatusCode::NOT_FOUND, "missing collection task"));
+        }
+
+        package.version = next_version(&package.version);
+        store.upsert_config_package(package.clone());
+        store.push_audit(AuditAction::UpdateConfig, edge_id);
+        package
+    };
+
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn save_edge_protocol_connection(
     State(state): State<AppState>,
     Path((edge_id, connection_id)): Path<(String, String)>,
@@ -1364,6 +1464,60 @@ async fn save_edge_protocol_connection(
         .map_err(persistence_error)?;
 
     Ok(Json(response))
+}
+
+async fn delete_edge_protocol_connection(
+    State(state): State<AppState>,
+    Path((edge_id, connection_id)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let package = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut package = store
+            .latest_config_package_for_edge(&edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+
+        if package
+            .point_mappings
+            .iter()
+            .any(|mapping| mapping.protocol_connection_id == connection_id)
+        {
+            return Err(error(
+                StatusCode::CONFLICT,
+                format!("protocol connection `{connection_id}` is referenced by points"),
+            ));
+        }
+        if package
+            .data_configs
+            .iter()
+            .any(|data_config| data_config.protocol_connection_id == connection_id)
+        {
+            return Err(error(
+                StatusCode::CONFLICT,
+                format!("protocol connection `{connection_id}` is referenced by data configs"),
+            ));
+        }
+
+        let before = package.protocol_connections.len();
+        package
+            .protocol_connections
+            .retain(|connection| connection.connection_id != connection_id);
+        if package.protocol_connections.len() == before {
+            return Err(error(StatusCode::NOT_FOUND, "missing protocol connection"));
+        }
+
+        package.version = next_version(&package.version);
+        store.upsert_config_package(package.clone());
+        store.push_audit(AuditAction::UpdateConfig, edge_id);
+        package
+    };
+
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn save_edge_algorithm(
@@ -1408,6 +1562,51 @@ async fn save_edge_algorithm(
         .map_err(persistence_error)?;
 
     Ok(Json(response))
+}
+
+async fn delete_edge_algorithm(
+    State(state): State<AppState>,
+    Path((edge_id, algorithm_id)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let package = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut package = store
+            .latest_config_package_for_edge(&edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
+
+        if package.data_configs.iter().any(|data_config| {
+            data_config
+                .algorithm_ids
+                .iter()
+                .any(|id| id == &algorithm_id)
+        }) {
+            return Err(error(
+                StatusCode::CONFLICT,
+                format!("algorithm `{algorithm_id}` is referenced by data configs"),
+            ));
+        }
+
+        let before = package.algorithms.len();
+        package
+            .algorithms
+            .retain(|algorithm| algorithm.id != algorithm_id);
+        if package.algorithms.len() == before {
+            return Err(error(StatusCode::NOT_FOUND, "missing algorithm"));
+        }
+
+        package.version = next_version(&package.version);
+        store.upsert_config_package(package.clone());
+        store.push_audit(AuditAction::UpdateConfig, edge_id);
+        package
+    };
+
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn publish_latest_release(

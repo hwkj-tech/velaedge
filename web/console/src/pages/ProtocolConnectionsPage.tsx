@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Edit3, Plus, ShieldCheck, X } from 'lucide-react';
+import { Edit3, Plus, ShieldCheck, Trash2, X } from 'lucide-react';
 
 import type {
   EdgeNodeResponse,
@@ -54,6 +54,7 @@ export function ProtocolConnectionsPage({
   embedded = false,
   mode = 'configure',
   onCreateConnection,
+  onDeleteConnection,
   onSaveConnection,
   onValidateConnection,
   selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
@@ -66,6 +67,10 @@ export function ProtocolConnectionsPage({
     edgeId: string,
     request: CreateProtocolConnectionRequest,
   ) => Promise<ProtocolConnectionResponse> | ProtocolConnectionResponse;
+  onDeleteConnection?: (
+    edgeId: string,
+    connectionId: string,
+  ) => Promise<void> | void;
   onSaveConnection?: (
     edgeId: string,
     connectionId: string,
@@ -184,6 +189,17 @@ export function ProtocolConnectionsPage({
       setToolbarMessage('连接校验失败');
     } finally {
       setValidateState('idle');
+    }
+  };
+
+  const handleDelete = async (connectionId: string) => {
+    setToolbarMessage('');
+    try {
+      await onDeleteConnection?.(selectedEdgeId, connectionId);
+      setToolbarMessage(`已删除连接 ${connectionId}`);
+      setEditDialogOpen(false);
+    } catch {
+      setToolbarMessage('删除连接失败：请先解除点位或数据配置引用');
     }
   };
 
@@ -358,18 +374,31 @@ export function ProtocolConnectionsPage({
                     <td>{connection.policy}</td>
                     {isConfigureMode ? (
                       <td>
-                        <button
-                          aria-label={`修改连接 ${connection.connectionId}`}
-                          className="secondary-button compact"
-                          onClick={() => {
-                            setSelectedConnectionId(connection.connectionId);
-                            setEditDialogOpen(true);
-                          }}
-                          type="button"
-                        >
-                          <Edit3 size={14} aria-hidden="true" />
-                          修改
-                        </button>
+                        <div className="row-actions">
+                          <button
+                            aria-label={`修改连接 ${connection.connectionId}`}
+                            className="secondary-button compact"
+                            onClick={() => {
+                              setSelectedConnectionId(connection.connectionId);
+                              setEditDialogOpen(true);
+                            }}
+                            type="button"
+                          >
+                            <Edit3 size={14} aria-hidden="true" />
+                            修改
+                          </button>
+                          <button
+                            aria-label={`删除连接 ${connection.connectionId}`}
+                            className="danger-button compact"
+                            onClick={() => {
+                              void handleDelete(connection.connectionId);
+                            }}
+                            type="button"
+                          >
+                            <Trash2 size={14} aria-hidden="true" />
+                            删除
+                          </button>
+                        </div>
                       </td>
                     ) : null}
                   </tr>

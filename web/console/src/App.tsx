@@ -26,7 +26,11 @@ import {
   runReleaseDiff,
   runDiscovery,
   saveMqttUplink,
+  deleteEdgeAlgorithm,
+  deleteEdgeCollectionTask,
   deleteEdgeDataConfig,
+  deleteEdgePointMapping,
+  deleteEdgeProtocolConnection,
   createEdgeProtocolConnection,
   saveDeviceModel,
   saveEdgeAlgorithm,
@@ -198,6 +202,17 @@ export default function App() {
     return created;
   };
 
+  const handleDeletePoint = async (edgeId: string, pointId: string) => {
+    await deleteEdgePointMapping(edgeId, pointId);
+    const [nextPointMappings, nextReleaseList] = await Promise.all([
+      fetchEdgePointMappings(edgeId),
+      fetchReleaseList(),
+    ]);
+    setPointMappings(nextPointMappings);
+    setReleaseList(nextReleaseList);
+    setSelectedPointEdgeId(edgeId);
+  };
+
   const handleValidateConfig = async (
     edgeId = defaultConfigEdgeId,
   ): Promise<ManagementActionResponse> => runConfigValidation(edgeId);
@@ -291,6 +306,17 @@ export default function App() {
     return created;
   };
 
+  const handleDeleteCollectionTask = async (edgeId: string, taskId: string) => {
+    await deleteEdgeCollectionTask(edgeId, taskId);
+    const [nextCollectionTasks, nextReleaseList] = await Promise.all([
+      fetchEdgeCollectionTasks(edgeId),
+      fetchReleaseList(),
+    ]);
+    setCollectionTasks(nextCollectionTasks);
+    setReleaseList(nextReleaseList);
+    setSelectedCollectionEdgeId(edgeId);
+  };
+
   const handleGenerateSchedule = async (
     edgeId: string,
   ): Promise<ManagementActionResponse> => {
@@ -372,6 +398,20 @@ export default function App() {
     return created;
   };
 
+  const handleDeleteProtocolConnection = async (
+    edgeId: string,
+    connectionId: string,
+  ) => {
+    await deleteEdgeProtocolConnection(edgeId, connectionId);
+    const [nextProtocolConnections, nextReleaseList] = await Promise.all([
+      fetchEdgeProtocolConnections(edgeId),
+      fetchReleaseList(),
+    ]);
+    setProtocolConnections(nextProtocolConnections);
+    setReleaseList(nextReleaseList);
+    setSelectedProtocolEdgeId(edgeId);
+  };
+
   const handleSelectProtocolEdge = async (edgeId: string) => {
     setSelectedProtocolEdgeId(edgeId);
     setProtocolConnections(await fetchEdgeProtocolConnections(edgeId));
@@ -405,6 +445,17 @@ export default function App() {
     setReleaseList(nextReleaseList);
     setSelectedAlgorithmEdgeId(edgeId);
     return created;
+  };
+
+  const handleDeleteAlgorithm = async (edgeId: string, algorithmId: string) => {
+    await deleteEdgeAlgorithm(edgeId, algorithmId);
+    const [nextAlgorithms, nextReleaseList] = await Promise.all([
+      fetchEdgeAlgorithms(edgeId),
+      fetchReleaseList(),
+    ]);
+    setAlgorithms(nextAlgorithms);
+    setReleaseList(nextReleaseList);
+    setSelectedAlgorithmEdgeId(edgeId);
   };
 
   const handleAssessAlgorithmRisk = async (
@@ -580,10 +631,13 @@ export default function App() {
         handleConfigureEdge,
         handleCreateAlgorithm,
         handleSaveAlgorithm,
+        handleDeleteAlgorithm,
         handleCreateCollectionTask,
+        handleDeleteCollectionTask,
         handleCreateDeviceModel,
         handleSaveDeviceModel,
         handleCreatePoint,
+        handleDeletePoint,
         handleGenerateAgentSuggestions,
         handleRunDiscovery,
         handleGenerateSchedule,
@@ -601,6 +655,7 @@ export default function App() {
         selectedDataConfigEdgeId,
         handleSaveProtocolConnection,
         handleCreateProtocolConnection,
+        handleDeleteProtocolConnection,
         selectedProtocolEdgeId,
         handleSaveMqttUplink,
         handlePublishLatestRelease,
@@ -745,10 +800,12 @@ function renderPage(
     algorithmId: string,
     request: SaveAlgorithmRequest,
   ) => Promise<void>,
+  onDeleteAlgorithm: (edgeId: string, algorithmId: string) => Promise<void>,
   onCreateCollectionTask: (
     edgeId: string,
     request: CreateCollectionTaskRequest,
   ) => Promise<CollectionTaskResponse>,
+  onDeleteCollectionTask: (edgeId: string, taskId: string) => Promise<void>,
   onCreateDeviceModel: (request: CreateDeviceModelRequest) => Promise<DeviceModelResponse>,
   onSaveDeviceModel: (
     deviceType: string,
@@ -758,6 +815,7 @@ function renderPage(
     edgeId?: string,
     request?: CreatePointMappingRequest,
   ) => Promise<PointMappingResponse>,
+  onDeletePoint: (edgeId: string, pointId: string) => Promise<void>,
   onGenerateAgentSuggestions: () => Promise<AgentActionResponse>,
   onRunDiscovery: (
     edgeId: string,
@@ -797,6 +855,10 @@ function renderPage(
     edgeId: string,
     request: CreateProtocolConnectionRequest,
   ) => Promise<ProtocolConnectionResponse>,
+  onDeleteProtocolConnection: (
+    edgeId: string,
+    connectionId: string,
+  ) => Promise<void>,
   selectedProtocolEdgeId: string,
   onSaveMqttUplink: (
     edgeId: string,
@@ -865,7 +927,11 @@ function renderPage(
           onCreateCollectionTask={onCreateCollectionTask}
           onCreatePoint={onCreatePoint}
           onCreateProtocolConnection={onCreateProtocolConnection}
+          onDeleteAlgorithm={onDeleteAlgorithm}
+          onDeleteCollectionTask={onDeleteCollectionTask}
           onDeleteDataConfig={onDeleteDataConfig}
+          onDeletePoint={onDeletePoint}
+          onDeleteProtocolConnection={onDeleteProtocolConnection}
           onGenerateSchedule={onGenerateSchedule}
           onImportPoints={onImportPoints}
           onPublish={onPublish}
@@ -898,6 +964,7 @@ function renderPage(
           edges={edgeNodes}
           mode={edgeConfigurationMode}
           onCreateConnection={onCreateProtocolConnection}
+          onDeleteConnection={onDeleteProtocolConnection}
           onSaveConnection={onSaveProtocolConnection}
           onValidateConnection={onValidateConfig}
           selectedEdgeId={selectedProtocolEdgeId}
@@ -979,7 +1046,11 @@ function EdgeConfigWorkspace({
   onCreatePoint,
   onCreateProtocolConnection,
   onAssessAlgorithmRisk,
+  onDeleteAlgorithm,
+  onDeleteCollectionTask,
   onDeleteDataConfig,
+  onDeletePoint,
+  onDeleteProtocolConnection,
   onGenerateSchedule,
   onImportPoints,
   onPublish,
@@ -1021,7 +1092,14 @@ function EdgeConfigWorkspace({
     request: CreateProtocolConnectionRequest,
   ) => Promise<ProtocolConnectionResponse>;
   onAssessAlgorithmRisk: (edgeId: string) => Promise<ManagementActionResponse>;
+  onDeleteAlgorithm: (edgeId: string, algorithmId: string) => Promise<void>;
+  onDeleteCollectionTask: (edgeId: string, taskId: string) => Promise<void>;
   onDeleteDataConfig: (edgeId: string, configId: string) => Promise<void>;
+  onDeletePoint: (edgeId: string, pointId: string) => Promise<void>;
+  onDeleteProtocolConnection: (
+    edgeId: string,
+    connectionId: string,
+  ) => Promise<void>;
   onGenerateSchedule: (edgeId: string) => Promise<ManagementActionResponse>;
   onImportPoints: (edgeId: string) => Promise<ManagementActionResponse>;
   onPublish: (edgeId: string) => Promise<void>;
@@ -1136,6 +1214,7 @@ function EdgeConfigWorkspace({
             embedded
             mode="configure"
             onCreateConnection={onCreateProtocolConnection}
+            onDeleteConnection={onDeleteProtocolConnection}
             onSaveConnection={onSaveProtocolConnection}
             onValidateConnection={onValidateConfig}
             selectedEdgeId={edgeId}
@@ -1147,6 +1226,7 @@ function EdgeConfigWorkspace({
             embedded
             mode="configure"
             onCreatePoint={onCreatePoint}
+            onDeletePoint={onDeletePoint}
             onImportPoints={onImportPoints}
             onSavePoint={onSavePoint}
             onValidateDraft={onValidateConfig}
@@ -1160,6 +1240,7 @@ function EdgeConfigWorkspace({
             embedded
             mode="configure"
             onCreateTask={onCreateCollectionTask}
+            onDeleteTask={onDeleteCollectionTask}
             onGenerateSchedule={onGenerateSchedule}
             onSaveTask={onSaveCollectionTask}
             selectedEdgeId={edgeId}
@@ -1174,6 +1255,7 @@ function EdgeConfigWorkspace({
             mode="configure"
             onAssessRisk={onAssessAlgorithmRisk}
             onCreateAlgorithm={onCreateAlgorithm}
+            onDeleteAlgorithm={onDeleteAlgorithm}
             onSaveAlgorithm={onSaveAlgorithm}
             selectedEdgeId={edgeId}
           />

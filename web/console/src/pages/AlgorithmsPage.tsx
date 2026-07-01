@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
-import { Edit3, Plus, ShieldCheck, X } from 'lucide-react';
+import { Edit3, Plus, ShieldCheck, Trash2, X } from 'lucide-react';
 
 import type {
   AlgorithmDsl,
@@ -79,6 +79,7 @@ export function AlgorithmsPage({
   mode = 'configure',
   onAssessRisk,
   onCreateAlgorithm,
+  onDeleteAlgorithm,
   onSaveAlgorithm,
   selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
 }: {
@@ -93,6 +94,10 @@ export function AlgorithmsPage({
     edgeId: string,
     request: CreateAlgorithmRequest,
   ) => Promise<AlgorithmResponse> | AlgorithmResponse;
+  onDeleteAlgorithm?: (
+    edgeId: string,
+    algorithmId: string,
+  ) => Promise<void> | void;
   onSaveAlgorithm?: (
     edgeId: string,
     algorithmId: string,
@@ -214,6 +219,18 @@ export function AlgorithmsPage({
     }
   };
 
+  const handleDeleteAlgorithm = async (algorithmId: string) => {
+    setToolbarMessage('');
+
+    try {
+      await onDeleteAlgorithm?.(selectedEdgeId, algorithmId);
+      setToolbarMessage(`已删除算法 ${algorithmId}`);
+      setEditDialogOpen(false);
+    } catch {
+      setToolbarMessage('删除算法失败：请先解除数据上报引用');
+    }
+  };
+
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -326,18 +343,31 @@ export function AlgorithmsPage({
                     </td>
                     {isConfigureMode ? (
                       <td>
-                        <button
-                          aria-label={`修改算法 ${algorithm.algorithmId}`}
-                          className="secondary-button compact"
-                          onClick={() => {
-                            setSelectedAlgorithmId(algorithm.algorithmId);
-                            setEditDialogOpen(true);
-                          }}
-                          type="button"
-                        >
-                          <Edit3 size={14} aria-hidden="true" />
-                          修改
-                        </button>
+                        <div className="row-actions">
+                          <button
+                            aria-label={`修改算法 ${algorithm.algorithmId}`}
+                            className="secondary-button compact"
+                            onClick={() => {
+                              setSelectedAlgorithmId(algorithm.algorithmId);
+                              setEditDialogOpen(true);
+                            }}
+                            type="button"
+                          >
+                            <Edit3 size={14} aria-hidden="true" />
+                            修改
+                          </button>
+                          <button
+                            aria-label={`删除算法 ${algorithm.algorithmId}`}
+                            className="danger-button compact"
+                            onClick={() => {
+                              void handleDeleteAlgorithm(algorithm.algorithmId);
+                            }}
+                            type="button"
+                          >
+                            <Trash2 size={14} aria-hidden="true" />
+                            删除
+                          </button>
+                        </div>
                       </td>
                     ) : null}
                   </tr>

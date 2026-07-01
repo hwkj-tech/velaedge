@@ -348,6 +348,20 @@ export async function saveEdgeCollectionTask(
   );
 }
 
+export async function deleteEdgeCollectionTask(
+  edgeId: string,
+  taskId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  await requestText(
+    `/api/edges/${encodeURIComponent(edgeId)}/collection-tasks/${encodeURIComponent(taskId)}`,
+    fetcher,
+    {
+      method: 'DELETE',
+    },
+  );
+}
+
 export async function saveEdgeDataConfig(
   edgeId: string,
   configId: string,
@@ -396,6 +410,20 @@ export async function saveEdgeProtocolConnection(
   );
 }
 
+export async function deleteEdgeProtocolConnection(
+  edgeId: string,
+  connectionId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  await requestText(
+    `/api/edges/${encodeURIComponent(edgeId)}/protocol-connections/${encodeURIComponent(connectionId)}`,
+    fetcher,
+    {
+      method: 'DELETE',
+    },
+  );
+}
+
 export async function createEdgeProtocolConnection(
   edgeId: string,
   request: CreateProtocolConnectionRequest,
@@ -425,6 +453,34 @@ export async function saveEdgeAlgorithm(
       body: JSON.stringify(request),
       headers: { 'content-type': 'application/json' },
       method: 'PUT',
+    },
+  );
+}
+
+export async function deleteEdgeAlgorithm(
+  edgeId: string,
+  algorithmId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  await requestText(
+    `/api/edges/${encodeURIComponent(edgeId)}/algorithms/${encodeURIComponent(algorithmId)}`,
+    fetcher,
+    {
+      method: 'DELETE',
+    },
+  );
+}
+
+export async function deleteEdgePointMapping(
+  edgeId: string,
+  pointId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  await requestText(
+    `/api/edges/${encodeURIComponent(edgeId)}/point-mappings/${encodeURIComponent(pointId)}`,
+    fetcher,
+    {
+      method: 'DELETE',
     },
   );
 }

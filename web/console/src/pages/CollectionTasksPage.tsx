@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Edit3, Plus, TimerReset, X } from 'lucide-react';
+import { Edit3, Plus, TimerReset, Trash2, X } from 'lucide-react';
 
 import type {
   CollectionTaskResponse,
@@ -44,6 +44,7 @@ export function CollectionTasksPage({
   embedded = false,
   mode = 'configure',
   onCreateTask,
+  onDeleteTask,
   onGenerateSchedule,
   onSaveTask,
   selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
@@ -56,6 +57,7 @@ export function CollectionTasksPage({
     edgeId: string,
     request: CreateCollectionTaskRequest,
   ) => Promise<CollectionTaskResponse> | CollectionTaskResponse;
+  onDeleteTask?: (edgeId: string, taskId: string) => Promise<void> | void;
   onGenerateSchedule?: (
     edgeId: string,
   ) => Promise<ManagementActionResponse> | ManagementActionResponse;
@@ -161,6 +163,18 @@ export function CollectionTasksPage({
       setToolbarMessage('创建任务失败');
     } finally {
       setActionState('idle');
+    }
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    setToolbarMessage('');
+
+    try {
+      await onDeleteTask?.(selectedEdgeId, taskId);
+      setToolbarMessage(`已删除任务 ${taskId}`);
+      setEditDialogOpen(false);
+    } catch {
+      setToolbarMessage('删除任务失败');
     }
   };
 
@@ -373,18 +387,31 @@ export function CollectionTasksPage({
                     </td>
                     {isConfigureMode ? (
                       <td>
-                        <button
-                          aria-label={`修改任务 ${task.taskId}`}
-                          className="secondary-button compact"
-                          onClick={() => {
-                            setSelectedTaskId(task.taskId);
-                            setEditDialogOpen(true);
-                          }}
-                          type="button"
-                        >
-                          <Edit3 size={14} aria-hidden="true" />
-                          修改
-                        </button>
+                        <div className="row-actions">
+                          <button
+                            aria-label={`修改任务 ${task.taskId}`}
+                            className="secondary-button compact"
+                            onClick={() => {
+                              setSelectedTaskId(task.taskId);
+                              setEditDialogOpen(true);
+                            }}
+                            type="button"
+                          >
+                            <Edit3 size={14} aria-hidden="true" />
+                            修改
+                          </button>
+                          <button
+                            aria-label={`删除任务 ${task.taskId}`}
+                            className="danger-button compact"
+                            onClick={() => {
+                              void handleDeleteTask(task.taskId);
+                            }}
+                            type="button"
+                          >
+                            <Trash2 size={14} aria-hidden="true" />
+                            删除
+                          </button>
+                        </div>
                       </td>
                     ) : null}
                   </tr>

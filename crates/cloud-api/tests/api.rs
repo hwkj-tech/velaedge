@@ -1526,6 +1526,50 @@ async fn edge_collection_task_save_updates_selected_edge_draft() {
 }
 
 #[tokio::test]
+async fn edge_config_delete_endpoints_remove_resources_and_protect_references() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::delete("/api/edges/edge-dev/collection-tasks/pump-main")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::get("/api/edges/edge-dev/collection-tasks")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let tasks: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(!tasks
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|task| task["taskId"] == "pump-main"));
+
+    let response = router
+        .oneshot(
+            Request::delete("/api/edges/edge-dev/protocol-connections/modbus-line-a")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn runtime_status_endpoint_returns_seeded_edge_metrics() {
     let response = app(AppState::default())
         .oneshot(
