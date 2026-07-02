@@ -890,6 +890,10 @@
   width: min(780px, 100%);
 }
 
+.modal-panel.edge-config-section-modal {
+  width: min(1080px, 100%);
+}
+
 .modal-header,
 .modal-actions {
   display: flex;

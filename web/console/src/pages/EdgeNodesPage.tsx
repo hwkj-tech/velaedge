@@ -12,7 +12,15 @@ import {
   X,
 } from 'lucide-react';
 
-import type { EdgeNodeResponse, MqttUplinkResponse } from '../api/types';
+import type {
+  CreateProtocolConnectionRequest,
+  EdgeNodeResponse,
+  ManagementActionResponse,
+  MqttUplinkResponse,
+  ProtocolConnectionResponse,
+  SaveProtocolConnectionRequest,
+} from '../api/types';
+import { ProtocolConnectionsPage } from './ProtocolConnectionsPage';
 
 const fallbackEdges: EdgeNodeResponse[] = [
   {
@@ -52,22 +60,48 @@ export function EdgeNodesPage({
   edges = fallbackEdges,
   mqttUplink,
   onConfigureEdge,
+  onCreateProtocolConnection,
   onDeleteEdge,
+  onDeleteProtocolConnection,
+  onSaveProtocolConnection,
   onSaveMqttUplink,
   onMonitorEdge,
+  onValidateConfig,
   pageSize = 10,
+  protocolConnections = [],
 }: {
   configSummaries?: EdgeConfigSummary[];
   edges?: EdgeNodeResponse[];
   mqttUplink?: MqttUplinkResponse;
   onConfigureEdge?: (edgeId: string, tab?: EdgeConfigTabKey) => void;
+  onCreateProtocolConnection?: (
+    edgeId: string,
+    request: CreateProtocolConnectionRequest,
+  ) => Promise<ProtocolConnectionResponse> | ProtocolConnectionResponse;
   onDeleteEdge?: (edgeId: string) => Promise<void> | void;
+  onDeleteProtocolConnection?: (
+    edgeId: string,
+    connectionId: string,
+  ) => Promise<void> | void;
+  onSaveProtocolConnection?: (
+    edgeId: string,
+    connectionId: string,
+    request: SaveProtocolConnectionRequest,
+  ) => Promise<void> | void;
   onSaveMqttUplink?: (edgeId: string, request: MqttUplinkResponse) => Promise<MqttUplinkResponse> | MqttUplinkResponse;
   onMonitorEdge?: (edgeId: string) => void;
+  onValidateConfig?: (
+    edgeId?: string,
+  ) => Promise<ManagementActionResponse> | ManagementActionResponse;
   pageSize?: number;
+  protocolConnections?: ProtocolConnectionResponse[];
 }) {
   const [page, setPage] = useState(1);
   const [configDialog, setConfigDialog] = useState<EdgeNodeResponse>();
+  const [configPanel, setConfigPanel] = useState<{
+    edge: EdgeNodeResponse;
+    section: EdgeConfigTabKey;
+  }>();
   const [mqttDialog, setMqttDialog] = useState<{ edgeId: string; form: MqttUplinkResponse }>();
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [toolbarMessage, setToolbarMessage] = useState('');
@@ -229,11 +263,55 @@ export function EdgeNodesPage({
           edge={configDialog}
           onClose={() => setConfigDialog(undefined)}
           onOpen={(tab) => {
+            if (tab === 'protocol') {
+              setConfigPanel({ edge: configDialog, section: tab });
+              return;
+            }
             onConfigureEdge?.(configDialog.edgeId, tab);
             setConfigDialog(undefined);
           }}
           summary={findConfigSummary(configSummaries, configDialog.edgeId)}
         />
+      ) : null}
+      {configPanel?.section === 'protocol' ? (
+        <div className="modal-backdrop">
+          <section
+            aria-label="配置协议连接"
+            className="modal-panel edge-config-section-modal"
+            role="dialog"
+          >
+            <div className="modal-header">
+              <div>
+                <h3>配置协议连接</h3>
+                <p>
+                  {configPanel.edge.displayName} · {configPanel.edge.edgeId} ·
+                  {configPanel.edge.runtimeId}
+                </p>
+              </div>
+              <button
+                aria-label="关闭配置协议连接"
+                className="icon-button"
+                onClick={() => setConfigPanel(undefined)}
+                type="button"
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
+            </div>
+            <ProtocolConnectionsPage
+              connections={protocolConnections.filter(
+                (connection) => connection.edgeId === configPanel.edge.edgeId,
+              )}
+              edges={edges}
+              embedded
+              mode="configure"
+              onCreateConnection={onCreateProtocolConnection}
+              onDeleteConnection={onDeleteProtocolConnection}
+              onSaveConnection={onSaveProtocolConnection}
+              onValidateConnection={onValidateConfig}
+              selectedEdgeId={configPanel.edge.edgeId}
+            />
+          </section>
+        </div>
       ) : null}
       {mqttDialog ? (
         <div className="modal-backdrop">

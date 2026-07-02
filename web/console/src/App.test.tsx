@@ -1266,7 +1266,12 @@ describe('App cloud console write actions', () => {
     fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
     fireEvent.click(screen.getByRole('button', { name: '配置 edge-dev' }));
     fireEvent.click(screen.getByRole('button', { name: '配置连接' }));
+    expect(
+      await screen.findByRole('dialog', { name: '配置协议连接' }),
+    ).toBeInTheDocument();
     expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '关闭配置协议连接' }));
+    fireEvent.click(screen.getByRole('button', { name: '打开配置总览' }));
 
     fireEvent.click(screen.getByRole('tab', { name: '数据上报' }));
     expect(await screen.findByRole('button', { name: 'pump_status' })).toBeInTheDocument();

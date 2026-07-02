@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { EdgeNodeResponse } from '../api/types';
+import type { EdgeNodeResponse, ProtocolConnectionResponse } from '../api/types';
 import { EdgeNodesPage } from './EdgeNodesPage';
 
 const edges: EdgeNodeResponse[] = [
@@ -14,6 +14,18 @@ const edges: EdgeNodeResponse[] = [
     resources: '18.5% / 42% / 61%',
     heartbeat: '8 秒前',
     capabilities: ['protocol:modbus-tcp'],
+  },
+];
+
+const protocolConnections: ProtocolConnectionResponse[] = [
+  {
+    connectionId: 'modbus-line-a',
+    edgeId: 'edge-dev',
+    endpoint: '10.12.0.20:502',
+    policy: '1000ms timeout / 3 retry',
+    protocol: 'Modbus TCP',
+    protocolType: 'ModbusTcp',
+    status: '启用',
   },
 ];
 
@@ -87,6 +99,40 @@ describe('EdgeNodesPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '配置上报' }));
 
     expect(onConfigureEdge).toHaveBeenCalledWith('edge-dev', 'reports');
+  });
+
+  it('opens protocol connection configuration inside the edge dialog without page navigation', () => {
+    const onConfigureEdge = vi.fn();
+
+    render(
+      <EdgeNodesPage
+        configSummaries={[
+          {
+            collectionTaskCount: 0,
+            dataConfigCount: 0,
+            edgeId: 'edge-dev',
+            mqttSinkId: 'velamq-main',
+            pointCount: 0,
+            protocolCount: 1,
+            releaseStatus: '待发布',
+          },
+        ]}
+        edges={edges}
+        onConfigureEdge={onConfigureEdge}
+        protocolConnections={protocolConnections}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '配置 edge-dev' }));
+    const edgeDialog = screen.getByRole('dialog', { name: '配置边端' });
+
+    fireEvent.click(screen.getByRole('button', { name: '配置连接' }));
+
+    expect(edgeDialog).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: '配置协议连接' })).toBeInTheDocument();
+    expect(screen.getByText('连接清单')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '修改连接 modbus-line-a' })).toBeInTheDocument();
+    expect(onConfigureEdge).not.toHaveBeenCalledWith('edge-dev', 'protocol');
   });
 
   it('opens and saves per-edge mqtt configuration', async () => {

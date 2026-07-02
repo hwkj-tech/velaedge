@@ -931,9 +931,14 @@ function renderPage(
           onConfigureEdge={(edgeId, tab) => {
             void onConfigureEdge(edgeId, tab);
           }}
+          onCreateProtocolConnection={onCreateProtocolConnection}
           onDeleteEdge={onDeleteEdge}
+          onDeleteProtocolConnection={onDeleteProtocolConnection}
           onMonitorEdge={onMonitorEdge}
+          onSaveProtocolConnection={onSaveProtocolConnection}
           onSaveMqttUplink={onSaveMqttUplink}
+          onValidateConfig={onValidateConfig}
+          protocolConnections={protocolConnections}
         />
       );
     case 'edgeConfig':
