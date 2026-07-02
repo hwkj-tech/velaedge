@@ -1189,6 +1189,75 @@
   padding: 16px;
 }
 
+.fleet-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.fleet-overview-card {
+  position: relative;
+  display: grid;
+  min-height: 126px;
+  align-content: space-between;
+  gap: 8px;
+  overflow: hidden;
+  border: 1px solid #cfe0f5;
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgb(255 255 255 / 98%) 0%, rgb(247 251 255 / 96%) 100%);
+  box-shadow: 0 12px 28px rgb(33 52 80 / 7%);
+  color: #42526b;
+  padding: 14px;
+}
+
+.fleet-overview-card::after {
+  position: absolute;
+  right: -28px;
+  bottom: -34px;
+  width: 96px;
+  height: 96px;
+  border: 1px solid rgb(47 111 198 / 18%);
+  border-radius: 999px;
+  background: rgb(47 111 198 / 6%);
+  content: '';
+}
+
+.fleet-overview-card svg {
+  color: #2f6fc6;
+}
+
+.fleet-overview-card span {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.fleet-overview-card strong {
+  color: var(--color-text);
+  font-size: 30px;
+  line-height: 1;
+}
+
+.fleet-overview-card small {
+  color: #4d5f78;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.fleet-overview-card.primary {
+  border-color: #b9e3cc;
+  background:
+    linear-gradient(135deg, #f2fcf7 0%, #ffffff 72%);
+}
+
+.fleet-overview-card.primary svg,
+.fleet-overview-card.primary small {
+  color: #0f7a4b;
+}
+
 .panel-header {
   display: flex;
   align-items: center;
@@ -1370,6 +1439,10 @@
   .two-column-grid {
     grid-template-columns: 1fr;
   }
+
+  .fleet-overview-grid {
+    grid-template-columns: repeat(2, minmax(160px, 1fr));
+  }
 }
 
 @media (max-width: 820px) {
@@ -1413,6 +1486,10 @@
   }
 
   .metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .fleet-overview-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -3,9 +3,13 @@ import {
   Activity,
   ChevronLeft,
   ChevronRight,
+  Cpu,
+  Database,
   Radio,
   Save,
+  Send,
   Settings2,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Trash2,
@@ -135,6 +139,8 @@ export function EdgeNodesPage({
           </span>
         ) : null}
       </section>
+
+      <EdgeFleetOverview edges={edges} summaries={configSummaries} />
 
       <section className="panel">
         <div className="panel-header">
@@ -363,6 +369,63 @@ export function EdgeNodesPage({
 
 function canRemoveEdge(edge: EdgeNodeResponse) {
   return edge.status === '未上报' || edge.status === '离线';
+}
+
+function EdgeFleetOverview({
+  edges,
+  summaries,
+}: {
+  edges: EdgeNodeResponse[];
+  summaries: EdgeConfigSummary[];
+}) {
+  const normalizedSummaries = edges.map((edge) => findConfigSummary(summaries, edge.edgeId));
+  const online = edges.filter((edge) => edge.status === '健康').length;
+  const configured = normalizedSummaries.filter(
+    (summary) =>
+      summary.protocolCount > 0 &&
+      summary.pointCount > 0 &&
+      summary.collectionTaskCount > 0 &&
+      summary.dataConfigCount > 0 &&
+      summary.mqttSinkId !== '未配置',
+  ).length;
+  const totalPoints = normalizedSummaries.reduce((sum, summary) => sum + summary.pointCount, 0);
+  const totalReports = normalizedSummaries.reduce(
+    (sum, summary) => sum + summary.dataConfigCount,
+    0,
+  );
+  const coverage = edges.length === 0 ? 0 : Math.round((configured / edges.length) * 100);
+  const needsAttention = Math.max(0, edges.length - online);
+
+  return (
+    <section aria-label="边端舰队态势" className="fleet-overview-grid">
+      <div className="fleet-overview-card primary">
+        <ShieldCheck size={18} aria-hidden="true" />
+        <span>边端在线</span>
+        <strong>
+          {online}/{edges.length}
+        </strong>
+        <small>{needsAttention > 0 ? `${needsAttention} 个需关注` : '全部运行正常'}</small>
+      </div>
+      <div className="fleet-overview-card">
+        <Cpu size={18} aria-hidden="true" />
+        <span>配置覆盖</span>
+        <strong>{coverage}%</strong>
+        <small>{configured} 个边端形成采集到上报闭环</small>
+      </div>
+      <div className="fleet-overview-card">
+        <Database size={18} aria-hidden="true" />
+        <span>采集点位</span>
+        <strong>{totalPoints}</strong>
+        <small>已纳入周期采集与算法处理</small>
+      </div>
+      <div className="fleet-overview-card">
+        <Send size={18} aria-hidden="true" />
+        <span>上报流水线</span>
+        <strong>{totalReports}</strong>
+        <small>JSON 载荷按 MQTT topic 分流</small>
+      </div>
+    </section>
+  );
 }
 
 function EdgeConfigSummaryInline({ summary }: { summary: EdgeConfigSummary }) {

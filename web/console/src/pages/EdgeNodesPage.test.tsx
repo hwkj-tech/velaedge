@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { EdgeNodeResponse, ProtocolConnectionResponse } from '../api/types';
@@ -59,12 +59,17 @@ describe('EdgeNodesPage', () => {
     expect(screen.getByText('1 任务')).toBeInTheDocument();
     expect(screen.getByText('1 上报')).toBeInTheDocument();
     expect(screen.getByText('已发布')).toBeInTheDocument();
+    expect(screen.getByText('边端在线')).toBeInTheDocument();
+    expect(screen.getByText('配置覆盖')).toBeInTheDocument();
+    expect(screen.getByText('采集点位')).toBeInTheDocument();
+    expect(screen.getByText('上报流水线')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '配置 edge-dev' }));
-    expect(screen.getByRole('dialog', { name: '配置边端' })).toBeInTheDocument();
-    expect(screen.getByText('配置完整度')).toBeInTheDocument();
-    expect(screen.getByText('100%')).toBeInTheDocument();
-    expect(screen.getByText('配置链路状态良好')).toBeInTheDocument();
-    expect(screen.getByText('采集、处理、上报和发布链路基本闭环')).toBeInTheDocument();
+    const configDialog = screen.getByRole('dialog', { name: '配置边端' });
+    expect(configDialog).toBeInTheDocument();
+    expect(within(configDialog).getByText('配置完整度')).toBeInTheDocument();
+    expect(within(configDialog).getByText('100%')).toBeInTheDocument();
+    expect(within(configDialog).getByText('配置链路状态良好')).toBeInTheDocument();
+    expect(within(configDialog).getByText('采集、处理、上报和发布链路基本闭环')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '打开配置总览' }));
     fireEvent.click(screen.getByRole('button', { name: '运行监控 edge-dev' }));
 
