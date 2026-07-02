@@ -8,6 +8,8 @@ import {
   createCollectionTaskDraft,
   createPointMappingDraft,
   createEdgeProtocolConnection,
+  deleteDeviceModel,
+  deleteEdgeNode,
   deleteEdgeDataConfig,
   fetchDiscoverySuggestions,
   generateAgentSuggestions,
@@ -53,6 +55,25 @@ describe('fetchSummary', () => {
 
     expect(result.edge_count).toBe(2);
     expect(result.pending_release_count).toBe(1);
+  });
+});
+
+describe('delete resource clients', () => {
+  it('deletes edge nodes and device models through API routes', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => '',
+    });
+
+    await deleteEdgeNode('edge-draft-2', fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/edge-nodes/edge-draft-2', {
+      method: 'DELETE',
+    });
+
+    await deleteDeviceModel('meter', fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/device-models/meter', {
+      method: 'DELETE',
+    });
   });
 });
 

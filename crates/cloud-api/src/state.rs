@@ -54,9 +54,23 @@ impl AppState {
         Ok(())
     }
 
+    pub async fn delete_edge_node(&self, edge_id: &str) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.delete_edge_node(edge_id).await?;
+        }
+        Ok(())
+    }
+
     pub async fn persist_device_model(&self, model: DeviceSpec) -> Result<()> {
         if let Some(store) = &self.sqlite_store {
             store.upsert_device_model(model).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn delete_device_model(&self, device_type: &str) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.delete_device_model(device_type).await?;
         }
         Ok(())
     }
@@ -459,7 +473,15 @@ async fn hydrate_from_sqlite(
     for node in sqlite_store.edge_nodes().await? {
         store.register_edge(node);
     }
+    for model in sqlite_store.device_models().await? {
+        store.upsert_device_model(model);
+    }
     for package in sqlite_store.config_packages().await? {
+        for model in &package.device_models {
+            if store.device_model(&model.device_type).is_none() {
+                store.upsert_device_model(model.clone());
+            }
+        }
         store.upsert_config_package(package);
     }
     for release in sqlite_store.releases().await? {
@@ -489,6 +511,9 @@ async fn persist_store_snapshot(
     }
     for package in store.config_packages().cloned().collect::<Vec<_>>() {
         sqlite_store.upsert_config_package(package).await?;
+    }
+    for model in store.device_models().cloned().collect::<Vec<_>>() {
+        sqlite_store.upsert_device_model(model).await?;
     }
     for release in store.releases().cloned().collect::<Vec<_>>() {
         sqlite_store.insert_release(release).await?;

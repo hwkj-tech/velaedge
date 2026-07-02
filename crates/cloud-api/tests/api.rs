@@ -558,6 +558,120 @@ async fn device_model_create_adds_model_draft_to_console_list() {
 }
 
 #[tokio::test]
+async fn device_model_delete_removes_unused_models_and_protects_referenced_models() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/device-models")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let model: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(model["deviceType"], "device-model-draft-2");
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::delete("/api/device-models/device-model-draft-2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::get("/api/device-models")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let models: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(!models
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|model| model["deviceType"] == "device-model-draft-2"));
+
+    let response = router
+        .oneshot(
+            Request::delete("/api/device-models/pump")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn edge_node_delete_removes_draft_edges_and_protects_active_edges() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edge-nodes")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "displayName": "待移除边端",
+                        "site": "待分配"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::delete("/api/edge-nodes/edge-draft-2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = router
+        .clone()
+        .oneshot(Request::get("/api/edge-nodes").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let edges: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(!edges
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|edge| edge["edgeId"] == "edge-draft-2"));
+
+    let response = router
+        .oneshot(
+            Request::delete("/api/edge-nodes/edge-dev")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn device_model_create_accepts_user_defined_model_fields() {
     let router = app(AppState::default());
 

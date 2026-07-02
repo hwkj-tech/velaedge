@@ -243,6 +243,27 @@ impl SqliteCloudStore {
         decode_rows(rows, "node_json")
     }
 
+    pub async fn delete_edge_node(&self, edge_id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin delete edge node")?;
+        for statement in [
+            "DELETE FROM edge_nodes WHERE edge_id = ?1",
+            "DELETE FROM config_packages WHERE edge_id = ?1",
+            "DELETE FROM releases WHERE edge_id = ?1",
+            "DELETE FROM runtime_metrics WHERE edge_id = ?1",
+            "DELETE FROM runtime_events WHERE edge_id = ?1",
+            "DELETE FROM mqtt_uplinks WHERE edge_id = ?1",
+            "DELETE FROM discovery_reports WHERE edge_id = ?1",
+        ] {
+            sqlx::query(statement)
+                .bind(edge_id)
+                .execute(&mut *tx)
+                .await
+                .context("delete edge node related rows")?;
+        }
+        tx.commit().await.context("commit delete edge node")?;
+        Ok(())
+    }
+
     pub async fn upsert_device_model(&self, model: DeviceSpec) -> Result<()> {
         sqlx::query(
             r#"
@@ -266,6 +287,23 @@ impl SqliteCloudStore {
             .await
             .context("get device model")?;
         row.map(|row| decode_column(row, "model_json")).transpose()
+    }
+
+    pub async fn device_models(&self) -> Result<Vec<DeviceSpec>> {
+        let rows = sqlx::query("SELECT model_json FROM device_models ORDER BY device_type")
+            .fetch_all(&self.pool)
+            .await
+            .context("list device models")?;
+        decode_rows(rows, "model_json")
+    }
+
+    pub async fn delete_device_model(&self, device_type: &str) -> Result<()> {
+        sqlx::query("DELETE FROM device_models WHERE device_type = ?1")
+            .bind(device_type)
+            .execute(&self.pool)
+            .await
+            .context("delete device model")?;
+        Ok(())
     }
 
     pub async fn upsert_config_package(&self, package: EdgeConfigPackage) -> Result<()> {

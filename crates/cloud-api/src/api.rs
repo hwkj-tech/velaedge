@@ -34,10 +34,17 @@ pub fn app(state: AppState) -> Router {
         .route("/api/summary", get(summary))
         .route("/api/edge-nodes", get(edge_nodes).post(create_edge_node))
         .route(
+            "/api/edge-nodes/{edge_id}",
+            axum::routing::delete(delete_edge_node),
+        )
+        .route(
             "/api/device-models",
             get(device_models).post(create_device_model),
         )
-        .route("/api/device-models/{device_type}", put(save_device_model))
+        .route(
+            "/api/device-models/{device_type}",
+            put(save_device_model).delete(delete_device_model),
+        )
         .route("/api/protocol-connections", get(protocol_connections))
         .route(
             "/api/edges/{edge_id}/protocol-connections",
@@ -458,27 +465,42 @@ async fn create_edge_node(
     Ok((StatusCode::CREATED, Json(response)))
 }
 
+async fn delete_edge_node(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        if store.edge_nodes().all(|edge| edge.edge_id != edge_id) {
+            return Err(error(StatusCode::NOT_FOUND, "missing edge node"));
+        }
+        if store
+            .runtime_metrics(&edge_id)
+            .map(|snapshot| snapshot.health != EdgeHealth::Offline)
+            .unwrap_or(false)
+        {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "edge node has active runtime metrics; stop runtime or wait until offline before removal",
+            ));
+        }
+        store.remove_edge_node(&edge_id);
+        store.push_audit(AuditAction::UpdateConfig, format!("{edge_id}:delete"));
+    }
+
+    state
+        .delete_edge_node(&edge_id)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn device_models(State(state): State<AppState>) -> Json<Vec<DeviceModelResponse>> {
     let store = state.store.lock().expect("store mutex poisoned");
-    let mut latest_by_type = BTreeMap::<String, (String, DeviceSpec)>::new();
-
-    for package in store.config_packages() {
-        for model in &package.device_models {
-            let should_replace = latest_by_type
-                .get(&model.device_type)
-                .map(|(version, _)| package.version > *version)
-                .unwrap_or(true);
-            if should_replace {
-                latest_by_type.insert(
-                    model.device_type.clone(),
-                    (package.version.clone(), model.clone()),
-                );
-            }
-        }
-    }
-    let mut rows = latest_by_type
-        .into_values()
-        .map(|(_, model)| device_model_response(&model))
+    let mut rows = store
+        .device_models()
+        .map(device_model_response)
         .collect::<Vec<_>>();
     rows.sort_by(|left, right| left.device_type.cmp(&right.device_type));
 
@@ -584,6 +606,73 @@ async fn save_device_model(
     }
 
     Ok(Json(response))
+}
+
+async fn delete_device_model(
+    State(state): State<AppState>,
+    Path(device_type): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let packages_to_persist = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        if store.device_model(&device_type).is_none()
+            && !store.config_packages().any(|package| {
+                package
+                    .device_models
+                    .iter()
+                    .any(|candidate| candidate.device_type == device_type)
+            })
+        {
+            return Err(error(StatusCode::NOT_FOUND, "missing device model"));
+        }
+        if store.config_packages().any(|package| {
+            package
+                .devices
+                .iter()
+                .any(|device| device.device_type == device_type)
+        }) {
+            return Err(error(
+                StatusCode::CONFLICT,
+                format!("device model `{device_type}` is referenced by edge devices"),
+            ));
+        }
+
+        store.remove_device_model(&device_type);
+        let edge_ids = store
+            .edge_nodes()
+            .map(|edge| edge.edge_id.clone())
+            .collect::<Vec<_>>();
+        let mut packages = Vec::new();
+        for edge_id in edge_ids {
+            let Some(mut package) = store.latest_config_package_for_edge(&edge_id).cloned() else {
+                continue;
+            };
+            let previous_len = package.device_models.len();
+            package
+                .device_models
+                .retain(|candidate| candidate.device_type != device_type);
+            if package.device_models.len() == previous_len {
+                continue;
+            }
+            package.version = next_version(&package.version);
+            store.upsert_config_package(package.clone());
+            store.push_audit(AuditAction::UpdateConfig, edge_id);
+            packages.push(package);
+        }
+        packages
+    };
+
+    state
+        .delete_device_model(&device_type)
+        .await
+        .map_err(persistence_error)?;
+    for package in packages_to_persist {
+        state
+            .persist_config_package(package)
+            .await
+            .map_err(persistence_error)?;
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn protocol_connections(

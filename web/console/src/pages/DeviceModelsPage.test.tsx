@@ -153,4 +153,39 @@ describe('DeviceModelsPage', () => {
     });
     expect(await screen.findByText('已保存')).toBeInTheDocument();
   });
+
+  it('deletes the selected device model from the list action', async () => {
+    const onDeleteDeviceModel = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <DeviceModelsPage
+        deviceModels={[
+          {
+            commandCount: 0,
+            deviceType: 'meter',
+            eventCount: 0,
+            version: 'v2',
+            telemetry: [
+              {
+                description: 'A 相电压',
+                name: 'voltage_a',
+                range: '0-500',
+                telemetryId: 'voltage_a',
+                unit: 'V',
+                valueType: 'float32',
+              },
+            ],
+          },
+        ]}
+        onDeleteDeviceModel={onDeleteDeviceModel}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '删除设备模型 meter' }));
+
+    await waitFor(() => {
+      expect(onDeleteDeviceModel).toHaveBeenCalledWith('meter');
+    });
+    expect(await screen.findByText('已删除设备模型 meter')).toBeInTheDocument();
+  });
 });

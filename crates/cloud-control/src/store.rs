@@ -30,12 +30,33 @@ impl CloudControlStore {
         self.edge_nodes.values()
     }
 
+    pub fn remove_edge_node(&mut self, edge_id: &str) -> Option<EdgeNode> {
+        let removed = self.edge_nodes.remove(edge_id)?;
+        self.config_packages
+            .retain(|(package_edge_id, _), _| package_edge_id != edge_id);
+        self.releases
+            .retain(|_, release| release.edge_id != edge_id);
+        self.runtime_metrics.remove(edge_id);
+        self.runtime_events.retain(|event| event.edge_id != edge_id);
+        self.mqtt_uplinks.remove(edge_id);
+        self.discovery_reports.remove(edge_id);
+        Some(removed)
+    }
+
     pub fn upsert_device_model(&mut self, model: DeviceSpec) {
         self.device_models.insert(model.device_type.clone(), model);
     }
 
     pub fn device_model(&self, device_type: &str) -> Option<&DeviceSpec> {
         self.device_models.get(device_type)
+    }
+
+    pub fn device_models(&self) -> impl Iterator<Item = &DeviceSpec> {
+        self.device_models.values()
+    }
+
+    pub fn remove_device_model(&mut self, device_type: &str) -> Option<DeviceSpec> {
+        self.device_models.remove(device_type)
     }
 
     pub fn upsert_config_package(&mut self, package: EdgeConfigPackage) {

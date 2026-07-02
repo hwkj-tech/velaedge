@@ -29,6 +29,8 @@ import {
   deleteEdgeAlgorithm,
   deleteEdgeCollectionTask,
   deleteEdgeDataConfig,
+  deleteDeviceModel,
+  deleteEdgeNode,
   deleteEdgePointMapping,
   deleteEdgeProtocolConnection,
   createEdgeProtocolConnection,
@@ -498,6 +500,24 @@ export default function App() {
     return saved;
   };
 
+  const handleDeleteDeviceModel = async (deviceType: string) => {
+    await deleteDeviceModel(deviceType);
+    setDeviceModels(await fetchDeviceModels());
+    setReleaseList(await fetchReleaseList());
+  };
+
+  const handleDeleteEdgeNode = async (edgeId: string) => {
+    await deleteEdgeNode(edgeId);
+    const [nextEdges, nextSummary, nextReleaseList] = await Promise.all([
+      fetchEdgeNodes(),
+      fetchSummary(),
+      fetchReleaseList(),
+    ]);
+    setEdgeNodes(nextEdges);
+    setSummary(nextSummary);
+    setReleaseList(nextReleaseList);
+  };
+
   const handleAgentSafetyCheck = async (): Promise<AgentActionResponse> =>
     runAgentSafetyCheck();
 
@@ -629,6 +649,7 @@ export default function App() {
         handleAgentSafetyCheck,
         handleAssessAlgorithmRisk,
         handleConfigureEdge,
+        handleDeleteEdgeNode,
         handleCreateAlgorithm,
         handleSaveAlgorithm,
         handleDeleteAlgorithm,
@@ -636,6 +657,7 @@ export default function App() {
         handleDeleteCollectionTask,
         handleCreateDeviceModel,
         handleSaveDeviceModel,
+        handleDeleteDeviceModel,
         handleCreatePoint,
         handleDeletePoint,
         handleGenerateAgentSuggestions,
@@ -791,6 +813,7 @@ function renderPage(
   onAgentSafetyCheck: () => Promise<AgentActionResponse>,
   onAssessAlgorithmRisk: (edgeId: string) => Promise<ManagementActionResponse>,
   onConfigureEdge: (edgeId: string, tab?: EdgeConfigTabKey) => Promise<void>,
+  onDeleteEdge: (edgeId: string) => Promise<void>,
   onCreateAlgorithm: (
     edgeId: string,
     request: CreateAlgorithmRequest,
@@ -811,6 +834,7 @@ function renderPage(
     deviceType: string,
     request: SaveDeviceModelRequest,
   ) => Promise<DeviceModelResponse>,
+  onDeleteDeviceModel: (deviceType: string) => Promise<void>,
   onCreatePoint: (
     edgeId?: string,
     request?: CreatePointMappingRequest,
@@ -907,6 +931,7 @@ function renderPage(
           onConfigureEdge={(edgeId, tab) => {
             void onConfigureEdge(edgeId, tab);
           }}
+          onDeleteEdge={onDeleteEdge}
           onMonitorEdge={onMonitorEdge}
           onSaveMqttUplink={onSaveMqttUplink}
         />
@@ -954,6 +979,7 @@ function renderPage(
         <DeviceModelsPage
           deviceModels={deviceModels}
           onCreateDeviceModel={onCreateDeviceModel}
+          onDeleteDeviceModel={onDeleteDeviceModel}
           onSaveDeviceModel={onSaveDeviceModel}
         />
       );

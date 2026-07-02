@@ -133,6 +133,39 @@ describe('EdgeNodesPage', () => {
     expect(screen.queryByRole('button', { name: '维护模式 edge-dev' })).not.toBeInTheDocument();
   });
 
+  it('allows removing unreported edges but protects active runtime edges', async () => {
+    const onDeleteEdge = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <EdgeNodesPage
+        edges={[
+          edges[0],
+          {
+            ...edges[0],
+            edgeId: 'edge-draft-2',
+            displayName: '新边端待确认',
+            heartbeat: '-',
+            resources: '-',
+            runtimeId: '-',
+            status: '未上报',
+          },
+        ]}
+        onDeleteEdge={onDeleteEdge}
+      />,
+    );
+
+    expect(
+      screen.queryByRole('button', { name: '移除边端 edge-dev' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '移除边端 edge-draft-2' }));
+
+    await waitFor(() => {
+      expect(onDeleteEdge).toHaveBeenCalledWith('edge-draft-2');
+    });
+    expect(await screen.findByText('已移除边端 edge-draft-2')).toBeInTheDocument();
+  });
+
   it('paginates edge rows locally', () => {
     const manyEdges = Array.from({ length: 12 }, (_, index) => ({
       ...edges[0],

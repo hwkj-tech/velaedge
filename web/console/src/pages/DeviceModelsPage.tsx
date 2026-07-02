@@ -1,5 +1,5 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
-import { Plus, X } from 'lucide-react';
+import { Plus, Trash2, X } from 'lucide-react';
 
 import type {
   CreateDeviceModelRequest,
@@ -40,12 +40,14 @@ const fallbackDeviceModels: DeviceModelResponse[] = [
 export function DeviceModelsPage({
   deviceModels = fallbackDeviceModels,
   onCreateDeviceModel,
+  onDeleteDeviceModel,
   onSaveDeviceModel,
 }: {
   deviceModels?: DeviceModelResponse[];
   onCreateDeviceModel?: (
     request: CreateDeviceModelRequest,
   ) => Promise<DeviceModelResponse> | DeviceModelResponse;
+  onDeleteDeviceModel?: (deviceType: string) => Promise<void> | void;
   onSaveDeviceModel?: (
     deviceType: string,
     request: SaveDeviceModelRequest,
@@ -135,6 +137,16 @@ export function DeviceModelsPage({
     }
   };
 
+  const handleDeleteDeviceModel = async (deviceType: string) => {
+    setToolbarMessage('');
+    try {
+      await onDeleteDeviceModel?.(deviceType);
+      setToolbarMessage(`已删除设备模型 ${deviceType}`);
+    } catch {
+      setToolbarMessage('删除设备模型失败：请先解除设备实例引用');
+    }
+  };
+
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -187,6 +199,7 @@ export function DeviceModelsPage({
                   <th>版本</th>
                   <th>遥测</th>
                   <th>命令 / 事件</th>
+                  <th>操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -210,6 +223,21 @@ export function DeviceModelsPage({
                     <td>{model.telemetry.map((telemetry) => telemetry.telemetryId).join(', ')}</td>
                     <td>
                       {model.commandCount} / {model.eventCount}
+                    </td>
+                    <td>
+                      <div className="row-actions">
+                        <button
+                          aria-label={`删除设备模型 ${model.deviceType}`}
+                          className="danger-button compact"
+                          onClick={() => {
+                            void handleDeleteDeviceModel(model.deviceType);
+                          }}
+                          type="button"
+                        >
+                          <Trash2 size={14} aria-hidden="true" />
+                          删除
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

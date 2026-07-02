@@ -8,6 +8,7 @@ import {
   Settings2,
   SlidersHorizontal,
   Sparkles,
+  Trash2,
   X,
 } from 'lucide-react';
 
@@ -51,6 +52,7 @@ export function EdgeNodesPage({
   edges = fallbackEdges,
   mqttUplink,
   onConfigureEdge,
+  onDeleteEdge,
   onSaveMqttUplink,
   onMonitorEdge,
   pageSize = 10,
@@ -59,6 +61,7 @@ export function EdgeNodesPage({
   edges?: EdgeNodeResponse[];
   mqttUplink?: MqttUplinkResponse;
   onConfigureEdge?: (edgeId: string, tab?: EdgeConfigTabKey) => void;
+  onDeleteEdge?: (edgeId: string) => Promise<void> | void;
   onSaveMqttUplink?: (edgeId: string, request: MqttUplinkResponse) => Promise<MqttUplinkResponse> | MqttUplinkResponse;
   onMonitorEdge?: (edgeId: string) => void;
   pageSize?: number;
@@ -67,10 +70,21 @@ export function EdgeNodesPage({
   const [configDialog, setConfigDialog] = useState<EdgeNodeResponse>();
   const [mqttDialog, setMqttDialog] = useState<{ edgeId: string; form: MqttUplinkResponse }>();
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [toolbarMessage, setToolbarMessage] = useState('');
   const totalPages = Math.max(1, Math.ceil(edges.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pageStart = (currentPage - 1) * pageSize;
   const visibleEdges = edges.slice(pageStart, pageStart + pageSize);
+
+  const handleDeleteEdge = async (edgeId: string) => {
+    setToolbarMessage('');
+    try {
+      await onDeleteEdge?.(edgeId);
+      setToolbarMessage(`已移除边端 ${edgeId}`);
+    } catch {
+      setToolbarMessage('移除边端失败：请确认 runtime 已离线或未上报');
+    }
+  };
 
   return (
     <div className="page-stack">
@@ -81,6 +95,11 @@ export function EdgeNodesPage({
             边端由 runtime 通过 EdgeLink 主动连接后自动登记。云端负责查看运行状态、进入边端配置，并维护该边端的 MQTT 上报连接。
           </p>
         </div>
+        {toolbarMessage ? (
+          <span className="toolbar-status" role="status">
+            {toolbarMessage}
+          </span>
+        ) : null}
       </section>
 
       <section className="panel">
@@ -158,6 +177,19 @@ export function EdgeNodesPage({
                           <Radio size={14} aria-hidden="true" />
                           MQTT
                         </button>
+                        {canRemoveEdge(edge) ? (
+                          <button
+                            aria-label={`移除边端 ${edge.edgeId}`}
+                            className="danger-button compact"
+                            onClick={() => {
+                              void handleDeleteEdge(edge.edgeId);
+                            }}
+                            type="button"
+                          >
+                            <Trash2 size={14} aria-hidden="true" />
+                            移除
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -249,6 +281,10 @@ export function EdgeNodesPage({
       ) : null}
     </div>
   );
+}
+
+function canRemoveEdge(edge: EdgeNodeResponse) {
+  return edge.status === '未上报' || edge.status === '离线';
 }
 
 function EdgeConfigSummaryInline({ summary }: { summary: EdgeConfigSummary }) {

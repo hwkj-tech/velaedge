@@ -76,6 +76,15 @@ export async function createEdgeNode(
   });
 }
 
+export async function deleteEdgeNode(
+  edgeId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  await requestText(`/api/edge-nodes/${encodeURIComponent(edgeId)}`, fetcher, {
+    method: 'DELETE',
+  });
+}
+
 export async function fetchDeviceModels(
   fetcher: typeof fetch = fetch,
 ): Promise<DeviceModelResponse[]> {
@@ -105,6 +114,19 @@ export async function saveDeviceModel(
       body: JSON.stringify(request),
       headers: { 'content-type': 'application/json' },
       method: 'PUT',
+    },
+  );
+}
+
+export async function deleteDeviceModel(
+  deviceType: string,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  await requestText(
+    `/api/device-models/${encodeURIComponent(deviceType)}`,
+    fetcher,
+    {
+      method: 'DELETE',
     },
   );
 }
