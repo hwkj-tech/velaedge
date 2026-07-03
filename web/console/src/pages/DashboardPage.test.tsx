@@ -99,12 +99,17 @@ describe('DashboardPage', () => {
     );
 
     expect(screen.getByText('Dashboard')).toBeInTheDocument();
+    expect(screen.getByText('EdgeOps 指挥态势')).toBeInTheDocument();
+    expect(screen.getByText('数据链路')).toBeInTheDocument();
+    expect(screen.getByText('待发布配置')).toBeInTheDocument();
+    expect(screen.getByText('runtime 同步')).toBeInTheDocument();
+    expect(screen.getByText('RocksDB 缓存')).toBeInTheDocument();
     expect(screen.getByText('在线率')).toBeInTheDocument();
-    expect(screen.getByText('100%')).toBeInTheDocument();
+    expect(screen.getAllByText('100%').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('平均延迟')).toBeInTheDocument();
     expect(screen.getByText('24ms')).toBeInTheDocument();
     expect(screen.getByText('运行任务')).toBeInTheDocument();
-    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getAllByText('2').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('pressure quality is bad')).toBeInTheDocument();
     expect(screen.getByText('publish_release')).toBeInTheDocument();
 

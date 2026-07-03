@@ -39,6 +39,16 @@ export function DashboardPage({
     (total, edge) => total + edge.local_store.buffered_records,
     0,
   );
+  const healthyCount = runtimeStatus?.healthyEdgeCount ?? healthyEdgeCount(edgeNodes);
+  const issueCount =
+    (runtimeStatus?.degradedEdgeCount ?? 0) + (runtimeStatus?.criticalEdgeCount ?? 0);
+  const averageSuccessRate = runtimeEdges.length
+    ? runtimeEdges.reduce((total, edge) => total + edge.collection.success_rate, 0) /
+      runtimeEdges.length
+    : undefined;
+  const syncLag = runtimeEdges.length
+    ? Math.max(...runtimeEdges.map((edge) => edge.cloud_sync.last_sync_seconds_ago))
+    : undefined;
 
   return (
     <div className="page-stack">
@@ -53,6 +63,41 @@ export function DashboardPage({
           <span className={loadState === 'ready' ? 'status-pill online' : 'status-pill'}>
             {loadState === 'ready' ? '监控 API 已连接' : '监控数据加载中'}
           </span>
+        </div>
+      </section>
+
+      <section className="command-overview" aria-label="EdgeOps 指挥态势">
+        <div className="command-overview-main">
+          <span>EdgeOps 指挥态势</span>
+          <strong>{onlineRate}</strong>
+          <p>
+            {healthyCount} 个 runtime 健康在线
+            {issueCount > 0 ? `，${issueCount} 个边端需要处理` : '，采集链路运行稳定'}。
+          </p>
+        </div>
+        <div className="command-overview-rail">
+          <CommandSignal
+            label="数据链路"
+            value={averageSuccessRate === undefined ? '--' : formatPercent(averageSuccessRate * 100)}
+            hint={`平均延迟 ${runtimeStatus ? `${runtimeStatus.averageCollectionLatencyMs}ms` : '--'}`}
+          />
+          <CommandSignal
+            label="待发布配置"
+            value={String(summary.pending_release_count)}
+            hint={summary.pending_release_count > 0 ? '等待校验下发' : '版本已对齐'}
+            tone={summary.pending_release_count > 0 ? 'warning' : undefined}
+          />
+          <CommandSignal
+            label="runtime 同步"
+            value={syncLag === undefined ? '--' : `${syncLag}s`}
+            hint="最近一次云边握手"
+          />
+          <CommandSignal
+            label="RocksDB 缓存"
+            value={String(bufferedRecords)}
+            hint={bufferedRecords > 0 ? '等待 MQTT 上报' : '无积压'}
+            tone={bufferedRecords > 0 ? 'warning' : undefined}
+          />
         </div>
       </section>
 
@@ -155,6 +200,26 @@ export function DashboardPage({
         </section>
       </div>
     </div>
+  );
+}
+
+function CommandSignal({
+  hint,
+  label,
+  tone,
+  value,
+}: {
+  hint: string;
+  label: string;
+  tone?: 'warning';
+  value: string;
+}) {
+  return (
+    <article className={tone === 'warning' ? 'command-signal warning' : 'command-signal'}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{hint}</small>
+    </article>
   );
 }
 

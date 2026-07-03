@@ -1147,6 +1147,89 @@
   gap: 12px;
 }
 
+.command-overview {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.7fr);
+  gap: 12px;
+  overflow: hidden;
+  border: 1px solid #cfe0f5;
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, #f6fbff 0%, #ffffff 54%),
+    linear-gradient(90deg, rgb(47 111 198 / 10%), rgb(32 166 106 / 8%));
+  box-shadow: 0 14px 34px rgb(33 52 80 / 8%);
+  padding: 14px;
+}
+
+.command-overview-main {
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  border-right: 1px solid #d7e2f1;
+  padding: 8px 18px 8px 6px;
+}
+
+.command-overview-main span,
+.command-signal span {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.command-overview-main strong {
+  color: var(--color-text);
+  font-size: 42px;
+  line-height: 1;
+}
+
+.command-overview-main p {
+  margin: 0;
+  color: #42526b;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.command-overview-rail {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.command-signal {
+  display: grid;
+  min-height: 106px;
+  align-content: space-between;
+  gap: 8px;
+  border: 1px solid #dce6f3;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 84%);
+  padding: 12px;
+}
+
+.command-signal strong {
+  color: var(--color-text);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.command-signal small {
+  color: #4d5f78;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.command-signal.warning {
+  border-color: #f3d89c;
+  background: #fffaf0;
+}
+
+.command-signal.warning small {
+  color: #93630b;
+}
+
 .metric-tile,
 .panel {
   border: 1px solid var(--color-border);
@@ -1440,6 +1523,18 @@
     grid-template-columns: 1fr;
   }
 
+  .command-overview,
+  .command-overview-rail {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .command-overview-main {
+    grid-column: 1 / -1;
+    border-right: 0;
+    border-bottom: 1px solid #d7e2f1;
+    padding: 6px 6px 14px;
+  }
+
   .fleet-overview-grid {
     grid-template-columns: repeat(2, minmax(160px, 1fr));
   }
@@ -1490,6 +1585,11 @@
   }
 
   .fleet-overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .command-overview,
+  .command-overview-rail {
     grid-template-columns: 1fr;
   }
 }
