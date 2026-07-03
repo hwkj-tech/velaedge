@@ -638,7 +638,19 @@ export default function App() {
   }, []);
 
   return (
-    <AppShell activePage={activePage} onNavigate={handleNavigate}>
+    <AppShell
+      activePage={activePage}
+      onNavigate={handleNavigate}
+      platformStatus={{
+        environment: 'staging',
+        onlineEdgeCount:
+          runtimeStatus?.healthyEdgeCount ??
+          edgeNodes?.filter((edge) => edge.status === '健康').length ??
+          0,
+        pendingReleaseCount: summary.pending_release_count,
+        project: 'demo-plant',
+      }}
+    >
       {renderPage(
         activePage,
         summary,

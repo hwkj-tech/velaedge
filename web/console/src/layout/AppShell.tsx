@@ -48,16 +48,36 @@ pageTitleByKey.set('protocolConnections', '协议连接');
 pageTitleByKey.set('dataConfigs', '数据上报');
 pageTitleByKey.set('releases', '配置发布');
 
+export interface PlatformStatus {
+  environment: string;
+  onlineEdgeCount: number;
+  pendingReleaseCount: number;
+  project: string;
+}
+
+const defaultPlatformStatus: PlatformStatus = {
+  environment: 'staging',
+  onlineEdgeCount: 0,
+  pendingReleaseCount: 0,
+  project: 'demo-plant',
+};
+
 export function AppShell({
   activePage,
   children,
   onNavigate,
+  platformStatus = defaultPlatformStatus,
 }: {
   activePage: PageKey;
   children: ReactNode;
   onNavigate: (page: PageKey) => void;
+  platformStatus?: PlatformStatus;
 }) {
   const activeTitle = pageTitleByKey.get(activePage) ?? 'Dashboard';
+  const releaseStatus =
+    platformStatus.pendingReleaseCount > 0
+      ? `${platformStatus.pendingReleaseCount} 个配置待发布`
+      : '配置已同步';
 
   return (
     <div className="app-shell">
@@ -93,11 +113,19 @@ export function AppShell({
           <div className="status-strip" aria-label="平台状态">
             <span className="status-pill online">
               <ShieldCheck size={14} aria-hidden="true" />
-              3 个边端在线
+              {platformStatus.onlineEdgeCount} 个边端在线
             </span>
-            <span className="status-pill">项目: demo-plant</span>
-            <span className="status-pill">环境: staging</span>
-            <span className="status-pill warning">待发布 v2026.06.26-002</span>
+            <span className="status-pill">项目: {platformStatus.project}</span>
+            <span className="status-pill">环境: {platformStatus.environment}</span>
+            <span
+              className={
+                platformStatus.pendingReleaseCount > 0
+                  ? 'status-pill warning'
+                  : 'status-pill online'
+              }
+            >
+              {releaseStatus}
+            </span>
           </div>
         </header>
 

@@ -24,4 +24,26 @@ describe('AppShell', () => {
     expect(screen.queryByRole('button', { name: /MQTT Sink/ })).not.toBeInTheDocument();
     expect(screen.getAllByText('Dashboard').length).toBeGreaterThan(0);
   });
+
+  it('renders platform status from live summary data', () => {
+    render(
+      <AppShell
+        activePage="dashboard"
+        onNavigate={vi.fn()}
+        platformStatus={{
+          environment: 'prod',
+          onlineEdgeCount: 12,
+          pendingReleaseCount: 4,
+          project: 'factory-a',
+        }}
+      >
+        <h2>Dashboard</h2>
+      </AppShell>,
+    );
+
+    expect(screen.getByText('12 个边端在线')).toBeInTheDocument();
+    expect(screen.getByText('项目: factory-a')).toBeInTheDocument();
+    expect(screen.getByText('环境: prod')).toBeInTheDocument();
+    expect(screen.getByText('4 个配置待发布')).toBeInTheDocument();
+  });
 });
