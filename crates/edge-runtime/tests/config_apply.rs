@@ -1,6 +1,7 @@
 use edge_core::{
-    CollectionTask, DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint,
-    DataConfigPublish, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, PointAddress,
+    CollectionTask, DataConfig, DataConfigCollection, DataConfigGraphEdge, DataConfigGraphNode,
+    DataConfigGraphNodeKind, DataConfigPayload, DataConfigPoint, DataConfigPublish,
+    DataConfigVisualGraph, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, PointAddress,
     ProtocolConnection, TelemetryPointMapping, TelemetryType, TelemetryValue,
 };
 use edge_runtime::{AppliedEdgeConfig, ConfiguredSimulatedRuntime};
@@ -164,6 +165,99 @@ fn applying_config_rejects_data_config_points_from_other_connections() {
     assert!(error.to_string().contains(
         "data config pump_status point secondary_pressure uses protocol connection sim-secondary, expected sim-main"
     ));
+}
+
+#[test]
+fn applying_config_accepts_multiple_connected_mqtt_outputs() {
+    let mut data_config = data_config_with_pressure();
+    data_config.visual_graph = DataConfigVisualGraph {
+        nodes: vec![
+            graph_node("point-pressure", DataConfigGraphNodeKind::Point, "pressure"),
+            graph_node(
+                "mqtt-primary",
+                DataConfigGraphNodeKind::Mqtt,
+                "primary/topic",
+            ),
+            graph_node(
+                "mqtt-secondary",
+                DataConfigGraphNodeKind::Mqtt,
+                "secondary/topic",
+            ),
+        ],
+        edges: vec![
+            graph_edge("point-primary", "point-pressure", "mqtt-primary"),
+            graph_edge("point-secondary", "point-pressure", "mqtt-secondary"),
+        ],
+    };
+
+    AppliedEdgeConfig::apply(data_config_package().with_data_config(data_config))
+        .expect("connected multi-output graph is accepted");
+}
+
+#[test]
+fn applying_config_rejects_a_disconnected_mqtt_output() {
+    let mut data_config = data_config_with_pressure();
+    data_config.visual_graph = DataConfigVisualGraph {
+        nodes: vec![
+            graph_node("point-pressure", DataConfigGraphNodeKind::Point, "pressure"),
+            graph_node(
+                "mqtt-primary",
+                DataConfigGraphNodeKind::Mqtt,
+                "primary/topic",
+            ),
+        ],
+        edges: Vec::new(),
+    };
+
+    let error = AppliedEdgeConfig::apply(data_config_package().with_data_config(data_config))
+        .expect_err("disconnected output is rejected");
+
+    assert!(error
+        .to_string()
+        .contains("graph MQTT output mqtt-primary is disconnected"));
+}
+
+fn data_config_with_pressure() -> DataConfig {
+    DataConfig::new(
+        "pump_status",
+        "泵状态上报",
+        "pump-1",
+        "sim-main",
+        DataConfigCollection::new(1000),
+        DataConfigPublish::new(
+            "velamq-main",
+            "factory/{edge_id}/{device_id}/status",
+            DataConfigPayload::object(),
+        ),
+    )
+    .with_point(DataConfigPoint::new(
+        "pressure",
+        "pump.pressure",
+        PointAddress::simulated("pressure"),
+        TelemetryType::Float,
+        "pressure",
+    ))
+}
+
+fn graph_node(node_id: &str, kind: DataConfigGraphNodeKind, ref_id: &str) -> DataConfigGraphNode {
+    DataConfigGraphNode {
+        node_id: node_id.to_string(),
+        kind,
+        label: node_id.to_string(),
+        ref_id: Some(ref_id.to_string()),
+        x: 0,
+        y: 0,
+    }
+}
+
+fn graph_edge(edge_id: &str, from: &str, to: &str) -> DataConfigGraphEdge {
+    DataConfigGraphEdge {
+        edge_id: edge_id.to_string(),
+        from: from.to_string(),
+        from_port: Some("value".to_string()),
+        to: to.to_string(),
+        to_port: Some("payload".to_string()),
+    }
 }
 
 fn data_config_package() -> EdgeConfigPackage {

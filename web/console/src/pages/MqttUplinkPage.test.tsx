@@ -9,6 +9,9 @@ describe('MqttUplinkPage', () => {
       sinkId: 'velamq-main',
       broker: 'mqtts://velamq.prod:8883',
       clientId: 'edge-dev-runtime-dev',
+      username: 'edge-device',
+      passwordEnv: 'EDGEOPS_MQTT_PASSWORD',
+      tlsCaPath: '/etc/edgeops/velamq-ca.pem',
       topicTemplate: 'velamq/{edge_id}/{device_id}/telemetry',
       qos: 1,
       batchSize: 200,
@@ -37,6 +40,15 @@ describe('MqttUplinkPage', () => {
     fireEvent.change(screen.getByLabelText('Topic 模板'), {
       target: { value: 'velamq/{edge_id}/{device_id}/telemetry' },
     });
+    fireEvent.change(screen.getByLabelText('MQTT 用户名'), {
+      target: { value: 'edge-device' },
+    });
+    fireEvent.change(screen.getByLabelText('密码环境变量'), {
+      target: { value: 'EDGEOPS_MQTT_PASSWORD' },
+    });
+    fireEvent.change(screen.getByLabelText('私有 CA 路径'), {
+      target: { value: '/etc/edgeops/velamq-ca.pem' },
+    });
     fireEvent.change(screen.getByLabelText('批量条数'), {
       target: { value: '200' },
     });
@@ -50,6 +62,9 @@ describe('MqttUplinkPage', () => {
         sinkId: 'velamq-main',
         broker: 'mqtts://velamq.prod:8883',
         clientId: 'edge-dev-runtime-dev',
+        username: 'edge-device',
+        passwordEnv: 'EDGEOPS_MQTT_PASSWORD',
+        tlsCaPath: '/etc/edgeops/velamq-ca.pem',
         topicTemplate: 'velamq/{edge_id}/{device_id}/telemetry',
         qos: 1,
         batchSize: 200,

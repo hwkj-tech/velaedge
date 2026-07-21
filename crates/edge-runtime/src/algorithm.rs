@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use anyhow::{bail, Result};
 use chrono::{DateTime, Utc};
@@ -38,7 +38,15 @@ impl AlgorithmEngine {
         samples: &[TelemetrySample],
     ) -> Result<AlgorithmExecutionReport> {
         let mut report = AlgorithmExecutionReport::default();
-        for sample in samples {
+        let mut pending = samples.iter().cloned().collect::<VecDeque<_>>();
+        let mut processed = BTreeSet::new();
+        let max_generated_samples = samples
+            .len()
+            .max(1)
+            .saturating_mul(self.algorithms.len().max(1))
+            .saturating_mul(16);
+
+        while let Some(sample) = pending.pop_front() {
             for algorithm in self.algorithms.clone() {
                 if algorithm.dsl.inputs.is_empty() {
                     continue;
@@ -46,33 +54,40 @@ impl AlgorithmEngine {
                 if !algorithm.inputs().contains(&sample.telemetry_id) {
                     continue;
                 }
+                let transition = (
+                    algorithm.id.clone(),
+                    sample.device_id.clone(),
+                    sample.telemetry_id.clone(),
+                    sample.timestamp,
+                );
+                if !processed.insert(transition) {
+                    continue;
+                }
                 let state = self.states.entry(algorithm.id.clone()).or_default();
-                match algorithm.kind {
-                    AlgorithmKind::ChangeReport => {
-                        report
-                            .samples
-                            .extend(apply_change_report(&algorithm, state, sample)?);
-                    }
+                let mut generated = match algorithm.kind {
+                    AlgorithmKind::ChangeReport => apply_change_report(&algorithm, state, &sample)?,
                     AlgorithmKind::WindowAggregate => {
-                        report
-                            .samples
-                            .extend(apply_window_aggregate(&algorithm, state, sample)?);
+                        apply_window_aggregate(&algorithm, state, &sample)?
                     }
                     AlgorithmKind::ExpressionAggregate => {
-                        report
-                            .samples
-                            .extend(apply_expression(&algorithm, state, sample)?);
+                        apply_expression(&algorithm, state, &sample)?
                     }
                     AlgorithmKind::ThresholdRule => {
                         report
                             .events
-                            .extend(apply_threshold_rule(&algorithm, state, sample)?);
+                            .extend(apply_threshold_rule(&algorithm, state, &sample)?);
+                        Vec::new()
                     }
                     AlgorithmKind::DurationRule
                     | AlgorithmKind::Deadband
                     | AlgorithmKind::Debounce
-                    | AlgorithmKind::Statistics => {}
+                    | AlgorithmKind::Statistics => Vec::new(),
+                };
+                if report.samples.len().saturating_add(generated.len()) > max_generated_samples {
+                    bail!("algorithm graph generated too many samples; check for a cycle");
                 }
+                pending.extend(generated.iter().cloned());
+                report.samples.append(&mut generated);
             }
         }
         Ok(report)

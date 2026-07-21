@@ -8,6 +8,7 @@ use edge_core::{
     ProtocolType, TelemetryPointMapping, TelemetryType,
 };
 use serde_json::json;
+use tempfile::tempdir;
 
 fn package() -> EdgeConfigPackage {
     EdgeConfigPackage::new("edge-dev", "2026.06.26-005")
@@ -72,6 +73,8 @@ fn package_with_one_failing_collection_task() -> EdgeConfigPackage {
 
 #[test]
 fn edge_runtime_cli_can_run_cloud_config_sync_and_runtime_reporting_once() {
+    let dir = tempdir().unwrap();
+    let runtime_db = dir.path().join("runtime.rocksdb");
     let desired = json!({
         "edgeId": "edge-dev",
         "desiredVersion": "2026.06.26-005",
@@ -89,6 +92,8 @@ fn edge_runtime_cli_can_run_cloud_config_sync_and_runtime_reporting_once() {
             "runtime-cli",
             "--cloud-api-url",
             &base_url,
+            "--runtime-db",
+            runtime_db.to_str().unwrap(),
         ])
         .output()
         .unwrap();
@@ -112,6 +117,8 @@ fn edge_runtime_cli_can_run_cloud_config_sync_and_runtime_reporting_once() {
 
 #[test]
 fn edge_runtime_cli_can_run_scheduled_collection_ticks_from_cloud_config() {
+    let dir = tempdir().unwrap();
+    let runtime_db = dir.path().join("runtime.rocksdb");
     let desired = json!({
         "edgeId": "edge-dev",
         "desiredVersion": "2026.06.26-005",
@@ -133,6 +140,8 @@ fn edge_runtime_cli_can_run_scheduled_collection_ticks_from_cloud_config() {
             "2",
             "--scheduler-tick-ms",
             "1000",
+            "--runtime-db",
+            runtime_db.to_str().unwrap(),
         ])
         .output()
         .unwrap();
@@ -154,6 +163,8 @@ fn edge_runtime_cli_can_run_scheduled_collection_ticks_from_cloud_config() {
 
 #[test]
 fn edge_runtime_cli_reports_collection_failure_events_during_scheduled_ticks() {
+    let dir = tempdir().unwrap();
+    let runtime_db = dir.path().join("runtime.rocksdb");
     let desired = json!({
         "edgeId": "edge-dev",
         "desiredVersion": "2026.06.26-006",
@@ -177,6 +188,8 @@ fn edge_runtime_cli_reports_collection_failure_events_during_scheduled_ticks() {
             &base_url,
             "--scheduled-ticks",
             "1",
+            "--runtime-db",
+            runtime_db.to_str().unwrap(),
         ])
         .output()
         .unwrap();

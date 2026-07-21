@@ -7,7 +7,9 @@ import type {
   SaveDeviceModelRequest,
 } from '../api/types';
 import { Drawer } from '../components/Drawer';
+import { Modal } from '../components/Modal';
 import { PaginationBar } from '../components/PaginationBar';
+import { displayError } from '../utils/errors';
 import './PointMappingsPage.css';
 
 const fallbackDeviceModels: DeviceModelResponse[] = [
@@ -116,8 +118,8 @@ export function DeviceModelsPage({
       }
       setCreateForm(emptyCreateForm());
       setDialogOpen(false);
-    } catch {
-      setToolbarMessage('创建设备模型失败');
+    } catch (error) {
+      setToolbarMessage(`创建设备模型失败：${displayError(error)}`);
     } finally {
       setCreateState('idle');
     }
@@ -132,8 +134,9 @@ export function DeviceModelsPage({
         setSelectedDeviceType(saved.deviceType);
       }
       setSaveState('saved');
-    } catch {
+    } catch (error) {
       setSaveState('error');
+      setToolbarMessage(`保存设备模型失败：${displayError(error)}`);
     }
   };
 
@@ -142,8 +145,8 @@ export function DeviceModelsPage({
     try {
       await onDeleteDeviceModel?.(deviceType);
       setToolbarMessage(`已删除设备模型 ${deviceType}`);
-    } catch {
-      setToolbarMessage('删除设备模型失败：请先解除设备实例引用');
+    } catch (error) {
+      setToolbarMessage(`删除设备模型失败：${displayError(error, '请先解除设备实例引用')}`);
     }
   };
 
@@ -152,9 +155,7 @@ export function DeviceModelsPage({
       <section className="page-intro">
         <div>
           <h2>语义设备模型</h2>
-          <p>
-            先定义设备语义，再在点位配置中绑定具体 Modbus RTU、DL/T645、IEC 101 或模拟地址。
-          </p>
+          <p>设备语义与遥测字段定义。</p>
         </div>
         <div className="toolbar">
           {toolbarMessage ? (
@@ -417,7 +418,7 @@ function DeviceModelDialog({
   setForm: Dispatch<SetStateAction<CreateDeviceModelRequest>>;
 }) {
   return (
-    <div className="modal-backdrop">
+    <Modal onClose={onClose}>
       <form
         aria-labelledby="device-model-dialog-title"
         className="modal-panel"
@@ -473,7 +474,7 @@ function DeviceModelDialog({
           </button>
         </div>
       </form>
-    </div>
+    </Modal>
   );
 }
 

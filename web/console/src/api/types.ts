@@ -3,6 +3,104 @@ export interface SummaryResponse {
   pending_release_count: number;
 }
 
+export interface ProjectResponse {
+  projectId: string;
+  name: string;
+  environment: string;
+  owner: string;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SaveProjectRequest {
+  projectId: string;
+  name: string;
+  environment: string;
+  owner: string;
+  description: string;
+}
+
+export interface CatalogPointAddress {
+  kind: string;
+  value: string;
+}
+
+export interface PointSetPointResponse {
+  pointId: string;
+  semanticId: string;
+  address: CatalogPointAddress;
+  valueType: string;
+  unit?: string | null;
+  intervalMs: number;
+}
+
+export interface PointSetResponse {
+  pointSetId: string;
+  projectId: string;
+  name: string;
+  description: string;
+  protocol: string;
+  points: PointSetPointResponse[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SavePointSetRequest {
+  pointSetId: string;
+  projectId: string;
+  name: string;
+  description: string;
+  protocol: string;
+  points: PointSetPointResponse[];
+}
+
+export interface ProductResponse {
+  productId: string;
+  projectId: string;
+  name: string;
+  productType: string;
+  description: string;
+  latestVersion?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SaveProductRequest {
+  productId: string;
+  projectId: string;
+  name: string;
+  productType: string;
+  description: string;
+}
+
+export interface SaveProductVersionRequest {
+  version: string;
+  pointSetIds: string[];
+  deviceModels: unknown[];
+  devices: unknown[];
+  protocolConnections: unknown[];
+  collectionTasks: unknown[];
+  algorithms: unknown[];
+  dataConfigs: unknown[];
+  mqttUplinks: unknown[];
+}
+
+export interface ProductVersionResponse {
+  productId: string;
+  version: string;
+  status: 'draft' | 'published' | 'retired';
+  pointSetIds: string[];
+  deviceModels: unknown[];
+  devices: unknown[];
+  protocolConnections: unknown[];
+  collectionTasks: unknown[];
+  algorithms: unknown[];
+  dataConfigs: unknown[];
+  mqttUplinks: unknown[];
+  createdAt: string;
+}
+
 export interface PointMappingResponse {
   edgeId: string;
   pointId: string;
@@ -67,11 +165,31 @@ export interface EdgeNodeResponse {
   resources: string;
   heartbeat: string;
   capabilities: string[];
+  projectId?: string;
+  productId?: string;
+  desiredProductVersion?: string;
+  reportedProductVersion?: string;
+  accessToken?: string;
 }
 
 export interface CreateEdgeNodeRequest {
   displayName: string;
+  productId?: string;
+  projectId?: string;
   site: string;
+}
+
+export interface BindEdgeProductRequest {
+  projectId: string;
+  productId: string;
+  desiredVersion?: string;
+}
+
+export interface EdgeAccessTokenResponse {
+  accessToken: string;
+  createdAt: string;
+  credentialId: string;
+  edgeId: string;
 }
 
 export interface TelemetryModelResponse {
@@ -127,12 +245,134 @@ export interface AgentActionResponse extends ManagementActionResponse {
   suggestions: AgentSuggestionResponse[];
 }
 
+export interface AuthStatusResponse {
+  authenticationEnabled: boolean;
+  role: 'viewer' | 'operator' | 'admin';
+  subject: string;
+}
+
+export interface AgentProviderStatusResponse {
+  configured: boolean;
+  mode: 'deterministic' | 'openai_compatible';
+  model: string;
+}
+
+export interface AgentChatRequest {
+  message: string;
+  projectId?: string | null;
+  edgeId?: string | null;
+  conversationId?: string | null;
+  operatorId?: string;
+}
+
+export interface AgentChatResponse {
+  message: string;
+  mode: 'deterministic' | 'openai_compatible';
+  model: string;
+  citations: AgentCitationResponse[];
+  conversationId?: string;
+  conversationTitle?: string;
+}
+
+export interface AgentCitationResponse {
+  documentId: string;
+  title: string;
+  sourceUri: string | null;
+  excerpt: string;
+}
+
+export interface AgentConversationMessageResponse {
+  messageId: string;
+  role: 'user' | 'assistant';
+  content: string;
+  citations: AgentCitationResponse[];
+  createdAt: string;
+}
+
+export interface AgentConversationResponse {
+  conversationId: string;
+  projectId: string | null;
+  edgeId: string | null;
+  operatorId: string;
+  title: string;
+  messages: AgentConversationMessageResponse[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentKnowledgeDocumentResponse {
+  documentId: string;
+  projectId: string | null;
+  title: string;
+  sourceUri: string | null;
+  content: string;
+  tags: string[];
+  enabled: boolean;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SaveAgentKnowledgeDocumentRequest {
+  projectId?: string | null;
+  title: string;
+  sourceUri?: string | null;
+  content: string;
+  tags: string[];
+  enabled: boolean;
+  actor: string;
+}
+
+export type AgentProposalKind =
+  | 'config_suggestion'
+  | 'point_mapping'
+  | 'rollout_plan'
+  | 'command_candidate';
+export type AgentProposalRisk = 'low' | 'medium' | 'high';
+export type AgentProposalStatus = 'pending_review' | 'approved' | 'rejected';
+
+export interface AgentProposalResponse {
+  proposalId: string;
+  agentId: string;
+  kind: AgentProposalKind;
+  projectId: string | null;
+  edgeId: string | null;
+  title: string;
+  summary: string;
+  payload: unknown;
+  risk: AgentProposalRisk;
+  status: AgentProposalStatus;
+  createdBy: string;
+  createdAt: string;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  reviewNote: string | null;
+}
+
+export interface CreateAgentProposalRequest {
+  agentId: string;
+  kind: AgentProposalKind;
+  projectId?: string | null;
+  edgeId?: string | null;
+  title: string;
+  summary: string;
+  payload?: unknown;
+  risk: AgentProposalRisk;
+  createdBy: string;
+}
+
+export interface ReviewAgentProposalRequest {
+  reviewer: string;
+  note?: string | null;
+}
+
 export interface ProtocolConnectionResponse {
   edgeId: string;
   connectionId: string;
   protocolType: string;
   protocol: string;
   endpoint: string;
+  serial?: SerialConnectionSettings | null;
   status: string;
   policy: string;
 }
@@ -140,11 +380,21 @@ export interface ProtocolConnectionResponse {
 export interface SaveProtocolConnectionRequest {
   protocolType: string;
   endpoint: string | null;
+  serial?: SerialConnectionSettings | null;
 }
 
 export interface CreateProtocolConnectionRequest {
   protocolType: string;
   endpoint: string | null;
+  serial?: SerialConnectionSettings | null;
+}
+
+export interface SerialConnectionSettings {
+  port: string;
+  baudRate: number;
+  dataBits: number;
+  stopBits: number;
+  parity: 'none' | 'even' | 'odd';
 }
 
 export interface CollectionTaskResponse {
@@ -202,7 +452,9 @@ export interface DataConfigGraphNode {
 export interface DataConfigGraphEdge {
   edgeId: string;
   from: string;
+  fromPort?: string | null;
   to: string;
+  toPort?: string | null;
 }
 
 export interface DataConfigVisualGraph {
@@ -428,6 +680,9 @@ export interface MqttUplinkResponse {
   sinkId: string;
   broker: string;
   clientId: string;
+  username?: string;
+  passwordEnv?: string;
+  tlsCaPath?: string;
   topicTemplate: string;
   qos: number;
   batchSize: number;

@@ -1,9 +1,18 @@
 import type {
   AgentActionResponse,
+  AgentChatRequest,
+  AgentChatResponse,
+  AgentConversationResponse,
+  AgentKnowledgeDocumentResponse,
+  AgentProviderStatusResponse,
+  AgentProposalResponse,
   AlgorithmResponse,
   AuditRecordResponse,
+  AuthStatusResponse,
+  BindEdgeProductRequest,
   CollectionTaskResponse,
   CreateAlgorithmRequest,
+  CreateAgentProposalRequest,
   CreateCollectionTaskRequest,
   CreateDeviceModelRequest,
   CreateEdgeNodeRequest,
@@ -12,13 +21,20 @@ import type {
   DeviceModelResponse,
   DiscoveryReportResponse,
   EdgeNodeResponse,
+  EdgeAccessTokenResponse,
   MqttUplinkResponse,
   PointMappingResponse,
   PointMappingSuggestionResponse,
+  PointSetResponse,
+  ProductResponse,
+  ProductVersionResponse,
+  ProjectResponse,
   ProtocolConnectionResponse,
   ReleaseListResponse,
   RunDiscoveryRequest,
   RuntimeStatusResponse,
+  ReviewAgentProposalRequest,
+  SaveAgentKnowledgeDocumentRequest,
   ManagementActionResponse,
   SaveAlgorithmRequest,
   SaveCollectionTaskRequest,
@@ -26,10 +42,248 @@ import type {
   SaveDeviceModelRequest,
   SaveMqttUplinkRequest,
   SavePointMappingRequest,
+  SavePointSetRequest,
+  SaveProductRequest,
+  SaveProductVersionRequest,
+  SaveProjectRequest,
   SaveProtocolConnectionRequest,
   CreateProtocolConnectionRequest,
   SummaryResponse,
 } from './types';
+
+const apiTokenStorageKey = 'edgeops.apiToken';
+
+export function getApiToken(): string | undefined {
+  try {
+    return window.sessionStorage.getItem(apiTokenStorageKey) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function setApiToken(token?: string): void {
+  try {
+    const normalized = token?.trim();
+    if (normalized) {
+      window.sessionStorage.setItem(apiTokenStorageKey, normalized);
+    } else {
+      window.sessionStorage.removeItem(apiTokenStorageKey);
+    }
+  } catch {
+    // The console remains usable in browsers that disable session storage.
+  }
+}
+
+export async function fetchAuthStatus(
+  fetcher: typeof fetch = fetch,
+): Promise<AuthStatusResponse> {
+  return requestJson<AuthStatusResponse>('/api/auth/me', fetcher);
+}
+
+export async function fetchProjects(
+  fetcher: typeof fetch = fetch,
+): Promise<ProjectResponse[]> {
+  return requestJson<ProjectResponse[]>('/api/projects', fetcher);
+}
+
+export async function createProject(
+  request: SaveProjectRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<ProjectResponse> {
+  return requestJson<ProjectResponse>('/api/projects', fetcher, {
+    body: JSON.stringify(request),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  });
+}
+
+export async function saveProject(
+  projectId: string,
+  request: SaveProjectRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<ProjectResponse> {
+  return requestJson<ProjectResponse>(
+    `/api/projects/${encodeURIComponent(projectId)}`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    },
+  );
+}
+
+export async function deleteProject(
+  projectId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  await requestText(`/api/projects/${encodeURIComponent(projectId)}`, fetcher, {
+    method: 'DELETE',
+  });
+}
+
+export async function fetchPointSets(
+  fetcher: typeof fetch = fetch,
+): Promise<PointSetResponse[]> {
+  return requestJson<PointSetResponse[]>('/api/point-sets', fetcher);
+}
+
+export async function createPointSet(
+  request: SavePointSetRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<PointSetResponse> {
+  return requestJson<PointSetResponse>('/api/point-sets', fetcher, {
+    body: JSON.stringify(request),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  });
+}
+
+export async function savePointSet(
+  pointSetId: string,
+  request: SavePointSetRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<PointSetResponse> {
+  return requestJson<PointSetResponse>(
+    `/api/point-sets/${encodeURIComponent(pointSetId)}`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    },
+  );
+}
+
+export async function deletePointSet(
+  pointSetId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  await requestText(`/api/point-sets/${encodeURIComponent(pointSetId)}`, fetcher, {
+    method: 'DELETE',
+  });
+}
+
+export async function fetchProducts(
+  fetcher: typeof fetch = fetch,
+): Promise<ProductResponse[]> {
+  return requestJson<ProductResponse[]>('/api/products', fetcher);
+}
+
+export async function fetchProductVersions(
+  productId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ProductVersionResponse[]> {
+  return requestJson<ProductVersionResponse[]>(
+    `/api/products/${encodeURIComponent(productId)}/versions`,
+    fetcher,
+  );
+}
+
+export async function createProduct(
+  request: SaveProductRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<ProductResponse> {
+  return requestJson<ProductResponse>('/api/products', fetcher, {
+    body: JSON.stringify(request),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  });
+}
+
+export async function saveProduct(
+  productId: string,
+  request: SaveProductRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<ProductResponse> {
+  return requestJson<ProductResponse>(
+    `/api/products/${encodeURIComponent(productId)}`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    },
+  );
+}
+
+export async function deleteProduct(
+  productId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  await requestText(`/api/products/${encodeURIComponent(productId)}`, fetcher, {
+    method: 'DELETE',
+  });
+}
+
+export async function createProductVersion(
+  productId: string,
+  request: SaveProductVersionRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<ProductVersionResponse> {
+  return requestJson<ProductVersionResponse>(
+    `/api/products/${encodeURIComponent(productId)}/versions`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    },
+  );
+}
+
+export async function saveProductVersion(
+  productId: string,
+  version: string,
+  request: SaveProductVersionRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<ProductVersionResponse> {
+  return requestJson<ProductVersionResponse>(
+    `/api/products/${encodeURIComponent(productId)}/versions/${encodeURIComponent(version)}`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    },
+  );
+}
+
+export async function publishProductVersion(
+  productId: string,
+  version: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ProductVersionResponse> {
+  return requestJson<ProductVersionResponse>(
+    `/api/products/${encodeURIComponent(productId)}/versions/${encodeURIComponent(version)}/publish`,
+    fetcher,
+    { method: 'POST' },
+  );
+}
+
+export async function rollbackProductVersion(
+  productId: string,
+  version: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ProductVersionResponse> {
+  return requestJson<ProductVersionResponse>(
+    `/api/products/${encodeURIComponent(productId)}/versions/${encodeURIComponent(version)}/rollback`,
+    fetcher,
+    { method: 'POST' },
+  );
+}
+
+export async function deleteProductVersion(
+  productId: string,
+  version: string,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  await requestText(
+    `/api/products/${encodeURIComponent(productId)}/versions/${encodeURIComponent(version)}`,
+    fetcher,
+    { method: 'DELETE' },
+  );
+}
 
 export async function fetchSummary(
   fetcher: typeof fetch = fetch,
@@ -83,6 +337,33 @@ export async function deleteEdgeNode(
   await requestText(`/api/edge-nodes/${encodeURIComponent(edgeId)}`, fetcher, {
     method: 'DELETE',
   });
+}
+
+export async function bindEdgeProduct(
+  edgeId: string,
+  request: BindEdgeProductRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<EdgeNodeResponse> {
+  return requestJson<EdgeNodeResponse>(
+    `/api/edge-nodes/${encodeURIComponent(edgeId)}/product-binding`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    },
+  );
+}
+
+export async function generateEdgeAccessToken(
+  edgeId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<EdgeAccessTokenResponse> {
+  return requestJson<EdgeAccessTokenResponse>(
+    `/api/edge-nodes/${encodeURIComponent(edgeId)}/access-token`,
+    fetcher,
+    { method: 'POST' },
+  );
 }
 
 export async function fetchDeviceModels(
@@ -562,14 +843,143 @@ export async function generateAgentSuggestions(
   });
 }
 
+export async function fetchAgentProviderStatus(
+  fetcher: typeof fetch = fetch,
+): Promise<AgentProviderStatusResponse> {
+  return requestJson<AgentProviderStatusResponse>('/api/agent/provider', fetcher);
+}
+
+export async function sendAgentChat(
+  request: AgentChatRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentChatResponse> {
+  return requestJson<AgentChatResponse>('/api/agent/chat', fetcher, {
+    body: JSON.stringify(request),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  });
+}
+
+export async function fetchAgentConversations(
+  operatorId = 'console-operator',
+  projectId?: string,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentConversationResponse[]> {
+  const params = new URLSearchParams({ operatorId });
+  params.set('projectId', projectId ?? '');
+  return requestJson<AgentConversationResponse[]>(
+    `/api/agent/conversations?${params.toString()}`,
+    fetcher,
+  );
+}
+
+export async function deleteAgentConversation(
+  conversationId: string,
+  operatorId = 'console-operator',
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  await requestText(
+    `/api/agent/conversations/${encodeURIComponent(conversationId)}?operatorId=${encodeURIComponent(operatorId)}`,
+    fetcher,
+    { method: 'DELETE' },
+  );
+}
+
+export async function fetchAgentKnowledgeDocuments(
+  projectId?: string,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentKnowledgeDocumentResponse[]> {
+  const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
+  return requestJson<AgentKnowledgeDocumentResponse[]>(
+    `/api/agent/knowledge${query}`,
+    fetcher,
+  );
+}
+
+export async function createAgentKnowledgeDocument(
+  request: SaveAgentKnowledgeDocumentRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentKnowledgeDocumentResponse> {
+  return requestJson<AgentKnowledgeDocumentResponse>('/api/agent/knowledge', fetcher, {
+    body: JSON.stringify(request),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  });
+}
+
+export async function saveAgentKnowledgeDocument(
+  documentId: string,
+  request: SaveAgentKnowledgeDocumentRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentKnowledgeDocumentResponse> {
+  return requestJson<AgentKnowledgeDocumentResponse>(
+    `/api/agent/knowledge/${encodeURIComponent(documentId)}`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    },
+  );
+}
+
+export async function deleteAgentKnowledgeDocument(
+  documentId: string,
+  actor = 'console-operator',
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  await requestText(
+    `/api/agent/knowledge/${encodeURIComponent(documentId)}?actor=${encodeURIComponent(actor)}`,
+    fetcher,
+    { method: 'DELETE' },
+  );
+}
+
+export async function fetchAgentProposals(
+  fetcher: typeof fetch = fetch,
+): Promise<AgentProposalResponse[]> {
+  return requestJson<AgentProposalResponse[]>('/api/agent/proposals', fetcher);
+}
+
+export async function createAgentProposal(
+  request: CreateAgentProposalRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentProposalResponse> {
+  return requestJson<AgentProposalResponse>('/api/agent/proposals', fetcher, {
+    body: JSON.stringify(request),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  });
+}
+
+export async function reviewAgentProposal(
+  proposalId: string,
+  decision: 'approve' | 'reject',
+  request: ReviewAgentProposalRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentProposalResponse> {
+  return requestJson<AgentProposalResponse>(
+    `/api/agent/proposals/${encodeURIComponent(proposalId)}/${decision}`,
+    fetcher,
+    {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    },
+  );
+}
+
 async function requestJson<T>(
   path: string,
   fetcher: typeof fetch,
   init?: RequestInit,
 ): Promise<T> {
-  const response = init === undefined ? await fetcher(path) : await fetcher(path, init);
+  const authenticatedInit = withApiToken(init);
+  const response = authenticatedInit === undefined
+    ? await fetcher(path)
+    : await fetcher(path, authenticatedInit);
   if (!response.ok) {
-    throw new Error(`Failed to load ${path}: ${response.status}`);
+    throw new Error(await responseErrorMessage(response, path));
   }
 
   return response.json() as Promise<T>;
@@ -580,10 +990,47 @@ async function requestText(
   fetcher: typeof fetch,
   init?: RequestInit,
 ): Promise<string> {
-  const response = init === undefined ? await fetcher(path) : await fetcher(path, init);
+  const authenticatedInit = withApiToken(init);
+  const response = authenticatedInit === undefined
+    ? await fetcher(path)
+    : await fetcher(path, authenticatedInit);
   if (!response.ok) {
-    throw new Error(`Failed to load ${path}: ${response.status}`);
+    throw new Error(await responseErrorMessage(response, path));
   }
 
   return response.text();
+}
+
+function withApiToken(init?: RequestInit): RequestInit | undefined {
+  const token = getApiToken();
+  if (!token) return init;
+
+  const headers = new Headers(init?.headers);
+  headers.set('authorization', `Bearer ${token}`);
+  return { ...init, headers };
+}
+
+async function responseErrorMessage(response: Response, path: string): Promise<string> {
+  try {
+    const payload = (await response.json()) as { error?: unknown; message?: unknown };
+    if (typeof payload.message === 'string' && payload.message.trim()) {
+      return payload.message;
+    }
+    if (typeof payload.error === 'string' && payload.error.trim()) {
+      return payload.error;
+    }
+  } catch {
+    // Fall through to text or status fallback.
+  }
+
+  try {
+    const text = await response.text();
+    if (text.trim()) {
+      return text;
+    }
+  } catch {
+    // Ignore body parsing errors and keep the deterministic fallback.
+  }
+
+  return `Failed to load ${path}: ${response.status}`;
 }

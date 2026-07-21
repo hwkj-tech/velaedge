@@ -1,5 +1,8 @@
 use chrono::Utc;
-use cloud_control::{EdgeNode, ReleaseRecord, ReleaseStatus, SqliteCloudStore};
+use cloud_control::{
+    AgentProposal, AgentProposalKind, AgentProposalStatus, AuditAction, AuditRecord, EdgeNode,
+    ReleaseRecord, ReleaseStatus, SqliteCloudStore,
+};
 use edge_core::{
     CloudSyncMetrics, CollectionRuntimeMetrics, CollectionTask, DeviceInstance, DiscoveredPoint,
     DiscoveryReport, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot,
@@ -207,6 +210,43 @@ async fn sqlite_store_persists_mqtt_uplink_and_discovery_reports() {
     let suggestions = reopened.discovery_suggestions("edge-dev").await.unwrap();
     assert_eq!(suggestions.len(), 1);
     assert_eq!(suggestions[0].point_id, "meter_voltage_a");
+}
+
+#[tokio::test]
+async fn sqlite_store_persists_agent_proposal_review_with_audit() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let database_url = format!("sqlite://{}", tempdir.path().join("cloud.db").display());
+    let mut proposal = AgentProposal::new(
+        "fleet-agent",
+        AgentProposalKind::RolloutPlan,
+        "灰度发布",
+        "先发布一台边端",
+        "operator-a",
+    );
+    proposal
+        .review(
+            AgentProposalStatus::Rejected,
+            "reviewer-a",
+            Some("维护窗口未开启".to_string()),
+        )
+        .unwrap();
+    let audit = AuditRecord::by_actor(
+        AuditAction::RejectAgentProposal,
+        format!("agent-proposal:{}", proposal.proposal_id),
+        "reviewer-a",
+    );
+
+    {
+        let store = SqliteCloudStore::connect(&database_url).await.unwrap();
+        store
+            .upsert_agent_proposal_with_audit(proposal.clone(), audit.clone())
+            .await
+            .unwrap();
+    }
+
+    let reopened = SqliteCloudStore::connect(&database_url).await.unwrap();
+    assert_eq!(reopened.agent_proposals().await.unwrap(), vec![proposal]);
+    assert_eq!(reopened.audit_records().await.unwrap(), vec![audit]);
 }
 
 #[tokio::test]

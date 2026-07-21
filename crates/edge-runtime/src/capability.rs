@@ -8,7 +8,12 @@ pub struct RuntimeCapabilityConfig {
 impl RuntimeCapabilityConfig {
     pub fn serial_mqtt_defaults() -> Self {
         Self {
-            serial_protocols: vec!["modbus-rtu".to_string()],
+            serial_protocols: vec![
+                "modbus-rtu".to_string(),
+                "dlt645-2007".to_string(),
+                "iec60870-5-101-unbalanced".to_string(),
+                "custom-serial-frame-dsl-v1".to_string(),
+            ],
             mqtt_uplink_enabled: true,
             local_store_backend: "rocksdb".to_string(),
         }

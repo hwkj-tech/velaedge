@@ -5,7 +5,7 @@ use edge_core::{
     SystemRuntimeMetrics,
 };
 
-use crate::AppliedEdgeConfig;
+use crate::{AppliedEdgeConfig, MqttOutboxStats};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CollectionRunStats {
@@ -65,6 +65,7 @@ pub struct SimulatedRuntimeMetricsCollector {
     runtime_id: String,
     applied: AppliedEdgeConfig,
     collection_metrics: Option<CollectionRuntimeMetrics>,
+    mqtt_outbox_stats: Option<MqttOutboxStats>,
 }
 
 impl SimulatedRuntimeMetricsCollector {
@@ -73,11 +74,17 @@ impl SimulatedRuntimeMetricsCollector {
             runtime_id: runtime_id.into(),
             applied,
             collection_metrics: None,
+            mqtt_outbox_stats: None,
         }
     }
 
     pub fn with_collection_metrics(mut self, metrics: CollectionRuntimeMetrics) -> Self {
         self.collection_metrics = Some(metrics);
+        self
+    }
+
+    pub fn with_mqtt_outbox_stats(mut self, stats: MqttOutboxStats) -> Self {
+        self.mqtt_outbox_stats = Some(stats);
         self
     }
 
@@ -89,7 +96,14 @@ impl SimulatedRuntimeMetricsCollector {
             runtime_id: self.runtime_id.clone(),
             config_version: package.version.clone(),
             timestamp: Utc::now(),
-            health: EdgeHealth::Healthy,
+            health: if self
+                .mqtt_outbox_stats
+                .is_some_and(|stats| stats.pending_messages > 0)
+            {
+                EdgeHealth::Degraded
+            } else {
+                EdgeHealth::Healthy
+            },
             system: SystemRuntimeMetrics {
                 cpu_percent: 18.5,
                 memory_percent: 42.0,
@@ -123,9 +137,19 @@ impl SimulatedRuntimeMetricsCollector {
                 })
                 .collect(),
             local_store: LocalStoreMetrics {
-                backend: "jsonl".to_string(),
-                buffered_records: 0,
-                oldest_buffer_age_seconds: 0,
+                backend: if self.mqtt_outbox_stats.is_some() {
+                    "rocksdb-mqtt-outbox".to_string()
+                } else {
+                    "jsonl".to_string()
+                },
+                buffered_records: self
+                    .mqtt_outbox_stats
+                    .map(|stats| stats.pending_messages)
+                    .unwrap_or(0),
+                oldest_buffer_age_seconds: self
+                    .mqtt_outbox_stats
+                    .map(|stats| stats.oldest_message_age_seconds)
+                    .unwrap_or(0),
                 disk_usage_percent: 35.0,
             },
             algorithms: package
@@ -142,7 +166,10 @@ impl SimulatedRuntimeMetricsCollector {
             cloud_sync: CloudSyncMetrics {
                 connected: true,
                 last_sync_seconds_ago: 8,
-                pending_uploads: 0,
+                pending_uploads: self
+                    .mqtt_outbox_stats
+                    .map(|stats| stats.pending_messages)
+                    .unwrap_or(0),
                 desired_version: package.version.clone(),
                 reported_version: package.version.clone(),
             },

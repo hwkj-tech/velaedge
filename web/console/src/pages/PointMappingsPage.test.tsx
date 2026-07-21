@@ -4,140 +4,166 @@ import { describe, expect, it, vi } from 'vitest';
 import { PointMappingsPage } from './PointMappingsPage';
 
 describe('PointMappingsPage', () => {
-  it('shows point table and editor drawer fields', () => {
+  it('shows point sets as the primary management unit', () => {
     render(<PointMappingsPage />);
 
-    expect(screen.getByText('点位配置表')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '编辑点位 pressure' })).toBeInTheDocument();
-    expect(screen.getByText('holding_register:40001')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '编辑点位 pressure' }));
-    expect(screen.getByText('编辑点位 pressure')).toBeInTheDocument();
-    expect(screen.getByText('采集周期')).toBeInTheDocument();
-    expect(screen.queryByText(/草稿/)).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '点位集管理' })).toBeInTheDocument();
+    expect(screen.getByText('点位集列表')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看点位集 pump-1 / modbus-line-a' })).toBeInTheDocument();
+    expect(screen.getByText('pressure, running')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '新建点位' })).not.toBeInTheDocument();
   });
 
-  it('shows an explicit row action for editing point mappings', () => {
-    render(<PointMappingsPage selectedEdgeId="edge-dev" />);
-
-    expect(screen.getByRole('columnheader', { name: '操作' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '修改点位 pressure' }));
-
-    expect(screen.getByRole('dialog', { name: '编辑点位 pressure' })).toBeInTheDocument();
-    expect(screen.getByLabelText('地址值')).toHaveValue('40001');
-  });
-
-  it('saves edited point mapping drafts from the editor drawer', async () => {
+  it('opens a point set detail drawer and edits a point inside the set', async () => {
     const onSavePoint = vi.fn().mockResolvedValue(undefined);
-
     render(<PointMappingsPage selectedEdgeId="edge-dev" onSavePoint={onSavePoint} />);
 
-    fireEvent.click(screen.getByRole('button', { name: '编辑点位 pressure' }));
-    fireEvent.change(screen.getByLabelText('地址值'), {
+    fireEvent.click(screen.getByRole('button', { name: '修改点位集 pump-1 / modbus-line-a' }));
+
+    const dialog = screen.getByRole('dialog', { name: '点位集 pump-1 / modbus-line-a' });
+    expect(within(dialog).getByText('集合内点位')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: '选择点位 pressure' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: '选择点位 running' })).toBeInTheDocument();
+
+    fireEvent.change(within(dialog).getByLabelText('地址值'), {
       target: { value: '40002' },
     });
-    fireEvent.change(screen.getByLabelText('采集周期(ms)'), {
+    fireEvent.change(within(dialog).getByLabelText('采集周期(ms)'), {
       target: { value: '2000' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
-      expect(onSavePoint).toHaveBeenCalledWith(
-        'edge-dev',
-        'pressure',
-        {
-          addressKind: 'holding_register',
-          addressValue: '40002',
-          intervalMs: 2000,
-          unit: 'MPa',
-        },
-      );
+      expect(onSavePoint).toHaveBeenCalledWith('edge-dev', 'pressure', {
+        addressKind: 'holding_register',
+        addressValue: '40002',
+        intervalMs: 2000,
+        unit: 'MPa',
+      });
     });
-    expect(screen.getByText('已保存')).toBeInTheDocument();
   });
 
-  it('switches the editor to the selected point row before saving', async () => {
-    const onSavePoint = vi.fn().mockResolvedValue(undefined);
+  it('closes point set dialogs with Escape', () => {
+    render(<PointMappingsPage selectedEdgeId="edge-dev" />);
 
+    fireEvent.click(screen.getByRole('button', { name: '新建点位集' }));
+    expect(screen.getByRole('dialog', { name: '新建点位集' })).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: '新建点位集' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '修改点位集 pump-1 / modbus-line-a' }));
+    expect(screen.getByRole('dialog', { name: '点位集 pump-1 / modbus-line-a' })).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: '点位集 pump-1 / modbus-line-a' })).not.toBeInTheDocument();
+  });
+
+  it('switches selected point inside a point set before saving', async () => {
+    const onSavePoint = vi.fn().mockResolvedValue(undefined);
     render(<PointMappingsPage selectedEdgeId="edge-dev" onSavePoint={onSavePoint} />);
 
-    fireEvent.click(screen.getByRole('button', { name: '编辑点位 running' }));
-    expect(screen.getByText('编辑点位 running')).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText('地址值'), {
+    fireEvent.click(screen.getByRole('button', { name: '修改点位集 pump-1 / modbus-line-a' }));
+    const dialog = screen.getByRole('dialog', { name: '点位集 pump-1 / modbus-line-a' });
+    fireEvent.click(within(dialog).getByRole('button', { name: '选择点位 running' }));
+    fireEvent.change(within(dialog).getByLabelText('地址值'), {
       target: { value: '00002' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
-      expect(onSavePoint).toHaveBeenCalledWith(
-        'edge-dev',
-        'running',
-        {
-          addressKind: 'coil',
-          addressValue: '00002',
-          intervalMs: 1000,
-          unit: '-',
-        },
-      );
+      expect(onSavePoint).toHaveBeenCalledWith('edge-dev', 'running', {
+        addressKind: 'coil',
+        addressValue: '00002',
+        intervalMs: 1000,
+        unit: '-',
+      });
     });
   });
 
-  it('does not render edge selection context inside the page toolbar', () => {
+  it('creates a point set by submitting multiple points', async () => {
+    const onCreatePoint = vi.fn()
+      .mockResolvedValueOnce({ pointId: 'temperature' })
+      .mockResolvedValueOnce({ pointId: 'running' });
+
+    render(<PointMappingsPage selectedEdgeId="edge-dev" onCreatePoint={onCreatePoint} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '新建点位集' }));
+    const dialog = screen.getByRole('dialog', { name: '新建点位集' });
+    fireEvent.change(within(dialog).getByLabelText('点位集名称'), {
+      target: { value: 'pump-basic-set' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('新建设备 ID'), {
+      target: { value: 'pump-1' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('新建连接实例'), {
+      target: { value: 'modbus-line-a' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('点位 1 Point ID'), {
+      target: { value: 'temperature' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('点位 1 语义遥测'), {
+      target: { value: 'pump.temperature' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('点位 1 地址类型'), {
+      target: { value: 'input_register' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('点位 1 地址值'), {
+      target: { value: '30001' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('点位 1 采集周期(ms)'), {
+      target: { value: '5000' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('点位 1 单位'), {
+      target: { value: 'C' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('点位 2 Point ID'), {
+      target: { value: 'running' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('点位 2 语义遥测'), {
+      target: { value: 'pump.running' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('点位 2 地址值'), {
+      target: { value: '00001' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('点位 2 采集周期(ms)'), {
+      target: { value: '2000' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(onCreatePoint).toHaveBeenCalledTimes(2);
+      expect(onCreatePoint).toHaveBeenCalledWith('edge-dev', {
+        addressKind: 'input_register',
+        addressValue: '30001',
+        connectionId: 'modbus-line-a',
+        deviceId: 'pump-1',
+        intervalMs: 5000,
+        pointId: 'temperature',
+        semanticId: 'pump.temperature',
+        unit: 'C',
+        valueType: 'float32',
+      });
+      expect(onCreatePoint).toHaveBeenCalledWith('edge-dev', {
+        addressKind: 'coil',
+        addressValue: '00001',
+        connectionId: 'modbus-line-a',
+        deviceId: 'pump-1',
+        intervalMs: 2000,
+        pointId: 'running',
+        semanticId: 'pump.running',
+        unit: '-',
+        valueType: 'bool',
+      });
+    });
+    expect(await screen.findByText('已创建点位集 pump-basic-set，包含 2 个点位')).toBeInTheDocument();
+  });
+
+  it('runs point set toolbar actions through handlers', async () => {
+    const onImportPoints = vi.fn().mockResolvedValue({ message: '批量导入已完成' });
+    const onValidateDraft = vi.fn().mockResolvedValue({ status: '已通过' });
+
     render(
       <PointMappingsPage
-        edges={[
-          {
-            edgeId: 'edge-dev',
-            displayName: '研发实验室边端',
-            site: '研发/实验室',
-            runtimeId: 'runtime-dev',
-            status: '健康',
-            resources: '18% / 42% / 61%',
-            heartbeat: '8 秒前',
-            capabilities: ['protocol:modbus-tcp'],
-          },
-          {
-            edgeId: 'edge-prod',
-            displayName: '产线边端',
-            site: '制造/一线',
-            runtimeId: 'runtime-prod',
-            status: '健康',
-            resources: '22% / 48% / 66%',
-            heartbeat: '6 秒前',
-            capabilities: ['protocol:opcua'],
-          },
-        ]}
         selectedEdgeId="edge-dev"
-      />,
-    );
-
-    expect(screen.queryByLabelText('当前边端')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('配置边端')).not.toBeInTheDocument();
-  });
-
-  it('hides the edge selector in sidebar list mode', () => {
-    render(<PointMappingsPage mode="list" selectedEdgeId="edge-dev" />);
-
-    expect(screen.getByText('点位配置表')).toBeInTheDocument();
-    expect(screen.queryByLabelText('查看边端')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('配置边端')).not.toBeInTheDocument();
-  });
-
-  it('runs point toolbar actions through handlers', async () => {
-    const onCreatePoint = vi.fn().mockResolvedValue({
-      pointId: 'point-draft-3',
-    });
-    const onImportPoints = vi.fn().mockResolvedValue({
-      message: '批量导入已完成',
-    });
-    const onValidateDraft = vi.fn().mockResolvedValue({
-      status: '已通过',
-    });
-
-    render(
-      <PointMappingsPage
-        selectedEdgeId="edge-dev"
-        onCreatePoint={onCreatePoint}
         onImportPoints={onImportPoints}
         onValidateDraft={onValidateDraft}
       />,
@@ -154,78 +180,13 @@ describe('PointMappingsPage', () => {
       expect(onValidateDraft).toHaveBeenCalledWith('edge-dev');
     });
     expect(await screen.findByText('点位配置校验 已通过')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: '新建点位' }));
-    const dialog = screen.getByRole('dialog', { name: '新建点位' });
-    fireEvent.change(within(dialog).getByLabelText('新建 Point ID'), {
-      target: { value: 'temperature' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('新建设备 ID'), {
-      target: { value: 'pump-1' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('新建语义遥测'), {
-      target: { value: 'pump.temperature' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('新建连接实例'), {
-      target: { value: 'modbus-line-a' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('新建地址类型'), {
-      target: { value: 'input_register' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('新建地址值'), {
-      target: { value: '30001' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('新建单位'), {
-      target: { value: 'C' },
-    });
-    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
-    await waitFor(() => {
-      expect(onCreatePoint).toHaveBeenCalledWith('edge-dev', {
-        addressKind: 'input_register',
-        addressValue: '30001',
-        connectionId: 'modbus-line-a',
-        deviceId: 'pump-1',
-        intervalMs: 1000,
-        pointId: 'temperature',
-        semanticId: 'pump.temperature',
-        unit: 'C',
-        valueType: 'float32',
-      });
-    });
-    expect(await screen.findByText('已创建点位 point-draft-3')).toBeInTheDocument();
   });
 
-  it('paginates large point tables locally', () => {
-    const points = Array.from({ length: 12 }, (_, index) => ({
-      edgeId: 'edge-dev',
-      pointId: `point-${index + 1}`,
-      pointName: `点位 ${index + 1}`,
-      deviceId: 'pump-1',
-      deviceModel: 'pump@v1',
-      semanticTelemetry: `pump.point_${index + 1}`,
-      protocol: 'Modbus RTU',
-      connection: 'modbus-line-a',
-      address: `holding_register:${40001 + index}`,
-      valueType: 'float32',
-      readWrite: 'read',
-      unit: '-',
-      scale: '1',
-      interval: '1000ms',
-      range: '-',
-      qualityRule: 'timeout->bad',
-      status: '启用',
-    }));
+  it('hides edge selection context in list mode', () => {
+    render(<PointMappingsPage mode="list" selectedEdgeId="edge-dev" />);
 
-    render(<PointMappingsPage points={points} selectedEdgeId="edge-dev" />);
-
-    expect(screen.getByText('第 1 / 2 页')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '编辑点位 point-1' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '编辑点位 point-11' })).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: '下一页' }));
-
-    expect(screen.getByText('第 2 / 2 页')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '编辑点位 point-11' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '编辑点位 point-1' })).not.toBeInTheDocument();
+    expect(screen.getByText('点位集列表')).toBeInTheDocument();
+    expect(screen.queryByLabelText('查看边端')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('配置边端')).not.toBeInTheDocument();
   });
 });

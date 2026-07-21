@@ -1,4 +1,4 @@
-use edge_core::{DeviceInstance, EdgeConfigPackage, ProtocolConnection};
+use edge_core::{CollectionTask, DeviceInstance, EdgeConfigPackage, ProtocolConnection};
 use edge_runtime::RocksEdgeRuntimeStore;
 use tempfile::tempdir;
 
@@ -32,6 +32,12 @@ fn rocks_store_persists_desired_and_active_config_across_reopen() {
     assert_eq!(active.edge_id, "edge-dev");
     assert_eq!(active.version, "2026.06.27-020");
     assert_eq!(active.protocol_connections[0].connection_id, "sim-main");
+
+    let recovered = reopened
+        .recover_active_config("edge-dev")
+        .unwrap()
+        .expect("active config should be validated and recovered");
+    assert_eq!(recovered.version(), "2026.06.27-020");
 }
 
 #[test]
@@ -58,4 +64,30 @@ fn rocks_store_creates_missing_parent_directories() {
     RocksEdgeRuntimeStore::open(&db_path).unwrap();
 
     assert!(db_path.exists());
+}
+
+#[test]
+fn rocks_store_rejects_an_invalid_active_config_during_recovery() {
+    let dir = tempdir().unwrap();
+    let store = RocksEdgeRuntimeStore::open(dir.path().join("runtime.rocksdb")).unwrap();
+    let package = EdgeConfigPackage::new("edge-dev", "invalid-active").with_collection_task(
+        CollectionTask::interval(
+            "task-1",
+            "missing-device",
+            vec!["point-1".to_string()],
+            1000,
+        ),
+    );
+    store.put_desired_config(&package).unwrap();
+    store
+        .promote_active_config("edge-dev", "invalid-active")
+        .unwrap();
+
+    let error = store
+        .recover_active_config("edge-dev")
+        .expect_err("invalid active config must not be recovered");
+
+    assert!(error
+        .to_string()
+        .contains("failed to validate active config for edge `edge-dev`"));
 }

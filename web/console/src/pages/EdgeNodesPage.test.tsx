@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { EdgeNodeResponse, ProtocolConnectionResponse } from '../api/types';
+import type { EdgeNodeResponse } from '../api/types';
 import { EdgeNodesPage } from './EdgeNodesPage';
 
 const edges: EdgeNodeResponse[] = [
@@ -17,25 +17,11 @@ const edges: EdgeNodeResponse[] = [
   },
 ];
 
-const protocolConnections: ProtocolConnectionResponse[] = [
-  {
-    connectionId: 'modbus-line-a',
-    edgeId: 'edge-dev',
-    endpoint: '10.12.0.20:502',
-    policy: '1000ms timeout / 3 retry',
-    protocol: 'Modbus TCP',
-    protocolType: 'ModbusTcp',
-    status: '启用',
-  },
-];
-
 describe('EdgeNodesPage', () => {
-  it('exposes per-edge configuration and monitoring actions', () => {
-    const onConfigureEdge = vi.fn();
-    const onMonitorEdge = vi.fn();
-
+  it('exposes edge access and monitoring actions', () => {
     render(
       <EdgeNodesPage
+        accessTokens={{ 'edge-dev': 'edge-token-edge-dev-test' }}
         configSummaries={[
           {
             collectionTaskCount: 1,
@@ -48,67 +34,106 @@ describe('EdgeNodesPage', () => {
           },
         ]}
         edges={edges}
-        onConfigureEdge={onConfigureEdge}
-        onMonitorEdge={onMonitorEdge}
       />,
     );
 
-    expect(screen.getByRole('columnheader', { name: '配置摘要' })).toBeInTheDocument();
-    expect(screen.getByText('2 协议')).toBeInTheDocument();
-    expect(screen.getByText('4 点位')).toBeInTheDocument();
-    expect(screen.getByText('1 任务')).toBeInTheDocument();
-    expect(screen.getByText('1 上报')).toBeInTheDocument();
-    expect(screen.getByText('已发布')).toBeInTheDocument();
-    expect(screen.getByText('边端在线')).toBeInTheDocument();
-    expect(screen.getByText('配置覆盖')).toBeInTheDocument();
-    expect(screen.getByText('采集点位')).toBeInTheDocument();
-    expect(screen.getByText('上报流水线')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '配置 edge-dev' }));
-    const configDialog = screen.getByRole('dialog', { name: '配置边端' });
-    expect(configDialog).toBeInTheDocument();
-    expect(within(configDialog).getByText('配置完整度')).toBeInTheDocument();
-    expect(within(configDialog).getByText('100%')).toBeInTheDocument();
-    expect(within(configDialog).getByText('配置链路状态良好')).toBeInTheDocument();
-    expect(within(configDialog).getByText('采集、处理、上报和发布链路基本闭环')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '打开配置总览' }));
+    expect(screen.queryByRole('columnheader', { name: '配置摘要' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'CPU / 内存 / 磁盘' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('边端舰队态势')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '接入信息 edge-dev' }));
+    const accessDialog = screen.getByRole('dialog', { name: '边端接入信息' });
+    expect(accessDialog).toBeInTheDocument();
+    expect(within(accessDialog).getByText('edge-token-edge-dev-test')).toBeInTheDocument();
+    fireEvent.click(within(accessDialog).getByRole('button', { name: '关闭' }));
+    expect(screen.queryByRole('button', { name: '配置 edge-dev' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '运行监控 edge-dev' }));
-
-    expect(onConfigureEdge).toHaveBeenCalledWith('edge-dev', 'overview');
-    expect(onMonitorEdge).toHaveBeenCalledWith('edge-dev');
+    const monitorDialog = screen.getByRole('dialog', { name: '边端运行监控' });
+    expect(within(monitorDialog).getByText('18.5%')).toBeInTheDocument();
+    expect(within(monitorDialog).getByText('2')).toBeInTheDocument();
+    expect(within(monitorDialog).getByText('已发布')).toBeInTheDocument();
   });
 
-  it('opens a selected configuration section from the smart binding dialog', () => {
-    const onConfigureEdge = vi.fn();
+  it('creates an edge by selecting a product and generating an access token', async () => {
+    const onCreateEdge = vi.fn().mockResolvedValue({
+      ...edges[0],
+      edgeId: 'edge-draft-2',
+      displayName: '一号线边端',
+      runtimeId: '-',
+      status: '未上报',
+      accessToken: 'edge_created_secret',
+    });
 
     render(
       <EdgeNodesPage
-        configSummaries={[
+        edges={edges}
+        onCreateEdge={onCreateEdge}
+        products={[
           {
-            collectionTaskCount: 1,
-            dataConfigCount: 0,
-            edgeId: 'edge-dev',
-            mqttSinkId: 'velamq-main',
-            pointCount: 4,
-            protocolCount: 1,
-            releaseStatus: '待发布',
+            productId: 'pump-product',
+            productName: '泵站采集产品',
+            projectId: 'demo-plant',
+            projectName: 'demo-plant',
+            version: 'v1.0.0',
           },
         ]}
-        edges={edges}
-        onConfigureEdge={onConfigureEdge}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '配置 edge-dev' }));
-    expect(screen.getByText('建议创建数据上报配置')).toBeInTheDocument();
-    expect(screen.getByText('67%')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '配置上报' }));
+    fireEvent.click(screen.getByRole('button', { name: '新增边端' }));
+    const dialog = screen.getByRole('dialog', { name: '新增边端' });
+    fireEvent.change(within(dialog).getByLabelText('边端名称'), {
+      target: { value: '一号线边端' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('站点/分组'), {
+      target: { value: '制造/一号线' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '生成接入 token' }));
 
-    expect(onConfigureEdge).toHaveBeenCalledWith('edge-dev', 'reports');
+    await waitFor(() => {
+      expect(onCreateEdge).toHaveBeenCalledWith({
+        displayName: '一号线边端',
+        productId: 'pump-product',
+        projectId: 'demo-plant',
+        site: '制造/一号线',
+      });
+    });
+    expect(await screen.findByText('已创建边端 edge-draft-2，token 已生成')).toBeInTheDocument();
+    const accessDialog = screen.getByRole('dialog', { name: '边端接入信息' });
+    expect(within(accessDialog).getByText('edge_created_secret')).toBeInTheDocument();
   });
 
-  it('opens protocol connection configuration inside the edge dialog without page navigation', () => {
-    const onConfigureEdge = vi.fn();
+  it('shows an access token only after explicit regeneration', async () => {
+    const onGenerateAccessToken = vi.fn().mockResolvedValue('edge_new_secret');
 
+    render(
+      <EdgeNodesPage
+        edges={edges}
+        onGenerateAccessToken={onGenerateAccessToken}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '接入信息 edge-dev' }));
+    const dialog = screen.getByRole('dialog', { name: '边端接入信息' });
+    expect(
+      within(dialog).getByText('Token 仅在创建或重新生成时显示，Cloud 不保存明文。'),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByText(/edge-runtime --cloud-gateway-addr/),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '重新生成 token' }));
+
+    expect(await within(dialog).findByText('edge_new_secret')).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/edge-runtime --cloud-gateway-addr/),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole('status')).toHaveTextContent(
+      '新 token 已生成，旧 token 已失效',
+    );
+    expect(onGenerateAccessToken).toHaveBeenCalledWith('edge-dev');
+  });
+
+  it('keeps product configuration out of edge instance actions', () => {
     render(
       <EdgeNodesPage
         configSummaries={[
@@ -123,21 +148,13 @@ describe('EdgeNodesPage', () => {
           },
         ]}
         edges={edges}
-        onConfigureEdge={onConfigureEdge}
-        protocolConnections={protocolConnections}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '配置 edge-dev' }));
-    const edgeDialog = screen.getByRole('dialog', { name: '配置边端' });
-
-    fireEvent.click(screen.getByRole('button', { name: '配置连接' }));
-
-    expect(edgeDialog).toBeInTheDocument();
-    expect(screen.getByRole('dialog', { name: '配置协议连接' })).toBeInTheDocument();
-    expect(screen.getByText('连接清单')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '修改连接 modbus-line-a' })).toBeInTheDocument();
-    expect(onConfigureEdge).not.toHaveBeenCalledWith('edge-dev', 'protocol');
+    expect(screen.queryByRole('button', { name: '配置 edge-dev' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '配置边端' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '接入信息 edge-dev' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '运行监控 edge-dev' })).toBeInTheDocument();
   });
 
   it('opens and saves per-edge mqtt configuration', async () => {
@@ -174,9 +191,7 @@ describe('EdgeNodesPage', () => {
 
     expect(screen.queryByRole('button', { name: '注册边端' })).not.toBeInTheDocument();
     expect(
-      screen.getByText(
-        '边端由 runtime 通过 EdgeLink 主动连接后自动登记。云端负责查看运行状态、进入边端配置，并维护该边端的 MQTT 上报连接。',
-      ),
+      screen.getByText('手动登记边端，绑定产品，生成 runtime 接入 token。'),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '轮换凭证' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '维护模式' })).not.toBeInTheDocument();

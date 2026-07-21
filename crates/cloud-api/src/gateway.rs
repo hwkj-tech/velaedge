@@ -1,4 +1,6 @@
 use std::{
+    collections::HashMap,
+    fmt,
     io::{Cursor, ErrorKind},
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -7,11 +9,15 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use cloud_control::{CloudControlStore, EdgeNode, ReleaseService, ReleaseStatus, SqliteCloudStore};
 use edge_core::{
-    decode_edgelink_frame, encode_edgelink_frame, EdgeConfigPackage, EdgeLinkConfigReport,
-    EdgeLinkMessage, EdgeLinkPayload, EDGELINK_MAX_FRAME_BYTES,
+    decode_edgelink_frame, encode_edgelink_frame, DiscoveryReport, DiscoveryRequest,
+    EdgeConfigPackage, EdgeLinkConfigReport, EdgeLinkMessage, EdgeLinkPayload,
+    EDGELINK_MAX_FRAME_BYTES,
 };
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex};
+use tokio::time::{timeout, Duration};
 use tokio_rustls::{
     rustls::{
         self,
@@ -39,6 +45,106 @@ pub struct EdgeGatewaySessionReport {
     pub config_report_count: usize,
 }
 
+#[derive(Clone, Default)]
+pub struct EdgeGatewayCommandRegistry {
+    sessions: Arc<AsyncMutex<HashMap<String, RegisteredEdgeSession>>>,
+}
+
+#[derive(Clone)]
+struct RegisteredEdgeSession {
+    session_id: uuid::Uuid,
+    sender: mpsc::Sender<EdgeGatewayCommand>,
+}
+
+enum EdgeGatewayCommand {
+    Discovery {
+        request: DiscoveryRequest,
+        response: oneshot::Sender<Result<DiscoveryReport, String>>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EdgeGatewayDispatchError {
+    Offline,
+    Busy,
+    Timeout,
+    Failed(String),
+}
+
+impl fmt::Display for EdgeGatewayDispatchError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Offline => formatter.write_str("edge runtime is not connected"),
+            Self::Busy => formatter.write_str("edge runtime command queue is busy"),
+            Self::Timeout => formatter.write_str("edge runtime command timed out"),
+            Self::Failed(reason) => write!(formatter, "edge runtime command failed: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for EdgeGatewayDispatchError {}
+
+impl EdgeGatewayCommandRegistry {
+    pub async fn is_online(&self, edge_id: &str) -> bool {
+        self.sessions.lock().await.contains_key(edge_id)
+    }
+
+    pub async fn dispatch_discovery(
+        &self,
+        edge_id: &str,
+        request: DiscoveryRequest,
+        wait: Duration,
+    ) -> Result<DiscoveryReport, EdgeGatewayDispatchError> {
+        let sender = self
+            .sessions
+            .lock()
+            .await
+            .get(edge_id)
+            .map(|session| session.sender.clone())
+            .ok_or(EdgeGatewayDispatchError::Offline)?;
+        let (response_tx, response_rx) = oneshot::channel();
+        sender
+            .try_send(EdgeGatewayCommand::Discovery {
+                request,
+                response: response_tx,
+            })
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => EdgeGatewayDispatchError::Busy,
+                mpsc::error::TrySendError::Closed(_) => EdgeGatewayDispatchError::Offline,
+            })?;
+
+        match timeout(wait, response_rx).await {
+            Err(_) => Err(EdgeGatewayDispatchError::Timeout),
+            Ok(Err(_)) => Err(EdgeGatewayDispatchError::Offline),
+            Ok(Ok(Err(reason))) => Err(EdgeGatewayDispatchError::Failed(reason)),
+            Ok(Ok(Ok(report))) => Ok(report),
+        }
+    }
+
+    async fn register(
+        &self,
+        edge_id: &str,
+        sender: mpsc::Sender<EdgeGatewayCommand>,
+    ) -> uuid::Uuid {
+        let session_id = uuid::Uuid::new_v4();
+        self.sessions.lock().await.insert(
+            edge_id.to_string(),
+            RegisteredEdgeSession { session_id, sender },
+        );
+        session_id
+    }
+
+    async fn unregister(&self, edge_id: &str, session_id: uuid::Uuid) {
+        let mut sessions = self.sessions.lock().await;
+        if sessions
+            .get(edge_id)
+            .is_some_and(|session| session.session_id == session_id)
+        {
+            sessions.remove(edge_id);
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct EdgeGatewayTlsConfig {
     acceptor: TlsAcceptor,
@@ -61,10 +167,14 @@ impl EdgeGatewayTlsConfig {
                 .context("invalid client CA certificate")?;
         }
 
-        let client_verifier = WebPkiClientVerifier::builder(Arc::new(client_roots))
-            .build()
-            .context("failed to build client certificate verifier")?;
-        let config = rustls::ServerConfig::builder()
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let client_verifier =
+            WebPkiClientVerifier::builder_with_provider(Arc::new(client_roots), provider.clone())
+                .build()
+                .context("failed to build client certificate verifier")?;
+        let config = rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .context("failed to select EdgeLink TLS protocol versions")?
             .with_client_cert_verifier(client_verifier)
             .with_single_cert(server_certs, server_key)
             .context("failed to build EdgeLink server TLS config")?;
@@ -83,7 +193,7 @@ pub async fn handle_edgelink_session(
     mut stream: TcpStream,
     peer_addr: SocketAddr,
 ) -> Result<EdgeGatewaySession> {
-    handle_edgelink_stream(&mut stream, peer_addr).await
+    handle_edgelink_stream(&mut stream, peer_addr, None).await
 }
 
 pub async fn serve_edgelink_gateway(
@@ -133,6 +243,183 @@ pub async fn serve_edgelink_gateway_with_sqlite(
     }
 }
 
+pub async fn serve_edgelink_gateway_with_registry_and_sqlite(
+    listener: TcpListener,
+    store: Arc<Mutex<CloudControlStore>>,
+    registry: EdgeGatewayCommandRegistry,
+    sqlite_store: SqliteCloudStore,
+) -> Result<()> {
+    loop {
+        let (stream, peer_addr) = listener
+            .accept()
+            .await
+            .context("failed to accept EdgeLink runtime connection")?;
+        let session_store = store.clone();
+        let session_registry = registry.clone();
+        let session_sqlite_store = sqlite_store.clone();
+        tokio::spawn(async move {
+            if let Err(error) = handle_edgelink_session_with_registry_and_sqlite(
+                stream,
+                peer_addr,
+                session_store,
+                session_registry,
+                session_sqlite_store,
+            )
+            .await
+            {
+                warn!(%peer_addr, error = %error, "EdgeLink runtime session failed");
+            }
+        });
+    }
+}
+
+pub async fn serve_edgelink_gateway_with_registry(
+    listener: TcpListener,
+    store: Arc<Mutex<CloudControlStore>>,
+    registry: EdgeGatewayCommandRegistry,
+) -> Result<()> {
+    loop {
+        let (stream, peer_addr) = listener
+            .accept()
+            .await
+            .context("failed to accept EdgeLink runtime connection")?;
+        let session_store = store.clone();
+        let session_registry = registry.clone();
+        tokio::spawn(async move {
+            if let Err(error) = handle_edgelink_session_with_registry(
+                stream,
+                peer_addr,
+                session_store,
+                session_registry,
+            )
+            .await
+            {
+                warn!(%peer_addr, error = %error, "EdgeLink runtime session failed");
+            }
+        });
+    }
+}
+
+pub async fn serve_edgelink_tls_gateway(
+    listener: TcpListener,
+    tls_config: EdgeGatewayTlsConfig,
+    store: Arc<Mutex<CloudControlStore>>,
+) -> Result<()> {
+    loop {
+        let (stream, peer_addr) = listener
+            .accept()
+            .await
+            .context("failed to accept EdgeLink TLS runtime connection")?;
+        let session_store = store.clone();
+        let session_tls_config = tls_config.clone();
+        tokio::spawn(async move {
+            if let Err(error) = handle_edgelink_tls_session_with_store(
+                stream,
+                peer_addr,
+                &session_tls_config,
+                session_store,
+            )
+            .await
+            {
+                warn!(%peer_addr, error = %error, "EdgeLink TLS runtime session failed");
+            }
+        });
+    }
+}
+
+pub async fn serve_edgelink_tls_gateway_with_sqlite(
+    listener: TcpListener,
+    tls_config: EdgeGatewayTlsConfig,
+    store: Arc<Mutex<CloudControlStore>>,
+    sqlite_store: SqliteCloudStore,
+) -> Result<()> {
+    loop {
+        let (stream, peer_addr) = listener
+            .accept()
+            .await
+            .context("failed to accept EdgeLink TLS runtime connection")?;
+        let session_store = store.clone();
+        let session_sqlite_store = sqlite_store.clone();
+        let session_tls_config = tls_config.clone();
+        tokio::spawn(async move {
+            if let Err(error) = handle_edgelink_tls_session_with_store_and_sqlite(
+                stream,
+                peer_addr,
+                &session_tls_config,
+                session_store,
+                session_sqlite_store,
+            )
+            .await
+            {
+                warn!(%peer_addr, error = %error, "EdgeLink TLS runtime session failed");
+            }
+        });
+    }
+}
+
+pub async fn serve_edgelink_tls_gateway_with_registry_and_sqlite(
+    listener: TcpListener,
+    tls_config: EdgeGatewayTlsConfig,
+    store: Arc<Mutex<CloudControlStore>>,
+    registry: EdgeGatewayCommandRegistry,
+    sqlite_store: SqliteCloudStore,
+) -> Result<()> {
+    loop {
+        let (stream, peer_addr) = listener
+            .accept()
+            .await
+            .context("failed to accept EdgeLink TLS runtime connection")?;
+        let session_store = store.clone();
+        let session_registry = registry.clone();
+        let session_sqlite_store = sqlite_store.clone();
+        let session_tls_config = tls_config.clone();
+        tokio::spawn(async move {
+            if let Err(error) = handle_edgelink_tls_session_with_registry_and_sqlite(
+                stream,
+                peer_addr,
+                &session_tls_config,
+                session_store,
+                session_registry,
+                session_sqlite_store,
+            )
+            .await
+            {
+                warn!(%peer_addr, error = %error, "EdgeLink TLS runtime session failed");
+            }
+        });
+    }
+}
+
+pub async fn serve_edgelink_tls_gateway_with_registry(
+    listener: TcpListener,
+    tls_config: EdgeGatewayTlsConfig,
+    store: Arc<Mutex<CloudControlStore>>,
+    registry: EdgeGatewayCommandRegistry,
+) -> Result<()> {
+    loop {
+        let (stream, peer_addr) = listener
+            .accept()
+            .await
+            .context("failed to accept EdgeLink TLS runtime connection")?;
+        let session_store = store.clone();
+        let session_registry = registry.clone();
+        let session_tls_config = tls_config.clone();
+        tokio::spawn(async move {
+            if let Err(error) = handle_edgelink_tls_session_with_registry(
+                stream,
+                peer_addr,
+                &session_tls_config,
+                session_store,
+                session_registry,
+            )
+            .await
+            {
+                warn!(%peer_addr, error = %error, "EdgeLink TLS runtime session failed");
+            }
+        });
+    }
+}
+
 pub async fn serve_edgelink_gateway_for_sessions(
     listener: TcpListener,
     store: Arc<Mutex<CloudControlStore>>,
@@ -168,6 +455,39 @@ pub async fn handle_edgelink_session_with_store_and_sqlite(
         .await
 }
 
+pub async fn handle_edgelink_session_with_registry(
+    mut stream: TcpStream,
+    peer_addr: SocketAddr,
+    store: Arc<Mutex<CloudControlStore>>,
+    registry: EdgeGatewayCommandRegistry,
+) -> Result<EdgeGatewaySessionReport> {
+    handle_edgelink_session_with_optional_registry(
+        &mut stream,
+        peer_addr,
+        store,
+        None,
+        Some(registry),
+    )
+    .await
+}
+
+pub async fn handle_edgelink_session_with_registry_and_sqlite(
+    mut stream: TcpStream,
+    peer_addr: SocketAddr,
+    store: Arc<Mutex<CloudControlStore>>,
+    registry: EdgeGatewayCommandRegistry,
+    sqlite_store: SqliteCloudStore,
+) -> Result<EdgeGatewaySessionReport> {
+    handle_edgelink_session_with_optional_registry(
+        &mut stream,
+        peer_addr,
+        store,
+        Some(sqlite_store),
+        Some(registry),
+    )
+    .await
+}
+
 async fn handle_edgelink_session_with_optional_sqlite<S>(
     stream: &mut S,
     peer_addr: SocketAddr,
@@ -177,13 +497,37 @@ async fn handle_edgelink_session_with_optional_sqlite<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let session = handle_edgelink_stream(stream, peer_addr).await?;
+    handle_edgelink_session_with_optional_registry(stream, peer_addr, store, sqlite_store, None)
+        .await
+}
+
+async fn handle_edgelink_session_with_optional_registry<S>(
+    stream: &mut S,
+    peer_addr: SocketAddr,
+    store: Arc<Mutex<CloudControlStore>>,
+    sqlite_store: Option<SqliteCloudStore>,
+    registry: Option<EdgeGatewayCommandRegistry>,
+) -> Result<EdgeGatewaySessionReport>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let session = handle_edgelink_stream(stream, peer_addr, Some(&store)).await?;
     persist_runtime_discovered_edge(&session, store.clone(), sqlite_store.as_ref()).await?;
     let config_report_count =
         deploy_pending_config_if_available(stream, &session, store.clone(), sqlite_store.as_ref())
             .await?;
-    let accepted_message_count =
-        handle_edgelink_runtime_messages(stream, &session, store, sqlite_store).await?;
+    let accepted_message_count = if let Some(registry) = registry {
+        handle_edgelink_runtime_messages_with_registry(
+            stream,
+            &session,
+            store,
+            sqlite_store,
+            registry,
+        )
+        .await?
+    } else {
+        handle_edgelink_runtime_messages(stream, &session, store, sqlite_store).await?
+    };
 
     Ok(EdgeGatewaySessionReport {
         session,
@@ -202,7 +546,7 @@ pub async fn handle_edgelink_tls_session(
         .accept(stream)
         .await
         .context("failed to accept EdgeLink TLS session")?;
-    handle_edgelink_stream(&mut stream, peer_addr).await
+    handle_edgelink_stream(&mut stream, peer_addr, None).await
 }
 
 pub async fn handle_edgelink_tls_session_with_store(
@@ -216,7 +560,7 @@ pub async fn handle_edgelink_tls_session_with_store(
         .accept(stream)
         .await
         .context("failed to accept EdgeLink TLS session")?;
-    let session = handle_edgelink_stream(&mut stream, peer_addr).await?;
+    let session = handle_edgelink_stream(&mut stream, peer_addr, Some(&store)).await?;
     persist_runtime_discovered_edge(&session, store.clone(), None).await?;
     let config_report_count =
         deploy_pending_config_if_available(&mut stream, &session, store.clone(), None).await?;
@@ -230,9 +574,86 @@ pub async fn handle_edgelink_tls_session_with_store(
     })
 }
 
+pub async fn handle_edgelink_tls_session_with_store_and_sqlite(
+    stream: TcpStream,
+    peer_addr: SocketAddr,
+    tls_config: &EdgeGatewayTlsConfig,
+    store: Arc<Mutex<CloudControlStore>>,
+    sqlite_store: SqliteCloudStore,
+) -> Result<EdgeGatewaySessionReport> {
+    let mut stream = tls_config
+        .acceptor()
+        .accept(stream)
+        .await
+        .context("failed to accept EdgeLink TLS session")?;
+    let session = handle_edgelink_stream(&mut stream, peer_addr, Some(&store)).await?;
+    persist_runtime_discovered_edge(&session, store.clone(), Some(&sqlite_store)).await?;
+    let config_report_count = deploy_pending_config_if_available(
+        &mut stream,
+        &session,
+        store.clone(),
+        Some(&sqlite_store),
+    )
+    .await?;
+    let accepted_message_count =
+        handle_edgelink_runtime_messages(&mut stream, &session, store, Some(sqlite_store)).await?;
+
+    Ok(EdgeGatewaySessionReport {
+        session,
+        accepted_message_count,
+        config_report_count,
+    })
+}
+
+pub async fn handle_edgelink_tls_session_with_registry(
+    stream: TcpStream,
+    peer_addr: SocketAddr,
+    tls_config: &EdgeGatewayTlsConfig,
+    store: Arc<Mutex<CloudControlStore>>,
+    registry: EdgeGatewayCommandRegistry,
+) -> Result<EdgeGatewaySessionReport> {
+    let mut stream = tls_config
+        .acceptor()
+        .accept(stream)
+        .await
+        .context("failed to accept EdgeLink TLS session")?;
+    handle_edgelink_session_with_optional_registry(
+        &mut stream,
+        peer_addr,
+        store,
+        None,
+        Some(registry),
+    )
+    .await
+}
+
+pub async fn handle_edgelink_tls_session_with_registry_and_sqlite(
+    stream: TcpStream,
+    peer_addr: SocketAddr,
+    tls_config: &EdgeGatewayTlsConfig,
+    store: Arc<Mutex<CloudControlStore>>,
+    registry: EdgeGatewayCommandRegistry,
+    sqlite_store: SqliteCloudStore,
+) -> Result<EdgeGatewaySessionReport> {
+    let mut stream = tls_config
+        .acceptor()
+        .accept(stream)
+        .await
+        .context("failed to accept EdgeLink TLS session")?;
+    handle_edgelink_session_with_optional_registry(
+        &mut stream,
+        peer_addr,
+        store,
+        Some(sqlite_store),
+        Some(registry),
+    )
+    .await
+}
+
 async fn handle_edgelink_stream<S>(
     stream: &mut S,
     peer_addr: SocketAddr,
+    auth_store: Option<&Arc<Mutex<CloudControlStore>>>,
 ) -> Result<EdgeGatewaySession>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -252,6 +673,36 @@ where
         bail!("EdgeLink hello runtime_id does not match envelope runtime_id");
     }
 
+    if let Some(store) = auth_store {
+        let expected_hash = {
+            let store = store.lock().expect("store mutex poisoned");
+            store
+                .active_edge_credential(&message.edge_id)
+                .map(|credential| credential.token_hash.clone())
+        };
+        if let Some(expected_hash) = expected_hash {
+            let accepted = hello
+                .access_token
+                .as_deref()
+                .map(hash_access_token)
+                .is_some_and(|actual_hash| actual_hash == expected_hash);
+            if !accepted {
+                let reason = "invalid or missing edge access token";
+                let nack = EdgeLinkMessage::nack(
+                    message.edge_id.clone(),
+                    message.runtime_id.clone(),
+                    message.message_id,
+                    message.sequence,
+                    reason,
+                );
+                write_edgelink_message(stream, &nack)
+                    .await
+                    .context("failed to write EdgeLink authentication rejection")?;
+                bail!(reason);
+            }
+        }
+    }
+
     let ack = EdgeLinkMessage::ack(
         message.edge_id.clone(),
         hello.runtime_id.clone(),
@@ -269,6 +720,13 @@ where
         capabilities: hello.capabilities.clone(),
         peer_addr,
     })
+}
+
+fn hash_access_token(access_token: &str) -> String {
+    Sha256::digest(access_token.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 async fn persist_runtime_discovered_edge(
@@ -353,6 +811,154 @@ where
     Ok(accepted)
 }
 
+struct PendingDiscovery {
+    request_message_id: uuid::Uuid,
+    protocol_connection_id: String,
+    response: oneshot::Sender<Result<DiscoveryReport, String>>,
+}
+
+async fn handle_edgelink_runtime_messages_with_registry<S>(
+    stream: &mut S,
+    session: &EdgeGatewaySession,
+    store: Arc<Mutex<CloudControlStore>>,
+    sqlite_store: Option<SqliteCloudStore>,
+    registry: EdgeGatewayCommandRegistry,
+) -> Result<usize>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let (sender, mut commands) = mpsc::channel(1);
+    let session_id = registry.register(&session.edge_id, sender).await;
+    let (mut reader, mut writer) = tokio::io::split(stream);
+    let mut pending = HashMap::<String, PendingDiscovery>::new();
+    let mut accepted = 0;
+    let mut sequence = 10_000_u64;
+
+    let result = async {
+        loop {
+            tokio::select! {
+                incoming = read_optional_edgelink_message(&mut reader) => {
+                    let Some(message) = incoming? else {
+                        break;
+                    };
+                    if let EdgeLinkPayload::Nack(nack) = &message.payload {
+                        let pending_job = pending.iter().find_map(|(job_id, request)| {
+                            (request.request_message_id == nack.ack_message_id)
+                                .then(|| job_id.clone())
+                        });
+                        if let Some(job_id) = pending_job {
+                            if let Some(request) = pending.remove(&job_id) {
+                                let reason = nack
+                                    .reason
+                                    .clone()
+                                    .unwrap_or_else(|| "runtime rejected discovery request".to_string());
+                                let _ = request.response.send(Err(reason));
+                            }
+                            continue;
+                        }
+                    }
+                    if let EdgeLinkPayload::DiscoveryReport(report) = &message.payload {
+                        let Some(expected) = pending.remove(&report.job_id) else {
+                            let nack = EdgeLinkMessage::nack(
+                                session.edge_id.clone(),
+                                Some(session.runtime_id.clone()),
+                                message.message_id,
+                                message.sequence,
+                                "unsolicited discovery report",
+                            );
+                            write_edgelink_message(&mut writer, &nack).await?;
+                            continue;
+                        };
+                        if report.protocol_connection_id != expected.protocol_connection_id {
+                            let reason = "discovery report protocol connection does not match request";
+                            let _ = expected.response.send(Err(reason.to_string()));
+                            let nack = EdgeLinkMessage::nack(
+                                session.edge_id.clone(),
+                                Some(session.runtime_id.clone()),
+                                message.message_id,
+                                message.sequence,
+                                reason,
+                            );
+                            write_edgelink_message(&mut writer, &nack).await?;
+                            continue;
+                        }
+                        let report = report.clone();
+                        let response = persist_runtime_message(
+                            session,
+                            message,
+                            store.clone(),
+                            sqlite_store.as_ref(),
+                        )
+                        .await?;
+                        write_edgelink_message(&mut writer, &response).await?;
+                        let _ = expected.response.send(Ok(report));
+                        accepted += 1;
+                        continue;
+                    }
+
+                    let response = persist_runtime_message(
+                        session,
+                        message,
+                        store.clone(),
+                        sqlite_store.as_ref(),
+                    )
+                    .await?;
+                    if matches!(&response.payload, EdgeLinkPayload::Ack(ack) if ack.accepted) {
+                        accepted += 1;
+                    }
+                    write_edgelink_message(&mut writer, &response).await?;
+                }
+                command = commands.recv() => {
+                    let Some(command) = command else {
+                        break;
+                    };
+                    match command {
+                        EdgeGatewayCommand::Discovery { request, response } => {
+                            if !pending.is_empty() {
+                                let _ = response.send(Err("another discovery request is already running".to_string()));
+                                continue;
+                            }
+                            let job_id = request.job_id.clone();
+                            let protocol_connection_id = request.protocol_connection_id.clone();
+                            let message = EdgeLinkMessage::discovery_request(
+                                session.edge_id.clone(),
+                                session.runtime_id.clone(),
+                                sequence,
+                                request,
+                            );
+                            sequence = sequence.saturating_add(1);
+                            let request_message_id = message.message_id;
+                            if let Err(error) = write_edgelink_message(&mut writer, &message).await {
+                                let _ = response.send(Err(error.to_string()));
+                                return Err(error);
+                            }
+                            pending.insert(
+                                job_id,
+                                PendingDiscovery {
+                                    request_message_id,
+                                    protocol_connection_id,
+                                    response,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok::<usize, anyhow::Error>(accepted)
+    }
+    .await;
+
+    registry.unregister(&session.edge_id, session_id).await;
+    for (_, request) in pending {
+        let _ = request.response.send(Err(format!(
+            "runtime disconnected before discovery request {} completed",
+            request.request_message_id
+        )));
+    }
+    result
+}
+
 async fn deploy_pending_config_if_available<S>(
     stream: &mut S,
     session: &EdgeGatewaySession,
@@ -390,7 +996,7 @@ where
     let EdgeLinkPayload::ConfigReport(report) = report_message.payload.clone() else {
         bail!("expected EdgeLink config report after config deploy");
     };
-    if let Some((release_id, reported_version)) =
+    if let Some((release_id, reported_version, reported_node)) =
         persist_config_report(&store, &session.edge_id, &desired_version, &report)?
     {
         if let Some(sqlite_store) = sqlite_store {
@@ -398,6 +1004,12 @@ where
                 .mark_release_reported(release_id, reported_version)
                 .await
                 .context("persist EdgeLink config report to sqlite")?;
+            if let Some(node) = reported_node {
+                sqlite_store
+                    .upsert_edge_node(node)
+                    .await
+                    .context("persist EdgeLink product version report to sqlite")?;
+            }
         }
     }
 
@@ -439,7 +1051,7 @@ fn persist_config_report(
     edge_id: &str,
     expected_version: &str,
     report: &EdgeLinkConfigReport,
-) -> Result<Option<(uuid::Uuid, String)>> {
+) -> Result<Option<(uuid::Uuid, String, Option<EdgeNode>)>> {
     if report.desired_version != expected_version {
         bail!(
             "config report desired version {} does not match deployed version {}",
@@ -468,7 +1080,15 @@ fn persist_config_report(
         .clone()
         .unwrap_or_else(|| "rejected".to_string());
     ReleaseService::mark_reported(&mut store, release_id, reported_version.clone());
-    Ok(Some((release_id, reported_version)))
+    let mut reported_node = store
+        .edge_nodes()
+        .find(|node| node.edge_id == edge_id)
+        .cloned();
+    if let Some(node) = reported_node.as_mut() {
+        node.reported_product_version = Some(reported_version.clone());
+        store.register_edge(node.clone());
+    }
+    Ok(Some((release_id, reported_version, reported_node)))
 }
 
 async fn persist_runtime_message(

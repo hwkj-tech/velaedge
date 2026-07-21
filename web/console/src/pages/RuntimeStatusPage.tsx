@@ -106,9 +106,7 @@ export function RuntimeStatusPage({
       <section className="page-intro">
         <div>
           <h2>边端运行状态</h2>
-          <p>
-            观察 runtime 系统资源、采集质量、协议连接、本地存储和云端同步状态，用于发布后的闭环确认。
-          </p>
+          <p>系统资源、采集质量、存储与同步状态。</p>
         </div>
         {focusedEdgeId ? (
           <div className="toolbar">

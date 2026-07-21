@@ -39,6 +39,53 @@ impl ConfigValidator {
             .map(|mapping| (mapping.point_id.as_str(), mapping))
             .collect::<BTreeMap<_, _>>();
 
+        for uplink in &package.mqtt_uplinks {
+            if uplink.username.is_some() != uplink.password_env.is_some() {
+                errors.push(ValidationError {
+                    message: format!(
+                        "mqtt sink `{}` username and password environment reference must be configured together",
+                        uplink.sink_id
+                    ),
+                });
+            }
+            if uplink
+                .username
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty())
+                || uplink
+                    .password_env
+                    .as_deref()
+                    .is_some_and(|value| value.trim().is_empty())
+            {
+                errors.push(ValidationError {
+                    message: format!(
+                        "mqtt sink `{}` credential references must not be empty",
+                        uplink.sink_id
+                    ),
+                });
+            }
+            if uplink
+                .tls_ca_path
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty())
+            {
+                errors.push(ValidationError {
+                    message: format!(
+                        "mqtt sink `{}` TLS CA path must not be empty",
+                        uplink.sink_id
+                    ),
+                });
+            }
+            if uplink.tls_ca_path.is_some() && !mqtt_broker_uses_tls(&uplink.broker) {
+                errors.push(ValidationError {
+                    message: format!(
+                        "mqtt sink `{}` TLS CA path requires an mqtts:// broker",
+                        uplink.sink_id
+                    ),
+                });
+            }
+        }
+
         for mapping in &package.point_mappings {
             if !connections.contains(mapping.protocol_connection_id.as_str()) {
                 errors.push(ValidationError {
@@ -243,4 +290,14 @@ impl ConfigValidator {
 
         errors
     }
+}
+
+fn mqtt_broker_uses_tls(broker: &str) -> bool {
+    matches!(
+        broker
+            .split_once("://")
+            .map(|(scheme, _)| scheme.to_ascii_lowercase())
+            .as_deref(),
+        Some("mqtts" | "ssl")
+    )
 }

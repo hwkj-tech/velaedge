@@ -2,10 +2,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Result};
 use chrono::Utc;
-use edge_core::{DataQuality, DeviceShadow, EdgeConfigPackage, TelemetrySample, TelemetryValue};
+use edge_core::{
+    validate_data_config_visual_graph, DataQuality, DeviceShadow, EdgeConfigPackage,
+    TelemetrySample, TelemetryValue,
+};
 
 use crate::{
-    publish_data_config_mqtt_samples, publish_mqtt_samples, CollectionReport, MqttPublisher,
+    publish_data_config_mqtt_samples, publish_data_config_mqtt_samples_with_outbox,
+    publish_mqtt_samples, publish_mqtt_samples_with_outbox, CollectionReport, MqttPublisher,
+    RocksEdgeRuntimeStore,
 };
 
 #[derive(Clone, Debug)]
@@ -181,6 +186,8 @@ pub(crate) fn validate_config_references(package: &EdgeConfigPackage) -> Result<
                 );
             }
         }
+
+        validate_data_config_visual_graph(data_config).map_err(anyhow::Error::msg)?;
     }
 
     Ok(())
@@ -244,6 +251,50 @@ impl ConfiguredSimulatedRuntime {
         let samples = self.collect_data_config_samples_once().await;
         let mqtt_messages_published =
             publish_data_config_mqtt_samples(self.applied.package(), &samples, publisher).await?;
+        Ok(ConfiguredMqttCollectionReport {
+            collection: CollectionReport {
+                samples_collected: samples.len(),
+            },
+            mqtt_messages_published,
+        })
+    }
+
+    pub async fn collect_once_and_publish_mqtt_with_outbox<P>(
+        &mut self,
+        store: &RocksEdgeRuntimeStore,
+        publisher: &mut P,
+    ) -> Result<ConfiguredMqttCollectionReport>
+    where
+        P: MqttPublisher + ?Sized,
+    {
+        let samples = self.collect_samples_once().await;
+        let mqtt_messages_published =
+            publish_mqtt_samples_with_outbox(self.applied.package(), &samples, store, publisher)
+                .await?;
+        Ok(ConfiguredMqttCollectionReport {
+            collection: CollectionReport {
+                samples_collected: samples.len(),
+            },
+            mqtt_messages_published,
+        })
+    }
+
+    pub async fn collect_data_configs_once_and_publish_mqtt_with_outbox<P>(
+        &mut self,
+        store: &RocksEdgeRuntimeStore,
+        publisher: &mut P,
+    ) -> Result<ConfiguredMqttCollectionReport>
+    where
+        P: MqttPublisher + ?Sized,
+    {
+        let samples = self.collect_data_config_samples_once().await;
+        let mqtt_messages_published = publish_data_config_mqtt_samples_with_outbox(
+            self.applied.package(),
+            &samples,
+            store,
+            publisher,
+        )
+        .await?;
         Ok(ConfiguredMqttCollectionReport {
             collection: CollectionReport {
                 samples_collected: samples.len(),

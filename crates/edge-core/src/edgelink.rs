@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    CommandCandidate, DiscoveryReport, EdgeConfigPackage, EdgeRuntimeEvent,
+    CommandCandidate, DiscoveryReport, DiscoveryRequest, EdgeConfigPackage, EdgeRuntimeEvent,
     EdgeRuntimeMetricsSnapshot, TelemetrySample,
 };
 
@@ -31,6 +31,24 @@ impl EdgeLinkMessage {
         applied_config_version: Option<String>,
         capabilities: Vec<String>,
     ) -> Self {
+        Self::hello_with_access_token(
+            edge_id,
+            runtime_id,
+            runtime_version,
+            applied_config_version,
+            capabilities,
+            None,
+        )
+    }
+
+    pub fn hello_with_access_token(
+        edge_id: impl Into<String>,
+        runtime_id: impl Into<String>,
+        runtime_version: impl Into<String>,
+        applied_config_version: Option<String>,
+        capabilities: Vec<String>,
+        access_token: Option<String>,
+    ) -> Self {
         let edge_id = edge_id.into();
         let runtime_id = runtime_id.into();
         Self::new(
@@ -42,6 +60,7 @@ impl EdgeLinkMessage {
                 runtime_version: runtime_version.into(),
                 applied_config_version,
                 capabilities,
+                access_token,
             }),
         )
     }
@@ -177,6 +196,20 @@ impl EdgeLinkMessage {
         )
     }
 
+    pub fn discovery_request(
+        edge_id: impl Into<String>,
+        runtime_id: impl Into<String>,
+        sequence: u64,
+        request: DiscoveryRequest,
+    ) -> Self {
+        Self::new(
+            edge_id,
+            Some(runtime_id.into()),
+            sequence,
+            EdgeLinkPayload::DiscoveryRequest(request),
+        )
+    }
+
     pub fn kind(&self) -> EdgeLinkMessageKind {
         self.payload.kind()
     }
@@ -214,6 +247,7 @@ pub enum EdgeLinkMessageKind {
     TelemetryBatch,
     RuntimeMetrics,
     RuntimeEvent,
+    DiscoveryRequest,
     DiscoveryReport,
 }
 
@@ -231,6 +265,7 @@ pub enum EdgeLinkPayload {
     TelemetryBatch(Vec<TelemetrySample>),
     RuntimeMetrics(EdgeRuntimeMetricsSnapshot),
     RuntimeEvent(EdgeRuntimeEvent),
+    DiscoveryRequest(DiscoveryRequest),
     DiscoveryReport(DiscoveryReport),
 }
 
@@ -248,6 +283,7 @@ impl EdgeLinkPayload {
             Self::TelemetryBatch(_) => EdgeLinkMessageKind::TelemetryBatch,
             Self::RuntimeMetrics(_) => EdgeLinkMessageKind::RuntimeMetrics,
             Self::RuntimeEvent(_) => EdgeLinkMessageKind::RuntimeEvent,
+            Self::DiscoveryRequest(_) => EdgeLinkMessageKind::DiscoveryRequest,
             Self::DiscoveryReport(_) => EdgeLinkMessageKind::DiscoveryReport,
         }
     }
@@ -259,6 +295,8 @@ pub struct EdgeLinkHello {
     pub runtime_version: String,
     pub applied_config_version: Option<String>,
     pub capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_token: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

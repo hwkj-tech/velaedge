@@ -2,7 +2,7 @@ use edge_core::{
     CollectionRuntimeMetrics, CollectionTask, DeviceInstance, EdgeConfigPackage, EdgeHealth,
     PointAddress, ProtocolConnection, TelemetryPointMapping, TelemetryType,
 };
-use edge_runtime::{AppliedEdgeConfig, SimulatedRuntimeMetricsCollector};
+use edge_runtime::{AppliedEdgeConfig, MqttOutboxStats, SimulatedRuntimeMetricsCollector};
 
 fn package() -> EdgeConfigPackage {
     EdgeConfigPackage::new("edge-dev", "2026.06.26-002")
@@ -58,4 +58,21 @@ fn metrics_collector_uses_real_collection_metrics_when_provided() {
     assert_eq!(snapshot.collection.success_rate, 0.5);
     assert_eq!(snapshot.collection.average_latency_ms, 37);
     assert_eq!(snapshot.collection.bad_point_count, 2);
+}
+
+#[test]
+fn metrics_collector_reports_mqtt_outbox_backlog_as_degraded() {
+    let applied = AppliedEdgeConfig::apply(package()).unwrap();
+    let snapshot = SimulatedRuntimeMetricsCollector::new("runtime-a", applied)
+        .with_mqtt_outbox_stats(MqttOutboxStats {
+            pending_messages: 7,
+            oldest_message_age_seconds: 42,
+        })
+        .snapshot();
+
+    assert_eq!(snapshot.health, EdgeHealth::Degraded);
+    assert_eq!(snapshot.local_store.backend, "rocksdb-mqtt-outbox");
+    assert_eq!(snapshot.local_store.buffered_records, 7);
+    assert_eq!(snapshot.local_store.oldest_buffer_age_seconds, 42);
+    assert_eq!(snapshot.cloud_sync.pending_uploads, 7);
 }

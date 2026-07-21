@@ -3,28 +3,21 @@ import {
   Activity,
   ChevronLeft,
   ChevronRight,
-  Cpu,
-  Database,
+  KeyRound,
+  Plus,
   Radio,
   Save,
-  Send,
-  Settings2,
-  ShieldCheck,
-  SlidersHorizontal,
-  Sparkles,
   Trash2,
   X,
 } from 'lucide-react';
 
 import type {
-  CreateProtocolConnectionRequest,
   EdgeNodeResponse,
   ManagementActionResponse,
   MqttUplinkResponse,
-  ProtocolConnectionResponse,
-  SaveProtocolConnectionRequest,
 } from '../api/types';
-import { ProtocolConnectionsPage } from './ProtocolConnectionsPage';
+import { Modal } from '../components/Modal';
+import { displayError } from '../utils/errors';
 
 const fallbackEdges: EdgeNodeResponse[] = [
   {
@@ -40,7 +33,7 @@ const fallbackEdges: EdgeNodeResponse[] = [
 ];
 
 export type EdgeConfigTabKey =
-  | 'overview'
+  | 'versions'
   | 'protocol'
   | 'points'
   | 'collection'
@@ -55,58 +48,59 @@ export interface EdgeConfigSummary {
   edgeId: string;
   mqttSinkId: string;
   pointCount: number;
+  productName?: string;
+  productVersion?: string;
+  projectName?: string;
   protocolCount: number;
   releaseStatus: string;
 }
 
+export interface EdgeProductOption {
+  productId: string;
+  productName: string;
+  projectId: string;
+  projectName: string;
+  version: string;
+}
+
+export interface CreateManagedEdgeRequest {
+  displayName: string;
+  productId: string;
+  projectId: string;
+  site: string;
+}
+
 export function EdgeNodesPage({
+  accessTokens = {},
   configSummaries = [],
   edges = fallbackEdges,
   mqttUplink,
-  onConfigureEdge,
-  onCreateProtocolConnection,
+  onCreateEdge,
   onDeleteEdge,
-  onDeleteProtocolConnection,
-  onSaveProtocolConnection,
+  onGenerateAccessToken,
   onSaveMqttUplink,
-  onMonitorEdge,
-  onValidateConfig,
   pageSize = 10,
-  protocolConnections = [],
+  products = [],
 }: {
+  accessTokens?: Record<string, string>;
   configSummaries?: EdgeConfigSummary[];
   edges?: EdgeNodeResponse[];
   mqttUplink?: MqttUplinkResponse;
-  onConfigureEdge?: (edgeId: string, tab?: EdgeConfigTabKey) => void;
-  onCreateProtocolConnection?: (
-    edgeId: string,
-    request: CreateProtocolConnectionRequest,
-  ) => Promise<ProtocolConnectionResponse> | ProtocolConnectionResponse;
+  onCreateEdge?: (
+    request: CreateManagedEdgeRequest,
+  ) => Promise<EdgeNodeResponse> | EdgeNodeResponse;
   onDeleteEdge?: (edgeId: string) => Promise<void> | void;
-  onDeleteProtocolConnection?: (
-    edgeId: string,
-    connectionId: string,
-  ) => Promise<void> | void;
-  onSaveProtocolConnection?: (
-    edgeId: string,
-    connectionId: string,
-    request: SaveProtocolConnectionRequest,
-  ) => Promise<void> | void;
+  onGenerateAccessToken?: (edgeId: string) => Promise<string> | string;
   onSaveMqttUplink?: (edgeId: string, request: MqttUplinkResponse) => Promise<MqttUplinkResponse> | MqttUplinkResponse;
-  onMonitorEdge?: (edgeId: string) => void;
-  onValidateConfig?: (
-    edgeId?: string,
-  ) => Promise<ManagementActionResponse> | ManagementActionResponse;
   pageSize?: number;
-  protocolConnections?: ProtocolConnectionResponse[];
+  products?: EdgeProductOption[];
 }) {
   const [page, setPage] = useState(1);
-  const [configDialog, setConfigDialog] = useState<EdgeNodeResponse>();
-  const [configPanel, setConfigPanel] = useState<{
-    edge: EdgeNodeResponse;
-    section: EdgeConfigTabKey;
-  }>();
+  const [createDialog, setCreateDialog] = useState<CreateManagedEdgeRequest>();
+  const [accessDialog, setAccessDialog] = useState<EdgeNodeResponse>();
+  const [monitorDialog, setMonitorDialog] = useState<EdgeNodeResponse>();
   const [mqttDialog, setMqttDialog] = useState<{ edgeId: string; form: MqttUplinkResponse }>();
+  const [issuedAccessTokens, setIssuedAccessTokens] = useState<Record<string, string>>({});
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [toolbarMessage, setToolbarMessage] = useState('');
   const totalPages = Math.max(1, Math.ceil(edges.length / pageSize));
@@ -119,8 +113,40 @@ export function EdgeNodesPage({
     try {
       await onDeleteEdge?.(edgeId);
       setToolbarMessage(`已移除边端 ${edgeId}`);
-    } catch {
-      setToolbarMessage('移除边端失败：请确认 runtime 已离线或未上报');
+    } catch (error) {
+      setToolbarMessage(`移除边端失败：${displayError(error, '请确认 runtime 已离线或未上报')}`);
+    }
+  };
+  const defaultProduct = products[0];
+  const openCreateDialog = () => {
+    setSaveState('idle');
+    setCreateDialog({
+      displayName: '新边端',
+      productId: defaultProduct?.productId ?? '',
+      projectId: defaultProduct?.projectId ?? '',
+      site: '待分配',
+    });
+  };
+  const updateCreateDialog = (patch: Partial<CreateManagedEdgeRequest>) => {
+    setCreateDialog((current) => (current ? { ...current, ...patch } : current));
+  };
+  const visibleAccessToken = accessDialog
+    ? issuedAccessTokens[accessDialog.edgeId] ?? accessTokens[accessDialog.edgeId]
+    : undefined;
+
+  const handleGenerateAccessToken = async () => {
+    if (!accessDialog || !onGenerateAccessToken) return;
+    setSaveState('saving');
+    try {
+      const token = await onGenerateAccessToken(accessDialog.edgeId);
+      setIssuedAccessTokens((current) => ({
+        ...current,
+        [accessDialog.edgeId]: token,
+      }));
+      setSaveState('saved');
+    } catch (error) {
+      setSaveState('error');
+      setToolbarMessage(`生成接入 token 失败：${displayError(error)}`);
     }
   };
 
@@ -128,19 +154,21 @@ export function EdgeNodesPage({
     <div className="page-stack">
       <section className="page-intro">
         <div>
-          <h2>边端生命周期</h2>
-          <p>
-            边端由 runtime 通过 EdgeLink 主动连接后自动登记。云端负责查看运行状态、进入边端配置，并维护该边端的 MQTT 上报连接。
-          </p>
+          <h2>边端管理</h2>
+          <p>手动登记边端，绑定产品，生成 runtime 接入 token。</p>
         </div>
-        {toolbarMessage ? (
-          <span className="toolbar-status" role="status">
-            {toolbarMessage}
-          </span>
-        ) : null}
+        <div className="toolbar">
+          {toolbarMessage ? (
+            <span className="toolbar-status" role="status">
+              {toolbarMessage}
+            </span>
+          ) : null}
+          <button className="primary-button" onClick={openCreateDialog} type="button">
+            <Plus size={15} aria-hidden="true" />
+            新增边端
+          </button>
+        </div>
       </section>
-
-      <EdgeFleetOverview edges={edges} summaries={configSummaries} />
 
       <section className="panel">
         <div className="panel-header">
@@ -153,12 +181,10 @@ export function EdgeNodesPage({
               <tr>
                 <th>Edge ID</th>
                 <th>名称</th>
-                <th>站点/分组</th>
+                <th>项目</th>
+                <th>关联产品</th>
                 <th>Runtime</th>
                 <th>状态</th>
-                <th>配置摘要</th>
-                <th>CPU / 内存 / 磁盘</th>
-                <th>心跳</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -170,7 +196,13 @@ export function EdgeNodesPage({
                   <tr key={edge.edgeId}>
                     <td>{edge.edgeId}</td>
                     <td>{edge.displayName}</td>
-                    <td>{edge.site}</td>
+                    <td>{summary.projectName ?? '未分配项目'}</td>
+                    <td>
+                      <div className="edge-product-cell">
+                        <strong>{summary.productName ?? '未绑定产品'}</strong>
+                        <span>{summary.productVersion ?? '-'}</span>
+                      </div>
+                    </td>
                     <td>{edge.runtimeId}</td>
                     <td>
                       <span className={edge.status === '健康' ? 'tag ok' : 'tag warn'}>
@@ -178,25 +210,20 @@ export function EdgeNodesPage({
                       </span>
                     </td>
                     <td>
-                      <EdgeConfigSummaryInline summary={summary} />
-                    </td>
-                    <td>{edge.resources}</td>
-                    <td>{edge.heartbeat}</td>
-                    <td>
                       <div className="row-actions">
                         <button
-                          aria-label={`配置 ${edge.edgeId}`}
+                          aria-label={`接入信息 ${edge.edgeId}`}
                           className="secondary-button compact"
-                          onClick={() => setConfigDialog(edge)}
+                          onClick={() => setAccessDialog(edge)}
                           type="button"
                         >
-                          <Settings2 size={14} aria-hidden="true" />
-                          配置
+                          <KeyRound size={14} aria-hidden="true" />
+                          接入
                         </button>
                         <button
                           aria-label={`运行监控 ${edge.edgeId}`}
                           className="secondary-button compact"
-                          onClick={() => onMonitorEdge?.(edge.edgeId)}
+                          onClick={() => setMonitorDialog(edge)}
                           type="button"
                         >
                           <Activity size={14} aria-hidden="true" />
@@ -264,63 +291,173 @@ export function EdgeNodesPage({
           </div>
         </div>
       </section>
-      {configDialog ? (
-        <EdgeConfigSelectionDialog
-          edge={configDialog}
-          onClose={() => setConfigDialog(undefined)}
-          onOpen={(tab) => {
-            if (tab === 'protocol') {
-              setConfigPanel({ edge: configDialog, section: tab });
-              return;
-            }
-            onConfigureEdge?.(configDialog.edgeId, tab);
-            setConfigDialog(undefined);
-          }}
-          summary={findConfigSummary(configSummaries, configDialog.edgeId)}
-        />
-      ) : null}
-      {configPanel?.section === 'protocol' ? (
-        <div className="modal-backdrop">
-          <section
-            aria-label="配置协议连接"
-            className="modal-panel edge-config-section-modal"
+      {createDialog ? (
+        <Modal onClose={() => setCreateDialog(undefined)}>
+          <form
+            aria-label="新增边端"
+            className="modal-panel"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              setSaveState('saving');
+              try {
+                const created = await onCreateEdge?.(createDialog);
+                if (created?.accessToken) {
+                  setIssuedAccessTokens((current) => ({
+                    ...current,
+                    [created.edgeId]: created.accessToken as string,
+                  }));
+                }
+                setToolbarMessage(
+                  created
+                    ? `已创建边端 ${created.edgeId}，token 已生成`
+                    : '已创建边端，token 已生成',
+                );
+                setSaveState('saved');
+                setCreateDialog(undefined);
+                if (created) setAccessDialog(created);
+              } catch (error) {
+                setSaveState('error');
+                setToolbarMessage(`创建边端失败：${displayError(error)}`);
+              }
+            }}
             role="dialog"
           >
             <div className="modal-header">
               <div>
-                <h3>配置协议连接</h3>
-                <p>
-                  {configPanel.edge.displayName} · {configPanel.edge.edgeId} ·
-                  {configPanel.edge.runtimeId}
-                </p>
+                <h3>新增边端</h3>
+                <p>选择产品后生成接入 token，runtime 使用 token 主动连接 cloud。</p>
               </div>
               <button
-                aria-label="关闭配置协议连接"
+                aria-label="关闭"
                 className="icon-button"
-                onClick={() => setConfigPanel(undefined)}
+                onClick={() => setCreateDialog(undefined)}
                 type="button"
               >
                 <X size={16} aria-hidden="true" />
               </button>
             </div>
-            <ProtocolConnectionsPage
-              connections={protocolConnections.filter(
-                (connection) => connection.edgeId === configPanel.edge.edgeId,
+            <div className="form-grid">
+              <EdgeTextField
+                label="边端名称"
+                onChange={(displayName) => updateCreateDialog({ displayName })}
+                value={createDialog.displayName}
+              />
+              <EdgeTextField
+                label="站点/分组"
+                onChange={(site) => updateCreateDialog({ site })}
+                value={createDialog.site}
+              />
+              <label className="editor-control form-wide">
+                <span>关联产品</span>
+                <select
+                  aria-label="关联产品"
+                  onChange={(event) => {
+                    const product = products.find(
+                      (item) => item.productId === event.target.value,
+                    );
+                    updateCreateDialog({
+                      productId: event.target.value,
+                      projectId: product?.projectId ?? createDialog.projectId,
+                    });
+                  }}
+                  value={createDialog.productId}
+                >
+                  {products.map((product) => (
+                    <option key={product.productId} value={product.productId}>
+                      {product.projectName} / {product.productName} · {product.version}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="drawer-footer">
+              <span className="editor-status" role="status">{edgeCreateText(saveState)}</span>
+              <button className="secondary-button" onClick={() => setCreateDialog(undefined)} type="button">
+                取消
+              </button>
+              <button className="primary-button" disabled={!createDialog.productId || saveState === 'saving'} type="submit">
+                生成接入 token
+              </button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
+      {accessDialog ? (
+        <Modal onClose={() => setAccessDialog(undefined)}>
+          <section aria-label="边端接入信息" className="modal-panel" role="dialog">
+            <div className="modal-header">
+              <div>
+                <h3>边端接入信息</h3>
+                <p>{accessDialog.displayName} · {accessDialog.edgeId}</p>
+              </div>
+              <button aria-label="关闭" className="icon-button" onClick={() => setAccessDialog(undefined)} type="button">
+                <X size={16} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="edge-access-card">
+              <span>Edge ID</span>
+              <strong>{accessDialog.edgeId}</strong>
+              <span>接入 Token</span>
+              {visibleAccessToken ? (
+                <code>{visibleAccessToken}</code>
+              ) : (
+                <p className="edge-access-once-note">
+                  Token 仅在创建或重新生成时显示，Cloud 不保存明文。
+                </p>
               )}
-              edges={edges}
-              embedded
-              mode="configure"
-              onCreateConnection={onCreateProtocolConnection}
-              onDeleteConnection={onDeleteProtocolConnection}
-              onSaveConnection={onSaveProtocolConnection}
-              onValidateConnection={onValidateConfig}
-              selectedEdgeId={configPanel.edge.edgeId}
+              {visibleAccessToken ? (
+                <>
+                  <span>接入命令</span>
+                  <code>
+                    edge-runtime --cloud-gateway-addr cloud:7443 --edge-id {accessDialog.edgeId} --access-token {visibleAccessToken}
+                  </code>
+                </>
+              ) : null}
+            </div>
+            <div className="drawer-footer">
+              <span className="editor-status" role="status">
+                {saveState === 'saving'
+                  ? '正在生成'
+                  : saveState === 'saved'
+                    ? '新 token 已生成，旧 token 已失效'
+                    : saveState === 'error'
+                      ? '生成失败'
+                      : '请妥善保存一次性 token'}
+              </span>
+              <button
+                className="secondary-button"
+                disabled={!onGenerateAccessToken || saveState === 'saving'}
+                onClick={() => void handleGenerateAccessToken()}
+                type="button"
+              >
+                <KeyRound size={15} aria-hidden="true" />
+                重新生成 token
+              </button>
+            </div>
+          </section>
+        </Modal>
+      ) : null}
+      {monitorDialog ? (
+        <Modal onClose={() => setMonitorDialog(undefined)}>
+          <section aria-label="边端运行监控" className="modal-panel edge-monitor-modal" role="dialog">
+            <div className="modal-header">
+              <div>
+                <h3>边端运行监控</h3>
+                <p>{monitorDialog.displayName} · {monitorDialog.edgeId}</p>
+              </div>
+              <button aria-label="关闭" className="icon-button" onClick={() => setMonitorDialog(undefined)} type="button">
+                <X size={16} aria-hidden="true" />
+              </button>
+            </div>
+            <EdgeMonitorDetails
+              edge={monitorDialog}
+              summary={findConfigSummary(configSummaries, monitorDialog.edgeId)}
             />
           </section>
-        </div>
+        </Modal>
       ) : null}
       {mqttDialog ? (
-        <div className="modal-backdrop">
+        <Modal onClose={() => setMqttDialog(undefined)}>
           <form
             aria-label="边端 MQTT 配置"
             className="modal-panel"
@@ -331,8 +468,9 @@ export function EdgeNodesPage({
                 const saved = await onSaveMqttUplink?.(mqttDialog.edgeId, mqttDialog.form);
                 setMqttDialog(saved ? { ...mqttDialog, form: saved } : mqttDialog);
                 setSaveState('saved');
-              } catch {
+              } catch (error) {
                 setSaveState('error');
+                setToolbarMessage(`保存 MQTT 配置失败：${displayError(error)}`);
               }
             }}
             role="dialog"
@@ -347,6 +485,9 @@ export function EdgeNodesPage({
               <MqttField label="Sink ID" value={mqttDialog.form.sinkId} onChange={(sinkId) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, sinkId } })} />
               <MqttField label="Broker 地址" value={mqttDialog.form.broker} onChange={(broker) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, broker } })} />
               <MqttField label="Client ID" value={mqttDialog.form.clientId} onChange={(clientId) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, clientId } })} />
+              <MqttField label="MQTT 用户名" value={mqttDialog.form.username ?? ''} onChange={(username) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, username } })} />
+              <MqttField label="密码环境变量" value={mqttDialog.form.passwordEnv ?? ''} onChange={(passwordEnv) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, passwordEnv } })} />
+              <MqttField label="私有 CA 路径" value={mqttDialog.form.tlsCaPath ?? ''} onChange={(tlsCaPath) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, tlsCaPath } })} />
               <MqttField label="默认 Topic 模板" value={mqttDialog.form.topicTemplate} onChange={(topicTemplate) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, topicTemplate } })} />
               <MqttField label="QoS" type="number" value={String(mqttDialog.form.qos)} onChange={(qos) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, qos: Number(qos) } })} />
               <MqttField label="批量条数" type="number" value={String(mqttDialog.form.batchSize)} onChange={(batchSize) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, batchSize: Number(batchSize) } })} />
@@ -361,7 +502,7 @@ export function EdgeNodesPage({
               </button>
             </div>
           </form>
-        </div>
+        </Modal>
       ) : null}
     </div>
   );
@@ -371,231 +512,65 @@ function canRemoveEdge(edge: EdgeNodeResponse) {
   return edge.status === '未上报' || edge.status === '离线';
 }
 
-function EdgeFleetOverview({
-  edges,
-  summaries,
-}: {
-  edges: EdgeNodeResponse[];
-  summaries: EdgeConfigSummary[];
-}) {
-  const normalizedSummaries = edges.map((edge) => findConfigSummary(summaries, edge.edgeId));
-  const online = edges.filter((edge) => edge.status === '健康').length;
-  const configured = normalizedSummaries.filter(
-    (summary) =>
-      summary.protocolCount > 0 &&
-      summary.pointCount > 0 &&
-      summary.collectionTaskCount > 0 &&
-      summary.dataConfigCount > 0 &&
-      summary.mqttSinkId !== '未配置',
-  ).length;
-  const totalPoints = normalizedSummaries.reduce((sum, summary) => sum + summary.pointCount, 0);
-  const totalReports = normalizedSummaries.reduce(
-    (sum, summary) => sum + summary.dataConfigCount,
-    0,
-  );
-  const coverage = edges.length === 0 ? 0 : Math.round((configured / edges.length) * 100);
-  const needsAttention = Math.max(0, edges.length - online);
-
-  return (
-    <section aria-label="边端舰队态势" className="fleet-overview-grid">
-      <div className="fleet-overview-card primary">
-        <ShieldCheck size={18} aria-hidden="true" />
-        <span>边端在线</span>
-        <strong>
-          {online}/{edges.length}
-        </strong>
-        <small>{needsAttention > 0 ? `${needsAttention} 个需关注` : '全部运行正常'}</small>
-      </div>
-      <div className="fleet-overview-card">
-        <Cpu size={18} aria-hidden="true" />
-        <span>配置覆盖</span>
-        <strong>{coverage}%</strong>
-        <small>{configured} 个边端形成采集到上报闭环</small>
-      </div>
-      <div className="fleet-overview-card">
-        <Database size={18} aria-hidden="true" />
-        <span>采集点位</span>
-        <strong>{totalPoints}</strong>
-        <small>已纳入周期采集与算法处理</small>
-      </div>
-      <div className="fleet-overview-card">
-        <Send size={18} aria-hidden="true" />
-        <span>上报流水线</span>
-        <strong>{totalReports}</strong>
-        <small>JSON 载荷按 MQTT topic 分流</small>
-      </div>
-    </section>
-  );
-}
-
-function EdgeConfigSummaryInline({ summary }: { summary: EdgeConfigSummary }) {
+function EdgeMonitorDetails({ edge, summary }: { edge: EdgeNodeResponse; summary: EdgeConfigSummary }) {
   const completion = calculateConfigCompletion(summary);
-  const releaseClass = summary.releaseStatus.includes('待') ? 'tag warn' : 'tag ok';
+  const resourceParts = edge.resources.split('/').map((value) => value.trim());
 
   return (
-    <div className="edge-config-inline">
-      <div className="edge-config-inline-meter" aria-label="边端配置完整度">
-        <span style={{ width: `${completion}%` }} />
+    <div className="edge-monitor-content">
+      <div className="edge-monitor-status">
+        <div>
+          <span>运行状态</span>
+          <strong className={edge.status === '健康' ? 'monitor-health healthy' : 'monitor-health warning'}>
+            <i />{edge.status}
+          </strong>
+        </div>
+        <div><span>Runtime</span><strong>{edge.runtimeId}</strong></div>
+        <div><span>最近心跳</span><strong>{edge.heartbeat}</strong></div>
+        <div><span>MQTT Sink</span><strong>{summary.mqttSinkId}</strong></div>
       </div>
-      <div className="edge-config-inline-tags">
-        <span>{summary.protocolCount} 协议</span>
-        <span>{summary.pointCount} 点位</span>
-        <span>{summary.collectionTaskCount} 任务</span>
-        <span>{summary.dataConfigCount} 上报</span>
-        <span className={releaseClass}>{summary.releaseStatus}</span>
-      </div>
-    </div>
-  );
-}
 
-function EdgeConfigSelectionDialog({
-  edge,
-  onClose,
-  onOpen,
-  summary,
-}: {
-  edge: EdgeNodeResponse;
-  onClose: () => void;
-  onOpen: (tab: EdgeConfigTabKey) => void;
-  summary: EdgeConfigSummary;
-}) {
-  const recommendation = buildConfigRecommendation(summary);
-  const completion = calculateConfigCompletion(summary);
-  const rows: Array<{
-    action: string;
-    description: string;
-    label: string;
-    status: string;
-    tab: EdgeConfigTabKey;
-  }> = [
-    {
-      action: '配置连接',
-      description: '串口总线、Modbus RTU/TCP、DL/T645 等南向采集通道',
-      label: '协议连接',
-      status: `${summary.protocolCount} 个连接`,
-      tab: 'protocol',
-    },
-    {
-      action: '配置点位',
-      description: '协议地址到语义点位的映射',
-      label: '点位配置',
-      status: `${summary.pointCount} 个点位`,
-      tab: 'points',
-    },
-    {
-      action: '配置任务',
-      description: '采集周期、点位批次、超时重试和缓存策略',
-      label: '采集任务',
-      status: `${summary.collectionTaskCount} 个任务`,
-      tab: 'collection',
-    },
-    {
-      action: '配置算法',
-      description: 'DSL 规则、窗口聚合、变化上报和虚拟点位输出',
-      label: '算法配置',
-      status: 'DSL',
-      tab: 'algorithms',
-    },
-    {
-      action: '配置上报',
-      description: '点位组合、DSL 算法、JSON 结构和 MQTT topic',
-      label: '数据上报',
-      status: `${summary.dataConfigCount} 套配置`,
-      tab: 'reports',
-    },
-    {
-      action: '配置 MQTT',
-      description: 'velaMQ broker、clientId、QoS 和批量策略',
-      label: 'MQTT 上报',
-      status: summary.mqttSinkId,
-      tab: 'mqtt',
-    },
-    {
-      action: '配置发布',
-      description: '配置差异、校验结果和 runtime 应用状态',
-      label: '配置发布',
-      status: summary.releaseStatus,
-      tab: 'release',
-    },
-  ];
-
-  return (
-    <div className="modal-backdrop">
-      <section
-        aria-label="配置边端"
-        className="modal-panel edge-config-select-modal"
-        role="dialog"
-      >
-        <div className="modal-header">
-          <div>
-            <h3>配置边端</h3>
-            <p>{edge.displayName} · {edge.edgeId} · {edge.runtimeId}</p>
-          </div>
-          <button aria-label="关闭" className="icon-button" onClick={onClose} type="button">
-            <X size={16} aria-hidden="true" />
-          </button>
+      <section className="edge-monitor-section">
+        <div className="edge-monitor-section-title">
+          <div><span>CONFIGURATION</span><h4>配置完整度</h4></div>
+          <strong>{completion}%</strong>
         </div>
-
-        <div className="edge-config-select-summary">
-          <span className={edge.status === '健康' ? 'tag ok' : 'tag warn'}>{edge.status}</span>
-          <strong>{edge.resources}</strong>
-          <small>{edge.heartbeat}</small>
+        <div className="edge-monitor-progress"><span style={{ width: `${completion}%` }} /></div>
+        <div className="edge-monitor-config-grid">
+          <MonitorMetric label="协议连接" value={summary.protocolCount} suffix="个" />
+          <MonitorMetric label="采集点位" value={summary.pointCount} suffix="个" />
+          <MonitorMetric label="采集任务" value={summary.collectionTaskCount} suffix="个" />
+          <MonitorMetric label="数据上报" value={summary.dataConfigCount} suffix="个" />
         </div>
-
-        <div className="edge-config-readiness">
-          <div>
-            <span>配置完整度</span>
-            <strong>{completion}%</strong>
-          </div>
-          <div className="readiness-track" aria-label="配置完整度">
-            <span style={{ width: `${completion}%` }} />
-          </div>
-          <small>{readinessText(completion)}</small>
+        <div className="edge-monitor-release">
+          <span>配置发布</span><strong>{summary.releaseStatus}</strong>
         </div>
+      </section>
 
-        <div className="edge-agent-recommendation">
-          <Sparkles size={16} aria-hidden="true" />
-          <div>
-            <strong>{recommendation.title}</strong>
-            <p>{recommendation.detail}</p>
-          </div>
-          <button
-            className="secondary-button compact"
-            onClick={() => onOpen(recommendation.tab)}
-            type="button"
-          >
-            {recommendation.action}
-          </button>
-        </div>
-
-        <div className="binding-matrix">
-          {rows.map((row) => (
-            <div className="binding-row" key={row.label}>
-              <div>
-                <strong>{row.label}</strong>
-                <p>{row.description}</p>
-              </div>
-              <span className="binding-status">{row.status}</span>
-              <button
-                className="secondary-button compact"
-                onClick={() => onOpen(row.tab)}
-                type="button"
-              >
-                {row.action}
-              </button>
-            </div>
-          ))}
-        </div>
-
-        <div className="drawer-footer">
-          <button className="secondary-button" onClick={onClose} type="button">取消</button>
-          <button className="primary-button" onClick={() => onOpen('overview')} type="button">
-            <SlidersHorizontal size={15} aria-hidden="true" />
-            打开配置总览
-          </button>
+      <section className="edge-monitor-section">
+        <div className="edge-monitor-section-title"><div><span>RESOURCES</span><h4>资源使用</h4></div></div>
+        <div className="edge-monitor-resource-grid">
+          <ResourceMetric label="CPU" value={resourceParts[0] ?? '-'} />
+          <ResourceMetric label="内存" value={resourceParts[1] ?? '-'} />
+          <ResourceMetric label="磁盘" value={resourceParts[2] ?? '-'} />
         </div>
       </section>
     </div>
+  );
+}
+
+function MonitorMetric({ label, suffix, value }: { label: string; suffix: string; value: number }) {
+  return <article className="edge-monitor-metric"><span>{label}</span><strong>{value}<small>{suffix}</small></strong></article>;
+}
+
+function ResourceMetric({ label, value }: { label: string; value: string }) {
+  const numericValue = Number.parseFloat(value);
+  const width = Number.isFinite(numericValue) ? Math.min(100, Math.max(0, numericValue)) : 0;
+  return (
+    <article className="edge-resource-metric">
+      <div><span>{label}</span><strong>{value}</strong></div>
+      <div className="edge-resource-track"><span style={{ width: `${width}%` }} /></div>
+    </article>
   );
 }
 
@@ -611,58 +586,6 @@ function calculateConfigCompletion(summary: EdgeConfigSummary) {
   return Math.round((score / 6) * 100);
 }
 
-function readinessText(completion: number) {
-  if (completion >= 84) return '采集、处理、上报和发布链路基本闭环';
-  if (completion >= 50) return '核心链路已具备，仍需补齐发布或上报配置';
-  return '建议先补齐采集连接、点位和任务配置';
-}
-
-function buildConfigRecommendation(summary: EdgeConfigSummary): {
-  action: string;
-  detail: string;
-  tab: EdgeConfigTabKey;
-  title: string;
-} {
-  if (summary.protocolCount === 0) {
-    return {
-      action: '去配置连接',
-      detail: '该边端还没有南向采集连接，建议先维护串口或 Modbus 连接。',
-      tab: 'protocol',
-      title: '建议先补齐采集连接',
-    };
-  }
-  if (summary.pointCount === 0) {
-    return {
-      action: '去配置点位',
-      detail: '已有连接但还没有语义点位，建议先导入或维护点位映射。',
-      tab: 'points',
-      title: '建议生成点位映射',
-    };
-  }
-  if (summary.dataConfigCount === 0) {
-    return {
-      action: '去配置上报',
-      detail: '点位和采集链路已具备，下一步可以组合点位、算法和 MQTT topic。',
-      tab: 'reports',
-      title: '建议创建数据上报配置',
-    };
-  }
-  if (summary.releaseStatus.includes('待') || summary.releaseStatus.includes('下发')) {
-    return {
-      action: '去发布',
-      detail: '配置已具备，建议校验差异并发布到 runtime。',
-      tab: 'release',
-      title: '建议校验并发布配置',
-    };
-  }
-  return {
-    action: '看总览',
-    detail: '采集、处理和上报链路已形成闭环，可从总览继续检查绑定关系。',
-    tab: 'overview',
-    title: '配置链路状态良好',
-  };
-}
-
 function findConfigSummary(
   summaries: EdgeConfigSummary[],
   edgeId: string,
@@ -676,7 +599,31 @@ function findConfigSummary(
       pointCount: 0,
       protocolCount: 0,
       releaseStatus: '待发布',
+      productName: '未绑定产品',
+      productVersion: '-',
+      projectName: '未分配项目',
     }
+  );
+}
+
+function EdgeTextField({
+  label,
+  onChange,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  return (
+    <label className="editor-control">
+      <span>{label}</span>
+      <input
+        aria-label={label}
+        onChange={(event) => onChange(event.target.value)}
+        value={value}
+      />
+    </label>
   );
 }
 
@@ -716,4 +663,11 @@ function mqttSaveText(state: 'idle' | 'saving' | 'saved' | 'error') {
   if (state === 'saved') return '已保存';
   if (state === 'error') return '保存失败';
   return '等待保存';
+}
+
+function edgeCreateText(state: 'idle' | 'saving' | 'saved' | 'error') {
+  if (state === 'saving') return '创建中';
+  if (state === 'saved') return '已创建';
+  if (state === 'error') return '创建失败';
+  return '等待创建';
 }

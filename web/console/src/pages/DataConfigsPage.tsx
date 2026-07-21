@@ -1,10 +1,9 @@
-import { type DragEvent, useMemo, useState } from 'react';
-import { Copy, Edit3, GitBranch, Pause, Play, Plus, Radio, Trash2, X } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Copy, Edit3, GitBranch, Pause, Play, Plus, Trash2, X } from 'lucide-react';
 
 import type {
   AlgorithmResponse,
   DataConfigPoint,
-  DataConfigGraphNodeKind,
   DataConfigResponse,
   EdgeNodeResponse,
   MqttUplinkResponse,
@@ -13,6 +12,8 @@ import type {
   SaveDataConfigRequest,
 } from '../api/types';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
+import { Modal } from '../components/Modal';
+import { displayError } from '../utils/errors';
 import './PointMappingsPage.css';
 
 const emptyPoint: DataConfigPoint = {
@@ -38,14 +39,12 @@ const fallbackConfig: DataConfigResponse = {
   visualGraph: {
     edges: [
       { edgeId: 'pressure-to-algorithm', from: 'point-pressure', to: 'algorithm-pump-anomaly-v1' },
-      { edgeId: 'algorithm-to-json', from: 'algorithm-pump-anomaly-v1', to: 'json-payload' },
-      { edgeId: 'json-to-mqtt', from: 'json-payload', to: 'mqtt-output' },
+      { edgeId: 'algorithm-to-mqtt', from: 'algorithm-pump-anomaly-v1', to: 'mqtt-output' },
     ],
     nodes: [
       { kind: 'point', label: 'pressure', nodeId: 'point-pressure', refId: 'pressure', x: 80, y: 88 },
       { kind: 'algorithm', label: 'pump-anomaly-v1', nodeId: 'algorithm-pump-anomaly-v1', refId: 'pump-anomaly-v1', x: 280, y: 88 },
-      { kind: 'json', label: 'JSON Payload', nodeId: 'json-payload', refId: null, x: 500, y: 88 },
-      { kind: 'mqtt', label: 'MQTT Topic', nodeId: 'mqtt-output', refId: 'factory/{edge_id}/{device_id}/status', x: 700, y: 88 },
+      { kind: 'mqtt', label: 'MQTT Topic', nodeId: 'mqtt-output', refId: 'factory/{edge_id}/{device_id}/status', x: 520, y: 88 },
     ],
   },
   publish: {
@@ -59,19 +58,26 @@ const fallbackConfig: DataConfigResponse = {
 export function DataConfigsPage({
   algorithms = [],
   configs = [fallbackConfig],
+  createLabel = '新建数据上报',
+  description = '点位输入、计算节点处理与 MQTT 输出的一体化数据流水线。',
   edges = [],
   embedded = false,
+  listTitle = '采集流水线清单',
   mqttUplink,
   onDeleteConfig,
   onSaveConfig,
+  pageTitle = '采集管理',
   pointMappings = [],
   protocolConnections = [],
   selectedEdgeId = configs[0]?.edgeId ?? 'edge-dev',
 }: {
   algorithms?: AlgorithmResponse[];
   configs?: DataConfigResponse[];
+  createLabel?: string;
+  description?: string;
   edges?: EdgeNodeResponse[];
   embedded?: boolean;
+  listTitle?: string;
   mqttUplink?: MqttUplinkResponse | null;
   onDeleteConfig?: (edgeId: string, configId: string) => Promise<void> | void;
   onSaveConfig?: (
@@ -79,6 +85,7 @@ export function DataConfigsPage({
     configId: string | null,
     request: SaveDataConfigRequest,
   ) => Promise<void> | void;
+  pageTitle?: string;
   pointMappings?: PointMappingResponse[];
   protocolConnections?: ProtocolConnectionResponse[];
   selectedEdgeId?: string;
@@ -269,17 +276,6 @@ export function DataConfigsPage({
     );
   };
 
-  const updateFirstPoint = (patch: Partial<DataConfigPoint>) => {
-    setDialog((current) => {
-      if (!current) return current;
-      const first = current.form.points[0] ?? emptyPoint;
-      return {
-        ...current,
-        form: { ...current.form, points: [{ ...first, ...patch }, ...current.form.points.slice(1)] },
-      };
-    });
-  };
-
   const handleSave = async () => {
     if (!dialog) return;
     const nextErrors = validateDataConfigForm(dialog.form);
@@ -297,8 +293,8 @@ export function DataConfigsPage({
       );
       setStatus('已保存');
       setDialog(undefined);
-    } catch {
-      setStatus('保存失败');
+    } catch (error) {
+      setStatus(`保存失败：${displayError(error)}`);
     }
   };
 
@@ -307,8 +303,8 @@ export function DataConfigsPage({
     try {
       await onDeleteConfig?.(selectedEdgeId, configId);
       setStatus(`已删除 ${configId}`);
-    } catch {
-      setStatus('删除失败');
+    } catch (error) {
+      setStatus(`删除失败：${displayError(error)}`);
     }
   };
 
@@ -322,8 +318,8 @@ export function DataConfigsPage({
       });
       await onSaveConfig?.(selectedEdgeId, null, request);
       setStatus(`已复制 ${config.configId}`);
-    } catch {
-      setStatus('复制失败');
+    } catch (error) {
+      setStatus(`复制失败：${displayError(error)}`);
     }
   };
 
@@ -336,8 +332,8 @@ export function DataConfigsPage({
         sanitizeForm({ ...responseToSave(config), enabled: !config.enabled }),
       );
       setStatus(`${config.enabled ? '已暂停' : '已启用'} ${config.configId}`);
-    } catch {
-      setStatus('状态更新失败');
+    } catch (error) {
+      setStatus(`状态更新失败：${displayError(error)}`);
     }
   };
 
@@ -345,21 +341,21 @@ export function DataConfigsPage({
     <div className="page-stack">
       <section className="page-intro">
         <div>
-          <h2>数据配置</h2>
-          <p>定义数据上报流水线：选择边端已配置点位，拖入算法节点汇聚处理，再组装 JSON 上报到 MQTT topic。</p>
+          <h2>{pageTitle}</h2>
+          <p>{description}</p>
         </div>
         <div className="toolbar">
           {status ? <span className="toolbar-status" role="status">{status}</span> : null}
           <button className="primary-button" onClick={openCreate} type="button">
             <Plus size={15} aria-hidden="true" />
-            新建数据上报
+            {createLabel}
           </button>
         </div>
       </section>
 
       <section className="table-card">
         <div className="section-heading">
-          <h3>数据上报清单</h3>
+          <h3>{listTitle}</h3>
           <span>
             {filteredConfigs.length === activeConfigs.length
               ? `${activeConfigs.length} 套配置`
@@ -399,9 +395,9 @@ export function DataConfigsPage({
       </section>
 
       {dialog ? (
-        <div className="modal-backdrop">
+        <Modal onClose={() => setDialog(undefined)}>
           <form
-            aria-label={dialog.mode === 'create' ? '新建数据上报' : '编辑数据上报'}
+            aria-label={dialog.mode === 'create' ? createLabel : '编辑采集流水线'}
             className="modal-panel data-config-modal"
             onSubmit={(event) => {
               event.preventDefault();
@@ -414,7 +410,7 @@ export function DataConfigsPage({
             role="dialog"
           >
             <div className="modal-header">
-              <h3>{dialog.mode === 'create' ? '新建数据上报' : `编辑数据上报 ${dialog.form.configId}`}</h3>
+              <h3>{dialog.mode === 'create' ? createLabel : `编辑采集流水线 ${dialog.form.configId}`}</h3>
               <button aria-label="关闭" className="icon-button" onClick={() => setDialog(undefined)} type="button">
                 <X size={16} aria-hidden="true" />
               </button>
@@ -441,7 +437,6 @@ export function DataConfigsPage({
               protocolConnections={protocolConnections}
               step={step}
               updateCollection={updateCollection}
-              updateFirstPoint={updateFirstPoint}
               updateForm={updateForm}
               updateAlgorithmIds={(algorithmIds) => updateForm({ algorithmIds })}
               updatePayload={updatePayload}
@@ -471,7 +466,7 @@ export function DataConfigsPage({
               </button>
             </div>
           </form>
-        </div>
+        </Modal>
       ) : null}
     </div>
   );
@@ -487,7 +482,6 @@ function DataConfigStep({
   protocolConnections,
   step,
   updateCollection,
-  updateFirstPoint,
   updateForm,
   updateAlgorithmIds,
   updatePayload,
@@ -500,14 +494,11 @@ function DataConfigStep({
   protocolConnections: ProtocolConnectionResponse[];
   step: number;
   updateCollection: (patch: Partial<SaveDataConfigRequest['collection']>) => void;
-  updateFirstPoint: (patch: Partial<DataConfigPoint>) => void;
   updateForm: (patch: Partial<SaveDataConfigRequest>) => void;
   updateAlgorithmIds: (algorithmIds: string[]) => void;
   updatePayload: (patch: Partial<SaveDataConfigRequest['publish']['payload']>) => void;
   updatePublish: (patch: Partial<SaveDataConfigRequest['publish']>) => void;
 }) {
-  const firstPoint = form.points[0] ?? emptyPoint;
-  const graph = form.visualGraph ?? createDefaultVisualGraph(form);
   if (step === 0) {
     return (
       <div className="form-grid">
@@ -537,7 +528,7 @@ function DataConfigStep({
           </select>
         </label>
         <div className="info-panel">
-          采集周期和点位采集任务在“采集任务”页面单独配置。本页面只定义已采集点位如何汇聚、组装 JSON 并上报。
+          采集周期、点位输入、计算节点和 MQTT 输出由一条采集流水线统一维护，产品配置会引用产品绑定点位生成编排。
         </div>
       </div>
     );
@@ -547,10 +538,8 @@ function DataConfigStep({
       <VisualReportBuilder
         algorithms={algorithms}
         form={form}
-        graph={graph}
         pointMappings={pointMappings}
         updateAlgorithmIds={updateAlgorithmIds}
-        updateFirstPoint={updateFirstPoint}
         updateForm={updateForm}
       />
     );
@@ -595,7 +584,7 @@ function DataConfigReadiness({
   return (
     <div className="data-config-readiness-grid">
       <ReadinessItem label="可选点位" ready={pointCount > 0} value={`${pointCount} 个`} />
-      <ReadinessItem label="可选算法" ready={algorithmCount > 0} value={algorithmCount > 0 ? `${algorithmCount} 个` : '可选'} />
+      <ReadinessItem label="可选计算节点" ready={algorithmCount > 0} value={algorithmCount > 0 ? `${algorithmCount} 个` : '可选'} />
       <ReadinessItem label="MQTT Sink" ready={Boolean(mqttUplink?.sinkId)} value={mqttUplink?.sinkId ?? '未配置'} />
     </div>
   );
@@ -630,18 +619,14 @@ function TextField({ label, onChange, type = 'text', value }: { label: string; o
 function VisualReportBuilder({
   algorithms,
   form,
-  graph,
   pointMappings,
   updateAlgorithmIds,
-  updateFirstPoint,
   updateForm,
 }: {
   algorithms: AlgorithmResponse[];
   form: SaveDataConfigRequest;
-  graph: NonNullable<SaveDataConfigRequest['visualGraph']>;
   pointMappings: PointMappingResponse[];
   updateAlgorithmIds: (algorithmIds: string[]) => void;
-  updateFirstPoint: (patch: Partial<DataConfigPoint>) => void;
   updateForm: (patch: Partial<SaveDataConfigRequest>) => void;
 }) {
   const [pointQuery, setPointQuery] = useState('');
@@ -681,7 +666,7 @@ function VisualReportBuilder({
     const points = selectedPointIds.has(point.pointId) ? form.points : [...form.points, point];
     updateForm({
       points,
-      visualGraph: addGraphNode(graph, 'point', point.pointId, point.pointId, form.publish.topicTemplate),
+      visualGraph: buildVisualGraph(points, form.algorithmIds ?? [], form.publish.topicTemplate),
     });
   };
 
@@ -692,7 +677,7 @@ function VisualReportBuilder({
     updateAlgorithmIds(algorithmIds);
     updateForm({
       algorithmIds,
-      visualGraph: addGraphNode(graph, 'algorithm', algorithm.algorithmId, algorithm.algorithmId, form.publish.topicTemplate),
+      visualGraph: buildVisualGraph(form.points, algorithmIds, form.publish.topicTemplate),
     });
   };
 
@@ -700,7 +685,7 @@ function VisualReportBuilder({
     const points = form.points.filter((point) => point.pointId !== pointId);
     updateForm({
       points,
-      visualGraph: removeGraphNode(graph, `point-${pointId}`, form.publish.topicTemplate),
+      visualGraph: buildVisualGraph(points, form.algorithmIds ?? [], form.publish.topicTemplate),
     });
   };
 
@@ -709,66 +694,37 @@ function VisualReportBuilder({
     updateAlgorithmIds(algorithmIds);
     updateForm({
       algorithmIds,
-      visualGraph: removeGraphNode(graph, `algorithm-${algorithmId}`, form.publish.topicTemplate),
+      visualGraph: buildVisualGraph(form.points, algorithmIds, form.publish.topicTemplate),
     });
   };
 
-  const ensureOutput = () => {
-    updateForm({ visualGraph: ensureOutputNodes(graph, form.publish.topicTemplate) });
+  const updatePoint = (pointId: string, patch: Partial<DataConfigPoint>) => {
+    const points = form.points.map((point) =>
+      point.pointId === pointId ? { ...point, ...patch } : point,
+    );
+    updateForm({
+      points,
+      visualGraph: buildVisualGraph(points, form.algorithmIds ?? [], form.publish.topicTemplate),
+    });
   };
 
   const addFilteredPoints = () => {
     const merged = mergePoints(form.points, filteredPointResources);
     updateForm({
       points: merged,
-      visualGraph: ensureOutputNodes(
-        {
-          edges: graph.edges,
-          nodes: [
-            ...graph.nodes.filter((node) => node.kind !== 'point' && node.kind !== 'json' && node.kind !== 'mqtt'),
-            ...merged.map((point, index) => ({
-              kind: 'point' as const,
-              label: point.pointId,
-              nodeId: `point-${point.pointId}`,
-              refId: point.pointId,
-              x: 56,
-              y: 56 + index * 86,
-            })),
-          ],
-        },
-        form.publish.topicTemplate,
-      ),
+      visualGraph: buildVisualGraph(merged, form.algorithmIds ?? [], form.publish.topicTemplate),
     });
   };
 
   const clearPoints = () => {
     updateForm({
       points: [],
-      visualGraph: ensureOutputNodes(
-        {
-          edges: graph.edges.filter((edge) => !edge.from.startsWith('point-') && !edge.to.startsWith('point-')),
-          nodes: graph.nodes.filter((node) => node.kind !== 'point'),
-        },
-        form.publish.topicTemplate,
-      ),
+      visualGraph: buildVisualGraph([], form.algorithmIds ?? [], form.publish.topicTemplate),
     });
   };
 
-  const onDrop = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const [kind, refId] = event.dataTransfer.getData('application/x-edge-node').split(':');
-    if (kind === 'point') {
-      const point = pointResources.find((item) => item.pointId === refId);
-      if (point) addPoint(point);
-    }
-    if (kind === 'algorithm') {
-      const algorithm = algorithms.find((item) => item.algorithmId === refId);
-      if (algorithm) addAlgorithm(algorithm);
-    }
-  };
-
   return (
-    <div className="visual-builder">
+    <div className="visual-builder planner-builder">
       <aside className="node-palette" aria-label="节点库">
         <div>
           <div className="palette-heading">
@@ -794,11 +750,9 @@ function VisualReportBuilder({
           </div>
           {filteredPointResources.map((point) => (
             <button
-              className="palette-node"
-              draggable
+              className={selectedPointIds.has(point.pointId) ? 'palette-node selected' : 'palette-node'}
               key={point.pointId}
               onClick={() => addPoint(point)}
-              onDragStart={(event) => event.dataTransfer.setData('application/x-edge-node', `point:${point.pointId}`)}
               type="button"
             >
               <GitBranch size={14} aria-hidden="true" />
@@ -810,103 +764,120 @@ function VisualReportBuilder({
         </div>
         <div>
           <div className="palette-heading">
-            <h4>算法节点</h4>
+            <h4>计算节点</h4>
             <span>{filteredAlgorithms.length} / {algorithms.length}</span>
           </div>
           <label className="palette-search">
-            <span>搜索算法资源</span>
+            <span>搜索计算节点</span>
             <input
-              aria-label="搜索算法资源"
-              placeholder="算法 ID、类型、输入输出"
+              aria-label="搜索计算节点"
+              placeholder="计算节点 ID、类型、输入输出"
               value={algorithmQuery}
               onChange={(event) => setAlgorithmQuery(event.target.value)}
             />
           </label>
           {filteredAlgorithms.length ? filteredAlgorithms.map((algorithm) => (
             <button
-              className="palette-node"
-              draggable
+              className={selectedAlgorithmIds.has(algorithm.algorithmId) ? 'palette-node selected' : 'palette-node'}
               key={algorithm.algorithmId}
               onClick={() => addAlgorithm(algorithm)}
-              onDragStart={(event) => event.dataTransfer.setData('application/x-edge-node', `algorithm:${algorithm.algorithmId}`)}
               type="button"
             >
-              <Radio size={14} aria-hidden="true" />
+              <GitBranch size={14} aria-hidden="true" />
               <span>{algorithm.algorithmId}</span>
               <small>{algorithm.algorithmKind}</small>
             </button>
-          )) : <p className="palette-empty">暂无匹配算法，可直接上报原始点位。</p>}
+          )) : <p className="palette-empty">暂无匹配计算节点。</p>}
         </div>
       </aside>
-      <section
-        className="report-canvas"
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={onDrop}
-      >
-        <div className="canvas-toolbar">
-          <strong>数据上报画布</strong>
-          <button className="secondary-button compact" onClick={ensureOutput} type="button">
-            生成 JSON/MQTT 节点
-          </button>
-        </div>
-        <div className="canvas-lane" aria-label="数据上报画布">
-          {ensureOutputNodes(graph, form.publish.topicTemplate).nodes.map((node) => (
-            <div
-              className={`canvas-node ${node.kind}`}
-              key={node.nodeId}
-              style={{ left: node.x, top: node.y }}
-            >
-              <span>{nodeKindText(node.kind)}</span>
-              <strong>{node.label}</strong>
-              {node.refId ? <small>{node.refId}</small> : null}
-            </div>
-          ))}
-          <div className="canvas-flow-line" />
+      <section className="flow-planner" aria-label="点位组合编排">
+        <div className="flow-planner-header">
+          <div>
+            <strong>点位组合数据</strong>
+            <p>选择多个点位，定义输出字段名，再选择窗口、变化、过滤等计算节点输出到 MQTT。</p>
+          </div>
+          <span>{form.points.length} 个输入</span>
         </div>
         <div className="selected-flow-summary">
           <span>{form.points.length} 个点位</span>
-          <span>{(form.algorithmIds ?? []).length} 个算法</span>
+          <span>{(form.algorithmIds ?? []).length} 个计算节点</span>
           <span>输出到 {form.publish.topicTemplate}</span>
         </div>
-        <div className="selected-flow-assets" aria-label="已选数据流资源">
-          <section>
-            <h4>已选点位</h4>
-            <div className="asset-chip-list">
-              {form.points.map((point) => (
-                <span className="asset-chip point" key={point.pointId}>
-                  <strong>{point.jsonField}</strong>
-                  <small>{point.pointId}</small>
-                  <button
-                    aria-label={`移除点位 ${point.pointId}`}
-                    onClick={() => removePoint(point.pointId)}
-                    type="button"
-                  >
-                    <X size={12} aria-hidden="true" />
-                  </button>
-                </span>
-              ))}
+        <div className="flow-mapping-table" aria-label="已选数据流资源">
+          <div className="flow-mapping-head" aria-hidden="true">
+            <span>点位</span>
+            <span>JSON 字段</span>
+            <span>类型/单位</span>
+            <span>操作</span>
+          </div>
+          {form.points.map((point) => (
+            <div className="flow-mapping-row" key={point.pointId}>
+              <div>
+                <strong>{point.pointId}</strong>
+                <small>{point.semanticId}</small>
+              </div>
+              <input
+                aria-label={`JSON 字段 ${point.pointId}`}
+                value={point.jsonField}
+                onChange={(event) => updatePoint(point.pointId, { jsonField: event.target.value })}
+              />
+              <span>{point.valueType} / {point.unit || '-'}</span>
+              <button
+                aria-label={`移除点位 ${point.pointId}`}
+                className="danger-button compact"
+                onClick={() => removePoint(point.pointId)}
+                type="button"
+              >
+                <X size={12} aria-hidden="true" />
+                移除
+              </button>
             </div>
-          </section>
-          <section>
-            <h4>已选算法</h4>
-            <div className="asset-chip-list">
-              {(form.algorithmIds ?? []).length ? (form.algorithmIds ?? []).map((algorithmId) => (
-                <span className="asset-chip algorithm" key={algorithmId}>
-                  <strong>{algorithmId}</strong>
-                  <small>DSL</small>
-                  <button
-                    aria-label={`移除算法 ${algorithmId}`}
-                    onClick={() => removeAlgorithm(algorithmId)}
-                    type="button"
-                  >
-                    <X size={12} aria-hidden="true" />
-                  </button>
-                </span>
-              )) : <p>未选择算法，点位将直接组装为 JSON 上报。</p>}
+          ))}
+          {form.points.length === 0 ? (
+            <div className="flow-empty-state">
+              从左侧选择点位后，在这里规划组合后的 JSON 数据结构。
             </div>
-          </section>
+          ) : null}
         </div>
       </section>
+      <aside className="flow-output-panel">
+        <section>
+          <h4>计算处理</h4>
+          <p>计算节点作用于已选点位，保存后由 runtime 的 DSL 引擎执行。</p>
+          <div className="asset-chip-list">
+            {(form.algorithmIds ?? []).length ? (form.algorithmIds ?? []).map((algorithmId) => (
+              <span className="asset-chip algorithm" key={algorithmId}>
+                <strong>{algorithmId}</strong>
+                <small>DSL</small>
+                <button
+                  aria-label={`移除计算节点 ${algorithmId}`}
+                  onClick={() => removeAlgorithm(algorithmId)}
+                  type="button"
+                >
+                  <X size={12} aria-hidden="true" />
+                </button>
+              </span>
+            )) : <p>请选择一个计算节点后再输出到 MQTT。</p>}
+          </div>
+        </section>
+        <section>
+          <h4>输出</h4>
+          <dl className="flow-output-list">
+            <div>
+              <dt>MQTT Topic</dt>
+              <dd>{form.publish.topicTemplate}</dd>
+            </div>
+            <div>
+              <dt>Payload</dt>
+              <dd>{form.publish.payload.mode}</dd>
+            </div>
+            <div>
+              <dt>QoS</dt>
+              <dd>{form.publish.qos}</dd>
+            </div>
+          </dl>
+        </section>
+      </aside>
     </div>
   );
 }
@@ -930,15 +901,7 @@ function createDefaultForm(
     deviceId: firstPoint?.deviceId || 'pump-1',
     enabled: true,
     algorithmIds: [],
-    visualGraph: createDefaultVisualGraph({
-      points: initialPoints,
-      publish: {
-        payload: { includeQuality: true, mode: 'object', timestampField: 'ts' },
-        qos: mqttUplink?.qos ?? 1,
-        sinkId: mqttUplink?.sinkId ?? 'velamq-main',
-        topicTemplate: 'factory/{edge_id}/{device_id}/telemetry',
-      },
-    }),
+    visualGraph: buildVisualGraph(initialPoints, [], 'factory/{edge_id}/{device_id}/telemetry'),
     name: '新数据配置',
     points: initialPoints,
     protocolConnectionId: firstConnectionId,
@@ -956,7 +919,9 @@ function responseToSave(config: DataConfigResponse): SaveDataConfigRequest {
   return {
     ...request,
     algorithmIds: request.algorithmIds ?? [],
-    visualGraph: request.visualGraph ?? createDefaultVisualGraph(request),
+    visualGraph:
+      request.visualGraph ??
+      buildVisualGraph(request.points, request.algorithmIds ?? [], request.publish.topicTemplate),
   };
 }
 
@@ -964,7 +929,7 @@ function sanitizeForm(form: SaveDataConfigRequest): SaveDataConfigRequest {
   return {
     ...form,
     algorithmIds: form.algorithmIds ?? [],
-    visualGraph: ensureOutputNodes(form.visualGraph ?? createDefaultVisualGraph(form), form.publish.topicTemplate),
+    visualGraph: buildVisualGraph(form.points, form.algorithmIds ?? [], form.publish.topicTemplate),
     collection: {
       periodMs: Math.max(Number(form.collection.periodMs) || 1000, 100),
       retryCount: Math.max(Number(form.collection.retryCount) || 0, 0),
@@ -1065,86 +1030,45 @@ function buildPreview(form: SaveDataConfigRequest) {
   };
 }
 
-function createDefaultVisualGraph(form: Pick<SaveDataConfigRequest, 'points' | 'publish'>) {
-  const nodes = form.points.map((point, index) => ({
+function buildVisualGraph(
+  points: DataConfigPoint[],
+  algorithmIds: string[],
+  topicTemplate: string,
+) {
+  const pointNodes = points.map((point, index) => ({
     kind: 'point' as const,
-    label: point.pointId,
+    label: point.jsonField || point.pointId,
     nodeId: `point-${point.pointId}`,
     refId: point.pointId,
-    x: 56,
-    y: 56 + index * 86,
+    x: 0,
+    y: index,
   }));
-  return ensureOutputNodes({ edges: [], nodes }, form.publish.topicTemplate);
-}
-
-function addGraphNode(
-  graph: NonNullable<SaveDataConfigRequest['visualGraph']>,
-  kind: DataConfigGraphNodeKind,
-  label: string,
-  refId: string,
-  topicTemplate: string,
-) {
-  const nodeId = `${kind}-${refId}`;
-  if (graph.nodes.some((node) => node.nodeId === nodeId)) {
-    return ensureOutputNodes(graph, topicTemplate);
-  }
-  const next = {
-    edges: graph.edges,
-    nodes: [
-      ...graph.nodes.filter((node) => node.kind !== 'json' && node.kind !== 'mqtt'),
-      {
-        kind,
-        label,
-        nodeId,
-        refId,
-        x: kind === 'point' ? 56 : 286,
-        y: 56 + graph.nodes.filter((node) => node.kind === kind).length * 86,
-      },
-    ],
-  };
-  return ensureOutputNodes(next, topicTemplate);
-}
-
-function removeGraphNode(
-  graph: NonNullable<SaveDataConfigRequest['visualGraph']>,
-  nodeId: string,
-  topicTemplate: string,
-) {
-  return ensureOutputNodes(
-    {
-      edges: graph.edges.filter((edge) => edge.from !== nodeId && edge.to !== nodeId),
-      nodes: graph.nodes.filter((node) => node.nodeId !== nodeId),
-    },
-    topicTemplate,
-  );
-}
-
-function ensureOutputNodes(
-  graph: NonNullable<SaveDataConfigRequest['visualGraph']>,
-  topicTemplate: string,
-) {
-  const inputNodes = graph.nodes.filter((node) => node.kind === 'point' || node.kind === 'algorithm');
-  const outputNodes = [
-    { kind: 'json' as const, label: 'JSON Payload', nodeId: 'json-payload', refId: null, x: 520, y: 96 },
-    { kind: 'mqtt' as const, label: 'MQTT Topic', nodeId: 'mqtt-output', refId: topicTemplate || null, x: 720, y: 96 },
+  const algorithmNodes = algorithmIds.map((algorithmId, index) => ({
+    kind: 'algorithm' as const,
+    label: algorithmId,
+    nodeId: `algorithm-${algorithmId}`,
+    refId: algorithmId,
+    x: 1,
+    y: index,
+  }));
+  const nodes = [
+    ...pointNodes,
+    ...algorithmNodes,
+    { kind: 'mqtt' as const, label: 'MQTT Topic', nodeId: 'mqtt-output', refId: topicTemplate || null, x: 2, y: 0 },
   ];
-  const nodes = [...inputNodes, ...outputNodes];
   const edges = [
-    ...inputNodes.map((node) => ({
-      edgeId: `${node.nodeId}-to-json`,
+    ...pointNodes.map((node) => ({
+      edgeId: `${node.nodeId}-to-${algorithmNodes[0]?.nodeId ?? 'mqtt-output'}`,
       from: node.nodeId,
-      to: 'json-payload',
+      to: algorithmNodes[0]?.nodeId ?? 'mqtt-output',
     })),
-    { edgeId: 'json-to-mqtt', from: 'json-payload', to: 'mqtt-output' },
+    ...algorithmNodes.map((node, index) => ({
+      edgeId: `${node.nodeId}-to-${algorithmNodes[index + 1]?.nodeId ?? 'mqtt-output'}`,
+      from: node.nodeId,
+      to: algorithmNodes[index + 1]?.nodeId ?? 'mqtt-output',
+    })),
   ];
   return { edges, nodes };
-}
-
-function nodeKindText(kind: DataConfigGraphNodeKind) {
-  if (kind === 'point') return '点位';
-  if (kind === 'algorithm') return '算法';
-  if (kind === 'json') return 'JSON';
-  return 'MQTT';
 }
 
 function sampleValue(valueType: string) {

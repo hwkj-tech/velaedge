@@ -8,6 +8,14 @@ pub struct EdgeNode {
     pub display_name: String,
     pub site: Option<String>,
     pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub product_id: Option<String>,
+    #[serde(default)]
+    pub desired_product_version: Option<String>,
+    #[serde(default)]
+    pub reported_product_version: Option<String>,
 }
 
 impl EdgeNode {
@@ -17,6 +25,10 @@ impl EdgeNode {
             display_name: display_name.into(),
             site: None,
             capabilities: Vec::new(),
+            project_id: None,
+            product_id: None,
+            desired_product_version: None,
+            reported_product_version: None,
         }
     }
 
@@ -27,6 +39,18 @@ impl EdgeNode {
 
     pub fn with_capability(mut self, capability: impl Into<String>) -> Self {
         self.capabilities.push(capability.into());
+        self
+    }
+
+    pub fn bind_product(
+        mut self,
+        project_id: impl Into<String>,
+        product_id: impl Into<String>,
+        desired_version: impl Into<String>,
+    ) -> Self {
+        self.project_id = Some(project_id.into());
+        self.product_id = Some(product_id.into());
+        self.desired_product_version = Some(desired_version.into());
         self
     }
 }

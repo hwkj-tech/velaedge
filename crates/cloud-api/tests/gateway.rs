@@ -2,19 +2,116 @@ use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use cloud_api::gateway::{
-    handle_edgelink_session, handle_edgelink_session_with_store,
-    handle_edgelink_session_with_store_and_sqlite, serve_edgelink_gateway_for_sessions,
+    handle_edgelink_session, handle_edgelink_session_with_registry,
+    handle_edgelink_session_with_store, handle_edgelink_session_with_store_and_sqlite,
+    serve_edgelink_gateway_for_sessions, EdgeGatewayCommandRegistry,
 };
-use cloud_control::{CloudControlStore, ReleaseService, ReleaseStatus, SqliteCloudStore};
+use cloud_control::{
+    CloudControlStore, EdgeAccessCredential, ReleaseService, ReleaseStatus, SqliteCloudStore,
+};
 use edge_core::{
     decode_edgelink_frame, encode_edgelink_frame, CloudSyncMetrics, CollectionRuntimeMetrics,
-    DiscoveredPoint, DiscoveryReport, EdgeConfigPackage, EdgeHealth, EdgeLinkMessage,
-    EdgeLinkMessageKind, EdgeLinkPayload, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot,
-    LocalStoreMetrics, PointAddress, PointMappingSuggestion, ProtocolRuntimeMetrics,
-    RuntimeEventCategory, RuntimeEventSeverity, SystemRuntimeMetrics, TelemetryType,
+    DiscoveredPoint, DiscoveryReport, DiscoveryRequest, EdgeConfigPackage, EdgeHealth,
+    EdgeLinkMessage, EdgeLinkMessageKind, EdgeLinkPayload, EdgeRuntimeEvent,
+    EdgeRuntimeMetricsSnapshot, LocalStoreMetrics, PointAddress, PointMappingSuggestion,
+    ProtocolRuntimeMetrics, RuntimeEventCategory, RuntimeEventSeverity, SystemRuntimeMetrics,
+    TelemetryType,
 };
+use sha2::Digest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time::Duration;
+
+#[tokio::test]
+async fn gateway_rejects_an_invalid_token_for_a_provisioned_edge() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let gateway_addr = listener.local_addr().expect("listener should expose addr");
+    let mut control_store = CloudControlStore::default();
+    let expected_hash = sha2::Sha256::digest(b"edge_valid_secret")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    control_store.replace_edge_credential(EdgeAccessCredential::new("edge-secure", expected_hash));
+    let store = Arc::new(Mutex::new(control_store));
+
+    let gateway = tokio::spawn(async move {
+        let (stream, peer_addr) = listener.accept().await.expect("runtime should connect");
+        handle_edgelink_session_with_store(stream, peer_addr, store).await
+    });
+
+    let mut runtime = TcpStream::connect(gateway_addr)
+        .await
+        .expect("runtime should connect to gateway");
+    let hello = EdgeLinkMessage::hello_with_access_token(
+        "edge-secure",
+        "runtime-secure",
+        "0.1.0",
+        None,
+        Vec::new(),
+        Some("edge_wrong_secret".to_string()),
+    );
+    write_one_message(&mut runtime, &hello).await;
+
+    let rejection = read_one_message(&mut runtime).await;
+    let EdgeLinkPayload::Nack(payload) = rejection.payload else {
+        panic!("expected authentication nack");
+    };
+    assert_eq!(payload.ack_message_id, hello.message_id);
+    assert_eq!(
+        payload.reason.as_deref(),
+        Some("invalid or missing edge access token")
+    );
+    let error = gateway
+        .await
+        .expect("gateway task should finish")
+        .expect_err("invalid token should fail the session");
+    assert!(error
+        .to_string()
+        .contains("invalid or missing edge access token"));
+}
+
+#[tokio::test]
+async fn gateway_accepts_the_active_token_for_a_provisioned_edge() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let gateway_addr = listener.local_addr().expect("listener should expose addr");
+    let mut control_store = CloudControlStore::default();
+    let expected_hash = sha2::Sha256::digest(b"edge_valid_secret")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    control_store.replace_edge_credential(EdgeAccessCredential::new("edge-secure", expected_hash));
+    let store = Arc::new(Mutex::new(control_store));
+
+    let gateway = tokio::spawn(async move {
+        let (stream, peer_addr) = listener.accept().await.expect("runtime should connect");
+        handle_edgelink_session_with_store(stream, peer_addr, store)
+            .await
+            .expect("active token should authenticate")
+    });
+
+    let mut runtime = TcpStream::connect(gateway_addr)
+        .await
+        .expect("runtime should connect to gateway");
+    let hello = EdgeLinkMessage::hello_with_access_token(
+        "edge-secure",
+        "runtime-secure",
+        "0.1.0",
+        None,
+        Vec::new(),
+        Some("edge_valid_secret".to_string()),
+    );
+    write_one_message(&mut runtime, &hello).await;
+    assert_ack_for(&mut runtime, &hello).await;
+    drop(runtime);
+
+    let report = gateway.await.expect("gateway task should finish");
+    assert_eq!(report.session.edge_id, "edge-secure");
+    assert_eq!(report.session.runtime_id, "runtime-secure");
+}
 
 #[tokio::test]
 async fn gateway_acknowledges_runtime_hello_and_records_session_identity() {
@@ -410,6 +507,86 @@ async fn gateway_deploys_latest_config_and_marks_release_applied_from_report() {
         .expect("release should still exist");
     assert_eq!(updated.status, ReleaseStatus::Applied);
     assert_eq!(updated.reported_version.as_deref(), Some("2026.06.27-010"));
+}
+
+#[tokio::test]
+async fn gateway_dispatches_discovery_to_online_runtime_and_persists_report() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let gateway_addr = listener.local_addr().expect("listener should expose addr");
+    let store = Arc::new(Mutex::new(CloudControlStore::default()));
+    let gateway_store = store.clone();
+    let registry = EdgeGatewayCommandRegistry::default();
+    let gateway_registry = registry.clone();
+    let gateway = tokio::spawn(async move {
+        let (stream, peer_addr) = listener.accept().await.expect("runtime should connect");
+        handle_edgelink_session_with_registry(stream, peer_addr, gateway_store, gateway_registry)
+            .await
+            .expect("registered session should complete")
+    });
+
+    let mut runtime = TcpStream::connect(gateway_addr)
+        .await
+        .expect("runtime should connect");
+    let hello = EdgeLinkMessage::hello(
+        "edge-discovery",
+        "runtime-discovery",
+        "0.1.0",
+        None,
+        Vec::new(),
+    );
+    write_one_message(&mut runtime, &hello).await;
+    assert_ack_for(&mut runtime, &hello).await;
+    let metrics = EdgeLinkMessage::runtime_metrics(
+        "edge-discovery",
+        "runtime-discovery",
+        2,
+        runtime_metrics("edge-discovery", "runtime-discovery"),
+    );
+    write_one_message(&mut runtime, &metrics).await;
+    assert_ack_for(&mut runtime, &metrics).await;
+    assert!(registry.is_online("edge-discovery").await);
+
+    let dispatch_registry = registry.clone();
+    let dispatch = tokio::spawn(async move {
+        dispatch_registry
+            .dispatch_discovery(
+                "edge-discovery",
+                DiscoveryRequest::modbus_holding_registers(
+                    "job-1",
+                    "meter-rs485-bus-1",
+                    40001,
+                    40001,
+                ),
+                Duration::from_secs(1),
+            )
+            .await
+            .expect("online runtime should return discovery report")
+    });
+
+    let request = read_one_message(&mut runtime).await;
+    let EdgeLinkPayload::DiscoveryRequest(request_payload) = &request.payload else {
+        panic!("expected discovery request");
+    };
+    assert_eq!(request_payload.job_id, "job-1");
+    let report = EdgeLinkMessage::discovery_report(
+        "edge-discovery",
+        "runtime-discovery",
+        request.sequence + 1,
+        discovery_report(),
+    );
+    write_one_message(&mut runtime, &report).await;
+    assert_ack_for(&mut runtime, &report).await;
+
+    let returned = dispatch.await.expect("dispatch task should finish");
+    assert_eq!(returned.job_id, "job-1");
+    assert_eq!(returned.discovered_points.len(), 1);
+    drop(runtime);
+    let session = gateway.await.expect("gateway task should finish");
+    assert_eq!(session.accepted_message_count, 2);
+    let store = store.lock().expect("store mutex should not be poisoned");
+    assert_eq!(store.discovery_reports("edge-discovery").len(), 1);
 }
 
 async fn read_one_message(stream: &mut TcpStream) -> EdgeLinkMessage {

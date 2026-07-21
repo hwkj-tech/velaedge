@@ -1,4 +1,7 @@
-use cloud_control::{AgentCommandDraft, ConfigPackage, EdgeNode, FleetRegistry};
+use cloud_control::{
+    AgentCommandDraft, AgentProposal, AgentProposalKind, AgentProposalStatus, ConfigPackage,
+    EdgeNode, FleetRegistry,
+};
 use edge_core::{
     AlgorithmDsl, AlgorithmKind, AlgorithmRuntime, AlgorithmSpec, CommandParameter, CommandRisk,
     CommandSpec, DeviceSpec, NumberRange, PolicyEngine, TelemetryType, TelemetryValue,
@@ -54,4 +57,30 @@ fn agent_command_draft_converts_to_policy_checkable_candidate() {
     assert_eq!(candidate.requested_by, "agent:fleet-ops");
     assert_eq!(candidate.edge_id, "edge-1");
     assert!(PolicyEngine.validate_command(&spec, &candidate).is_ok());
+}
+
+#[test]
+fn agent_proposal_requires_one_terminal_human_review() {
+    let mut proposal = AgentProposal::new(
+        "fleet-agent",
+        AgentProposalKind::ConfigSuggestion,
+        "补全压力点位",
+        "建议增加 pump.pressure 映射",
+        "operator-a",
+    );
+
+    proposal
+        .review(
+            AgentProposalStatus::Approved,
+            "reviewer-a",
+            Some("仅批准进入人工配置流程".to_string()),
+        )
+        .unwrap();
+
+    assert_eq!(proposal.status, AgentProposalStatus::Approved);
+    assert_eq!(proposal.reviewed_by.as_deref(), Some("reviewer-a"));
+    assert!(proposal.reviewed_at.is_some());
+    assert!(proposal
+        .review(AgentProposalStatus::Rejected, "reviewer-b", None)
+        .is_err());
 }

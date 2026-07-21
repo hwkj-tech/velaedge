@@ -6,6 +6,7 @@ import type {
   ManagementActionResponse,
   ReleaseListResponse,
 } from '../api/types';
+import { displayError } from '../utils/errors';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import './PointMappingsPage.css';
 
@@ -114,8 +115,9 @@ export function ReleasesPage({
     try {
       await onPublish?.(selectedEdgeId);
       setPublishState('published');
-    } catch {
+    } catch (error) {
       setPublishState('error');
+      setToolbarMessage(`发布失败：${displayError(error)}`);
     }
   };
 
@@ -126,8 +128,8 @@ export function ReleasesPage({
     try {
       const result = await onShowDiff?.(selectedEdgeId);
       setToolbarMessage(result?.message ?? '配置差异摘要已生成');
-    } catch {
-      setToolbarMessage('配置差异摘要生成失败');
+    } catch (error) {
+      setToolbarMessage(`配置差异摘要生成失败：${displayError(error)}`);
     } finally {
       setActionState('idle');
     }
@@ -142,8 +144,8 @@ export function ReleasesPage({
       setToolbarMessage(
         result?.status ? `发布配置校验 ${result.status}` : '发布配置校验已通过',
       );
-    } catch {
-      setToolbarMessage('发布配置校验失败');
+    } catch (error) {
+      setToolbarMessage(`发布配置校验失败：${displayError(error)}`);
     } finally {
       setActionState('idle');
     }
@@ -154,9 +156,7 @@ export function ReleasesPage({
       <section className="page-intro">
         <div>
           <h2>配置发布</h2>
-          <p>
-            将待发布配置打包成边端配置版本，经过校验、审批、灰度和回执确认后再扩大发布范围。
-          </p>
+          <p>校验、差异、发布与 runtime 回执。</p>
         </div>
         <div className="toolbar">
           {toolbarMessage ? (

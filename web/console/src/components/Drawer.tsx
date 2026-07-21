@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { X } from 'lucide-react';
+import { Modal } from './Modal';
 
 export function Drawer({
   children,
@@ -15,7 +16,7 @@ export function Drawer({
   title: string;
 }) {
   return (
-    <div className="modal-backdrop">
+    <Modal onClose={onClose}>
       <aside aria-label={title} className="drawer" role="dialog">
         <header className="drawer-header">
           <div>
@@ -36,6 +37,6 @@ export function Drawer({
         <div className="drawer-body">{children}</div>
         {footer && <footer className="drawer-footer">{footer}</footer>}
       </aside>
-    </div>
+    </Modal>
   );
 }

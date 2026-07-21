@@ -13,11 +13,19 @@ pub struct AuditRecord {
 
 impl AuditRecord {
     pub fn system(action: AuditAction, target: impl Into<String>) -> Self {
+        Self::by_actor(action, target, "system")
+    }
+
+    pub fn by_actor(
+        action: AuditAction,
+        target: impl Into<String>,
+        actor: impl Into<String>,
+    ) -> Self {
         Self {
             audit_id: Uuid::new_v4(),
             action,
             target: target.into(),
-            actor: "system".to_string(),
+            actor: actor.into(),
             created_at: Utc::now(),
         }
     }
@@ -28,4 +36,12 @@ pub enum AuditAction {
     CreateRelease,
     ApplyRelease,
     UpdateConfig,
+    CreateAgentProposal,
+    ApproveAgentProposal,
+    RejectAgentProposal,
+    CreateKnowledgeDocument,
+    UpdateKnowledgeDocument,
+    DeleteKnowledgeDocument,
+    CreateAgentConversation,
+    DeleteAgentConversation,
 }

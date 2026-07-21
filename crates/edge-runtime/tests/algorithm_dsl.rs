@@ -82,6 +82,46 @@ fn window_aggregate_emits_virtual_point_when_window_closes() {
     assert_eq!(output.samples[0].value, TelemetryValue::Float(12.0));
 }
 
+#[test]
+fn algorithm_outputs_flow_into_downstream_compute_nodes() {
+    let upstream = AlgorithmSpec::dsl(
+        "pressure-change",
+        "v1",
+        AlgorithmKind::ChangeReport,
+        AlgorithmDsl {
+            inputs: vec![AlgorithmInputBinding::new("p", "pressure")],
+            trigger: AlgorithmTrigger::on_sample(),
+            steps: vec![AlgorithmStep::change_filter("p", 0.0)],
+            outputs: vec![AlgorithmOutput::virtual_point("value", "pressure.reported")],
+            report: AlgorithmReportPolicy::new(AlgorithmReportMode::OnChange, "velamq-main"),
+        },
+    );
+    let downstream = AlgorithmSpec::dsl(
+        "pressure-forward",
+        "v1",
+        AlgorithmKind::ChangeReport,
+        AlgorithmDsl {
+            inputs: vec![AlgorithmInputBinding::new("p", "pressure.reported")],
+            trigger: AlgorithmTrigger::on_sample(),
+            steps: vec![AlgorithmStep::change_filter("p", 0.0)],
+            outputs: vec![AlgorithmOutput::virtual_point(
+                "value",
+                "pressure.forwarded",
+            )],
+            report: AlgorithmReportPolicy::new(AlgorithmReportMode::OnChange, "velamq-main"),
+        },
+    );
+    let mut engine = AlgorithmEngine::new(vec![upstream, downstream]).expect("engine builds");
+
+    let report = engine
+        .apply_samples(&[sample("pressure", 10.0, Utc::now())])
+        .unwrap();
+
+    assert_eq!(report.samples.len(), 2);
+    assert_eq!(report.samples[0].telemetry_id, "pressure.reported");
+    assert_eq!(report.samples[1].telemetry_id, "pressure.forwarded");
+}
+
 fn sample(point_id: &str, value: f64, timestamp: chrono::DateTime<Utc>) -> TelemetrySample {
     TelemetrySample::new(
         "pump-1",

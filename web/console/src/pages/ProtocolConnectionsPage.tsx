@@ -9,7 +9,9 @@ import type {
   SaveProtocolConnectionRequest,
 } from '../api/types';
 import { Drawer } from '../components/Drawer';
+import { Modal } from '../components/Modal';
 import { PaginationBar } from '../components/PaginationBar';
+import { displayError } from '../utils/errors';
 import './PointMappingsPage.css';
 
 const fallbackConnections: ProtocolConnectionResponse[] = [
@@ -99,6 +101,7 @@ export function ProtocolConnectionsPage({
   const [createForm, setCreateForm] = useState<CreateProtocolConnectionRequest>({
     endpoint: '/dev/ttyUSB0',
     protocolType: 'ModbusRtu',
+    serial: serialDefaultsForProtocol('ModbusRtu', '/dev/ttyUSB0'),
   });
   const [validateState, setValidateState] = useState<'idle' | 'validating'>('idle');
   const [toolbarMessage, setToolbarMessage] = useState('');
@@ -138,12 +141,12 @@ export function ProtocolConnectionsPage({
 
     try {
       await onSaveConnection?.(selectedEdgeId, selectedConnection.connectionId, {
-        endpoint: form.endpoint.trim() || null,
-        protocolType: form.protocolType,
+        ...requestFromEditor(form),
       });
       setSaveState('saved');
-    } catch {
+    } catch (error) {
       setSaveState('error');
+      setToolbarMessage(`保存连接失败：${displayError(error)}`);
     }
   };
 
@@ -156,6 +159,13 @@ export function ProtocolConnectionsPage({
       const created = await onCreateConnection?.(selectedEdgeId, {
         endpoint: createForm.endpoint?.trim() || null,
         protocolType: createForm.protocolType,
+        serial: isSerialProtocol(createForm.protocolType)
+          ? createForm.serial ??
+            serialDefaultsForProtocol(
+              createForm.protocolType,
+              createForm.endpoint ?? '/dev/ttyUSB0',
+            )
+          : null,
       });
       if (created) {
         setSelectedConnectionId(created.connectionId);
@@ -164,8 +174,8 @@ export function ProtocolConnectionsPage({
         setToolbarMessage('已创建连接');
       }
       setCreateDialogOpen(false);
-    } catch {
-      setToolbarMessage('创建连接失败');
+    } catch (error) {
+      setToolbarMessage(`创建连接失败：${displayError(error)}`);
     } finally {
       setCreateState('idle');
     }
@@ -185,8 +195,8 @@ export function ProtocolConnectionsPage({
       setToolbarMessage(
         result.status ? `连接校验 ${result.status}` : '连接校验无结果',
       );
-    } catch {
-      setToolbarMessage('连接校验失败');
+    } catch (error) {
+      setToolbarMessage(`连接校验失败：${displayError(error)}`);
     } finally {
       setValidateState('idle');
     }
@@ -198,8 +208,8 @@ export function ProtocolConnectionsPage({
       await onDeleteConnection?.(selectedEdgeId, connectionId);
       setToolbarMessage(`已删除连接 ${connectionId}`);
       setEditDialogOpen(false);
-    } catch {
-      setToolbarMessage('删除连接失败：请先解除点位或数据配置引用');
+    } catch (error) {
+      setToolbarMessage(`删除连接失败：${displayError(error, '请先解除点位或数据配置引用')}`);
     }
   };
 
@@ -208,9 +218,7 @@ export function ProtocolConnectionsPage({
       <section className="page-intro">
         <div>
           <h2>协议连接实例</h2>
-          <p>
-            云端维护可复用连接模板，保存时做字段和密钥校验，边端收到配置后使用本地适配器建立真实连接。
-          </p>
+          <p>串口、Modbus 与 DL/T645 采集通道。</p>
         </div>
         <div className="toolbar">
           {toolbarMessage ? (
@@ -246,7 +254,7 @@ export function ProtocolConnectionsPage({
       </section>
 
       {createDialogOpen ? (
-        <div className="modal-backdrop">
+        <Modal onClose={() => setCreateDialogOpen(false)}>
           <form
             aria-labelledby="protocol-create-dialog-title"
             className="modal-panel"
@@ -273,12 +281,20 @@ export function ProtocolConnectionsPage({
                 <select
                   aria-label="新建协议类型"
                   value={createForm.protocolType ?? 'ModbusRtu'}
-                  onChange={(event) =>
-                    setCreateForm((current) => ({
-                      ...current,
-                      protocolType: event.target.value,
-                    }))
-                  }
+                  onChange={(event) => {
+                    const protocolType = event.target.value;
+                    setCreateForm((current) => {
+                      const endpoint = current.endpoint ?? '/dev/ttyUSB0';
+                      return {
+                        ...current,
+                        endpoint,
+                        protocolType,
+                        serial: isSerialProtocol(protocolType)
+                          ? serialDefaultsForProtocol(protocolType, endpoint)
+                          : null,
+                      };
+                    });
+                  }}
                 >
                   {protocolOptions.map(([value, label]) => (
                     <option key={value} value={value}>
@@ -287,19 +303,60 @@ export function ProtocolConnectionsPage({
                   ))}
                 </select>
               </label>
-              <label>
-                <span>端点</span>
-                <input
-                  aria-label="新建端点"
-                  value={createForm.endpoint ?? ''}
-                  onChange={(event) =>
-                    setCreateForm((current) => ({
-                      ...current,
-                      endpoint: event.target.value,
-                    }))
-                  }
-                />
-              </label>
+              {isSerialProtocol(createForm.protocolType) ? (
+                <>
+                  <label>
+                    <span>串口设备</span>
+                    <input
+                      aria-label="新建串口设备"
+                      value={createForm.serial?.port ?? createForm.endpoint ?? ''}
+                      onChange={(event) => {
+                        const port = event.target.value;
+                        setCreateForm((current) => ({
+                          ...current,
+                          endpoint: port,
+                          serial: {
+                            ...(current.serial ??
+                              serialDefaultsForProtocol(current.protocolType, port)),
+                            port,
+                          },
+                        }));
+                      }}
+                    />
+                  </label>
+                  <SerialFields
+                    idPrefix="新建"
+                    serial={
+                      createForm.serial ??
+                      serialDefaultsForProtocol(
+                        createForm.protocolType,
+                        createForm.endpoint ?? '/dev/ttyUSB0',
+                      )
+                    }
+                    onChange={(serial) =>
+                      setCreateForm((current) => ({
+                        ...current,
+                        endpoint: serial.port,
+                        serial,
+                      }))
+                    }
+                  />
+                </>
+              ) : (
+                <label>
+                  <span>端点</span>
+                  <input
+                    aria-label="新建端点"
+                    value={createForm.endpoint ?? ''}
+                    onChange={(event) =>
+                      setCreateForm((current) => ({
+                        ...current,
+                        endpoint: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+              )}
             </div>
             <div className="modal-actions">
               <button
@@ -318,7 +375,7 @@ export function ProtocolConnectionsPage({
               </button>
             </div>
           </form>
-        </div>
+        </Modal>
       ) : null}
 
       <div className={isConfigureMode ? 'point-config-layout' : 'point-config-layout list-only'}>
@@ -458,10 +515,9 @@ export function ProtocolConnectionsPage({
                   aria-label="协议类型"
                   value={form.protocolType}
                   onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      protocolType: event.target.value,
-                    }))
+                    setForm((current) =>
+                      applyProtocolToEditorForm(current, event.target.value),
+                    )
                   }
                 >
                   {protocolOptions.map(([value, label]) => (
@@ -471,19 +527,49 @@ export function ProtocolConnectionsPage({
                   ))}
                 </select>
               </label>
-              <label className="editor-control">
-                <span>端点</span>
-                <input
-                  aria-label="端点"
-                  value={form.endpoint}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      endpoint: event.target.value,
-                    }))
-                  }
-                />
-              </label>
+              {isSerialProtocol(form.protocolType) ? (
+                <>
+                  <label className="editor-control">
+                    <span>串口设备</span>
+                    <input
+                      aria-label="串口设备"
+                      value={form.serial.port}
+                      onChange={(event) => {
+                        const port = event.target.value;
+                        setForm((current) => ({
+                          ...current,
+                          endpoint: port,
+                          serial: { ...current.serial, port },
+                        }));
+                      }}
+                    />
+                  </label>
+                  <SerialFields
+                    serial={form.serial}
+                    onChange={(serial) =>
+                      setForm((current) => ({
+                        ...current,
+                        endpoint: serial.port,
+                        serial,
+                      }))
+                    }
+                  />
+                </>
+              ) : (
+                <label className="editor-control">
+                  <span>端点</span>
+                  <input
+                    aria-label="端点"
+                    value={form.endpoint}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        endpoint: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+              )}
             </div>
           </section>
           <DrawerSection
@@ -505,13 +591,129 @@ export function ProtocolConnectionsPage({
 interface EditorForm {
   endpoint: string;
   protocolType: string;
+  serial: NonNullable<CreateProtocolConnectionRequest['serial']>;
 }
 
 function connectionToEditorForm(connection: ProtocolConnectionResponse): EditorForm {
   return {
     endpoint: connection.endpoint,
     protocolType: connection.protocolType || inferProtocolType(connection.protocol),
+    serial:
+      connection.serial ??
+      serialDefaultsForProtocol(
+        connection.protocolType || inferProtocolType(connection.protocol),
+        connection.endpoint,
+      ),
   };
+}
+
+function isSerialProtocol(protocolType: string | undefined): boolean {
+  return ['ModbusRtu', 'Dlt645', 'Iec101', 'CustomSerial'].includes(protocolType ?? '');
+}
+
+function serialDefaultsForProtocol(
+  protocolType: string | undefined,
+  port: string,
+): NonNullable<CreateProtocolConnectionRequest['serial']> {
+  return {
+    port,
+    baudRate: protocolType === 'Dlt645' ? 2400 : 9600,
+    dataBits: 8,
+    stopBits: 1,
+    parity: protocolType === 'Dlt645' || protocolType === 'Iec101' ? 'even' : 'none',
+  };
+}
+
+function applyProtocolToEditorForm(form: EditorForm, protocolType: string): EditorForm {
+  return {
+    ...form,
+    protocolType,
+    serial: isSerialProtocol(protocolType)
+      ? serialDefaultsForProtocol(protocolType, form.serial.port || form.endpoint)
+      : form.serial,
+  };
+}
+
+function requestFromEditor(form: EditorForm): SaveProtocolConnectionRequest {
+  if (isSerialProtocol(form.protocolType)) {
+    return {
+      endpoint: form.serial.port.trim() || null,
+      protocolType: form.protocolType,
+      serial: { ...form.serial, port: form.serial.port.trim() },
+    };
+  }
+  return {
+    endpoint: form.endpoint.trim() || null,
+    protocolType: form.protocolType,
+  };
+}
+
+function SerialFields({
+  idPrefix = '',
+  onChange,
+  serial,
+}: {
+  idPrefix?: string;
+  onChange: (serial: NonNullable<CreateProtocolConnectionRequest['serial']>) => void;
+  serial: NonNullable<CreateProtocolConnectionRequest['serial']>;
+}) {
+  const label = (value: string) => `${idPrefix}${value}`;
+  return (
+    <>
+      <label className="editor-control">
+        <span>波特率</span>
+        <input
+          aria-label={label('波特率')}
+          min={1}
+          onChange={(event) => onChange({ ...serial, baudRate: Number(event.target.value) })}
+          type="number"
+          value={serial.baudRate}
+        />
+      </label>
+      <label className="editor-control">
+        <span>数据位</span>
+        <select
+          aria-label={label('数据位')}
+          onChange={(event) => onChange({ ...serial, dataBits: Number(event.target.value) })}
+          value={serial.dataBits}
+        >
+          {[5, 6, 7, 8].map((value) => (
+            <option key={value} value={value}>
+              {value}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="editor-control">
+        <span>停止位</span>
+        <select
+          aria-label={label('停止位')}
+          onChange={(event) => onChange({ ...serial, stopBits: Number(event.target.value) })}
+          value={serial.stopBits}
+        >
+          <option value={1}>1</option>
+          <option value={2}>2</option>
+        </select>
+      </label>
+      <label className="editor-control">
+        <span>校验位</span>
+        <select
+          aria-label={label('校验位')}
+          onChange={(event) =>
+            onChange({
+              ...serial,
+              parity: event.target.value as 'none' | 'even' | 'odd',
+            })
+          }
+          value={serial.parity}
+        >
+          <option value="none">无校验</option>
+          <option value="even">偶校验</option>
+          <option value="odd">奇校验</option>
+        </select>
+      </label>
+    </>
+  );
 }
 
 function inferProtocolType(protocol: string): string {

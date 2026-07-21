@@ -82,11 +82,14 @@ describe('DataConfigsPage', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
 
     expect(within(dialog).getByText('pressure-change-report')).toBeInTheDocument();
-    expect(within(dialog).getByLabelText('数据上报画布')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('点位组合编排')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('已选数据流资源')).toBeInTheDocument();
     expect(within(dialog).getByText('0 个点位')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: /flow_rate/ }));
-    expect(within(dialog).getByText('pump.flow_rate')).toBeInTheDocument();
+    expect(within(dialog).getAllByText('pump.flow_rate').length).toBeGreaterThan(0);
+    fireEvent.change(within(dialog).getByLabelText('JSON 字段 flow_rate'), {
+      target: { value: 'flow' },
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: /pressure-change-report/ }));
     fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
 
@@ -96,9 +99,10 @@ describe('DataConfigsPage', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
 
     expect(within(dialog).getByLabelText('JSON 预览')).toHaveValue();
-    expect(
-      (within(dialog).getByLabelText('JSON 预览') as HTMLTextAreaElement).value,
-    ).toContain('flow_rate');
+    const preview = JSON.parse((within(dialog).getByLabelText('JSON 预览') as HTMLTextAreaElement).value);
+    expect(preview.values).toHaveProperty('flow');
+    expect(preview.values).not.toHaveProperty('flow_rate');
+    expect(preview.quality).toHaveProperty('flow');
     expect(
       (within(dialog).getByLabelText('JSON 预览') as HTMLTextAreaElement).value,
     ).not.toContain('"pressure"');
@@ -113,14 +117,27 @@ describe('DataConfigsPage', () => {
         algorithmIds: ['pressure-change-report'],
         visualGraph: expect.objectContaining({
           nodes: expect.arrayContaining([
+            expect.objectContaining({ kind: 'point', refId: 'flow_rate' }),
             expect.objectContaining({ kind: 'algorithm', refId: 'pressure-change-report' }),
-            expect.objectContaining({ kind: 'json' }),
             expect.objectContaining({ kind: 'mqtt' }),
+          ]),
+          edges: expect.arrayContaining([
+            expect.objectContaining({
+              from: 'point-flow_rate',
+              to: 'algorithm-pressure-change-report',
+            }),
+            expect.objectContaining({
+              from: 'algorithm-pressure-change-report',
+              to: 'mqtt-output',
+            }),
           ]),
         }),
         publish: expect.objectContaining({
           topicTemplate: 'factory/{edge_id}/{device_id}/status',
         }),
+        points: expect.arrayContaining([
+          expect.objectContaining({ pointId: 'flow_rate', jsonField: 'flow' }),
+        ]),
       }),
     );
   });
@@ -151,6 +168,49 @@ describe('DataConfigsPage', () => {
 
     expect(within(dialog).getByRole('alert')).toHaveTextContent('MQTT Topic 不能为空');
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('shows backend save errors inside the edit dialog', async () => {
+    const onSave = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          'data config algorithm `pump-anomaly-v1` input point `running` is not included in data config points',
+        ),
+      );
+
+    render(
+      <DataConfigsPage
+        configs={[existingConfig as any]}
+        mqttUplink={{ sinkId: 'velamq-main', qos: 1 } as any}
+        onSaveConfig={onSave}
+        pointMappings={[
+          {
+            address: 'holding_register:40001',
+            edgeId: 'edge-dev',
+            pointId: 'pressure',
+            semanticTelemetry: 'pump.pressure',
+            unit: 'MPa',
+            valueType: 'float32',
+          } as any,
+        ]}
+        protocolConnections={[
+          { connectionId: 'modbus-line-a', protocol: 'Modbus RTU' } as any,
+        ]}
+        selectedEdgeId="edge-dev"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'pump_status' }));
+    const dialog = screen.getByRole('dialog', { name: '编辑采集流水线' });
+    fireEvent.click(within(dialog).getByRole('button', { name: /JSON 预览/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+
+    expect(
+      await within(dialog).findByText(
+        /保存失败：data config algorithm `pump-anomaly-v1` input point `running` is not included in data config points/,
+      ),
+    ).toBeInTheDocument();
   });
 
   it('duplicates and toggles an existing data config through the save API', () => {
@@ -249,6 +309,8 @@ describe('DataConfigsPage', () => {
     const dialog = screen.getByRole('dialog', { name: '新建数据上报' });
     fireEvent.click(within(dialog).getByRole('button', { name: '2. 可视化编排' }));
 
+    expect(within(dialog).getByLabelText('点位组合编排')).toBeInTheDocument();
+
     fireEvent.change(within(dialog).getByLabelText('搜索点位资源'), {
       target: { value: 'running' },
     });
@@ -288,7 +350,7 @@ describe('DataConfigsPage', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'pump_status' }));
-    const dialog = screen.getByRole('dialog', { name: '编辑数据上报' });
+    const dialog = screen.getByRole('dialog', { name: '编辑采集流水线' });
     fireEvent.click(within(dialog).getByRole('button', { name: '4. JSON 预览' }));
     fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
 

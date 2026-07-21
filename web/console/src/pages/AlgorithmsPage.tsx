@@ -12,7 +12,9 @@ import type {
   SaveAlgorithmRequest,
 } from '../api/types';
 import { Drawer } from '../components/Drawer';
+import { Modal } from '../components/Modal';
 import { PaginationBar } from '../components/PaginationBar';
+import { displayError } from '../utils/errors';
 import './PointMappingsPage.css';
 
 const fallbackDsl: AlgorithmDsl = {
@@ -178,8 +180,9 @@ export function AlgorithmsPage({
         formToSaveRequest(form),
       );
       setSaveState('saved');
-    } catch {
+    } catch (error) {
       setSaveState('error');
+      setToolbarMessage(`保存算法失败：${displayError(error)}`);
     }
   };
 
@@ -192,8 +195,8 @@ export function AlgorithmsPage({
       setToolbarMessage(
         result?.status ? `算法风险评估 ${result.status}` : '算法风险评估已完成',
       );
-    } catch {
-      setToolbarMessage('算法风险评估失败');
+    } catch (error) {
+      setToolbarMessage(`算法风险评估失败：${displayError(error)}`);
     } finally {
       setActionState('idle');
     }
@@ -212,8 +215,8 @@ export function AlgorithmsPage({
         created ? `已创建算法 ${created.algorithmId}` : '已创建算法',
       );
       setCreateDialogOpen(false);
-    } catch {
-      setToolbarMessage('创建算法失败');
+    } catch (error) {
+      setToolbarMessage(`创建算法失败：${displayError(error)}`);
     } finally {
       setActionState('idle');
     }
@@ -226,8 +229,8 @@ export function AlgorithmsPage({
       await onDeleteAlgorithm?.(selectedEdgeId, algorithmId);
       setToolbarMessage(`已删除算法 ${algorithmId}`);
       setEditDialogOpen(false);
-    } catch {
-      setToolbarMessage('删除算法失败：请先解除数据上报引用');
+    } catch (error) {
+      setToolbarMessage(`删除算法失败：${displayError(error, '请先解除数据上报引用')}`);
     }
   };
 
@@ -236,9 +239,7 @@ export function AlgorithmsPage({
       <section className="page-intro">
         <div>
           <h2>算法配置</h2>
-          <p>
-            使用点位驱动 DSL 配置边端数据处理、虚拟点位和 MQTT 上报策略。
-          </p>
+          <p>DSL 数据处理与虚拟点位输出。</p>
         </div>
         <div className="toolbar">
           {toolbarMessage ? (
@@ -456,7 +457,7 @@ function AlgorithmDialog({
   setForm: Dispatch<SetStateAction<EditorForm>>;
 }) {
   return (
-    <div className="modal-backdrop">
+    <Modal onClose={onClose}>
       <form
         aria-labelledby="algorithm-create-dialog-title"
         className="modal-panel"
@@ -503,7 +504,7 @@ function AlgorithmDialog({
           </button>
         </div>
       </form>
-    </div>
+    </Modal>
   );
 }
 

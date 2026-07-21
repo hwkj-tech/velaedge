@@ -6,6 +6,7 @@ import type {
   PointMappingSuggestionResponse,
   RunDiscoveryRequest,
 } from '../api/types';
+import { displayError } from '../utils/errors';
 
 export function DiscoveryPage({
   onRunDiscovery,
@@ -23,9 +24,11 @@ export function DiscoveryPage({
   const [addressRange, setAddressRange] = useState('holding_register:40001-40002');
   const [rows, setRows] = useState(suggestions);
   const [status, setStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [errorText, setErrorText] = useState('');
 
   const handleRun = async () => {
     setStatus('running');
+    setErrorText('');
     try {
       const report = await onRunDiscovery?.(selectedEdgeId, {
         addressRange,
@@ -33,8 +36,9 @@ export function DiscoveryPage({
       });
       setRows(report?.suggestions ?? []);
       setStatus('done');
-    } catch {
+    } catch (error) {
       setStatus('error');
+      setErrorText(displayError(error));
     }
   };
 
@@ -43,13 +47,11 @@ export function DiscoveryPage({
       <section className="page-intro">
         <div>
           <h2>串口点位探测</h2>
-          <p>
-            由云端下发受控只读探测任务，runtime 上报采样证据，Agent 生成点位映射候选配置。
-          </p>
+          <p>Runtime 在线后执行有界只读扫描，Agent 仅根据真实样本生成候选点位。</p>
         </div>
         <div className="toolbar">
           <span className={`release-status ${status}`} role="status">
-            {statusText(status)}
+            {status === 'error' && errorText ? `探测失败：${errorText}` : statusText(status)}
           </span>
           <button
             className="primary-button"
@@ -129,7 +131,7 @@ export function DiscoveryPage({
 }
 
 function statusText(status: 'idle' | 'running' | 'done' | 'error') {
-  if (status === 'running') return 'runtime 正在执行探测';
+  if (status === 'running') return '正在提交 Runtime 探测任务';
   if (status === 'done') return '探测结果已生成';
   if (status === 'error') return '探测失败';
   return '等待探测';

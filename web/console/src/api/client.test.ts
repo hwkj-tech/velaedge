@@ -1,20 +1,38 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  bindEdgeProduct,
   createAlgorithmDraft,
+  createAgentProposal,
+  createAgentKnowledgeDocument,
   createEdgeNode,
+  createProduct,
+  createProductVersion,
+  createProject,
   createDeviceModelDraft,
   createEdgeDataConfig,
   createCollectionTaskDraft,
   createPointMappingDraft,
+  createPointSet,
   createEdgeProtocolConnection,
   deleteDeviceModel,
   deleteEdgeNode,
+  deleteProduct,
+  deleteProductVersion,
+  deleteProject,
+  deletePointSet,
   deleteEdgeDataConfig,
+  deleteAgentKnowledgeDocument,
+  deleteAgentConversation,
   fetchDiscoverySuggestions,
+  fetchAgentProposals,
+  fetchAgentKnowledgeDocuments,
+  fetchAgentConversations,
+  fetchAgentProviderStatus,
   generateAgentSuggestions,
   fetchAlgorithms,
   fetchAuditRecords,
+  fetchAuthStatus,
   fetchCollectionTasks,
   fetchDeviceModels,
   fetchEdgeCollectionTasks,
@@ -24,17 +42,26 @@ import {
   fetchEdgePointMappings,
   fetchEdgeProtocolConnections,
   fetchPointMappings,
+  fetchPointSets,
+  fetchProducts,
+  fetchProductVersions,
+  fetchProjects,
   fetchProtocolConnections,
   fetchReleaseList,
   fetchRuntimeStatus,
   fetchMqttUplink,
   fetchSummary,
+  generateEdgeAccessToken,
   runAgentSafetyCheck,
   runConfigValidation,
   runReleaseDiff,
   runDiscovery,
   saveMqttUplink,
+  saveAgentKnowledgeDocument,
   publishLatestRelease,
+  publishProductVersion,
+  rollbackProductVersion,
+  reviewAgentProposal,
   saveEdgeCollectionTask,
   saveEdgeDataConfig,
   saveEdgeAlgorithm,
@@ -42,7 +69,239 @@ import {
   saveEdgePointMapping,
   saveEdgeProtocolConnection,
   savePointMapping,
+  savePointSet,
+  saveProduct,
+  saveProductVersion,
+  saveProject,
+  sendAgentChat,
+  setApiToken,
 } from './client';
+
+afterEach(() => setApiToken());
+
+describe('authenticated API client', () => {
+  it('keeps the bearer token in session storage and injects it into requests', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        authenticationEnabled: true,
+        role: 'operator',
+        subject: 'plant-operator',
+      }),
+    });
+
+    setApiToken('operator-session-token-with-enough-entropy');
+    const status = await fetchAuthStatus(fetchMock as unknown as typeof fetch);
+
+    expect(status.subject).toBe('plant-operator');
+    const [, init] = fetchMock.mock.calls[0];
+    expect(new Headers(init.headers).get('authorization')).toBe(
+      'Bearer operator-session-token-with-enough-entropy',
+    );
+  });
+
+  it('does not add request options when no token is present', async () => {
+    setApiToken();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        authenticationEnabled: false,
+        role: 'admin',
+        subject: 'local-development',
+      }),
+    });
+
+    await fetchAuthStatus(fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/me');
+  });
+});
+
+describe('catalog clients', () => {
+  it('loads catalog resources and persists project mutations', async () => {
+    const project = {
+      createdAt: '2026-06-26T00:00:00Z',
+      description: 'demo',
+      environment: 'staging',
+      name: 'demo-plant',
+      owner: 'platform-team',
+      projectId: 'demo-plant',
+      updatedAt: '2026-06-26T00:00:00Z',
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [project],
+      text: async () => '',
+    });
+
+    await fetchProjects(fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/projects');
+    await fetchPointSets(fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/point-sets');
+    await fetchProducts(fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/products');
+    await fetchProductVersions('pump product', fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/products/pump%20product/versions');
+
+    const request = {
+      description: 'demo',
+      environment: 'staging',
+      name: 'demo-plant',
+      owner: 'platform-team',
+      projectId: 'demo-plant',
+    };
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => project });
+    await createProject(request, fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/projects', {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    });
+
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => project });
+    await saveProject('demo-plant', request, fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/projects/demo-plant', {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    });
+
+    fetchMock.mockResolvedValueOnce({ ok: true, text: async () => '' });
+    await deleteProject('demo-plant', fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/projects/demo-plant', {
+      method: 'DELETE',
+    });
+
+    const pointSetRequest = {
+      description: 'pump points',
+      name: 'Pump points',
+      pointSetId: 'pump-points',
+      points: [{
+        address: { kind: 'holding_register', value: '40001' },
+        intervalMs: 1000,
+        pointId: 'pressure',
+        semanticId: 'pump.pressure',
+        unit: 'MPa',
+        valueType: 'float32',
+      }],
+      projectId: 'demo-plant',
+      protocol: 'ModbusRtu',
+    };
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => pointSetRequest });
+    await createPointSet(pointSetRequest, fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/point-sets', {
+      body: JSON.stringify(pointSetRequest),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => pointSetRequest });
+    await savePointSet('pump points', pointSetRequest, fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/point-sets/pump%20points', {
+      body: JSON.stringify(pointSetRequest),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    });
+    fetchMock.mockResolvedValueOnce({ ok: true, text: async () => '' });
+    await deletePointSet('pump points', fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/point-sets/pump%20points', {
+      method: 'DELETE',
+    });
+
+    const productRequest = {
+      description: 'pump',
+      name: 'Pump',
+      productId: 'pump-product',
+      productType: 'pump',
+      projectId: 'demo-plant',
+    };
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => productRequest });
+    await createProduct(productRequest, fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/products', {
+      body: JSON.stringify(productRequest),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => productRequest });
+    await saveProduct('pump-product', productRequest, fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/products/pump-product', {
+      body: JSON.stringify(productRequest),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    });
+
+    const versionRequest = {
+      algorithms: [],
+      collectionTasks: [],
+      dataConfigs: [],
+      deviceModels: [],
+      devices: [],
+      mqttUplinks: [],
+      pointSetIds: [],
+      protocolConnections: [],
+      version: 'v1.0.0',
+    };
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => versionRequest });
+    await createProductVersion(
+      'pump-product',
+      versionRequest,
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/products/pump-product/versions', {
+      body: JSON.stringify(versionRequest),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => versionRequest });
+    await saveProductVersion(
+      'pump-product',
+      'v1.0.0',
+      versionRequest,
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/products/pump-product/versions/v1.0.0',
+      {
+        body: JSON.stringify(versionRequest),
+        headers: { 'content-type': 'application/json' },
+        method: 'PUT',
+      },
+    );
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => versionRequest });
+    await publishProductVersion(
+      'pump product',
+      'v1.0.0 beta',
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/products/pump%20product/versions/v1.0.0%20beta/publish',
+      { method: 'POST' },
+    );
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => versionRequest });
+    await rollbackProductVersion(
+      'pump product',
+      'v1.0.0 beta',
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/products/pump%20product/versions/v1.0.0%20beta/rollback',
+      { method: 'POST' },
+    );
+    fetchMock.mockResolvedValueOnce({ ok: true, text: async () => '' });
+    await deleteProductVersion(
+      'pump-product',
+      'v1.0.0',
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/products/pump-product/versions/v1.0.0',
+      { method: 'DELETE' },
+    );
+    fetchMock.mockResolvedValueOnce({ ok: true, text: async () => '' });
+    await deleteProduct('pump-product', fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/products/pump-product', {
+      method: 'DELETE',
+    });
+  });
+});
 
 describe('fetchSummary', () => {
   it('loads cloud summary from the API', async () => {
@@ -55,6 +314,19 @@ describe('fetchSummary', () => {
 
     expect(result.edge_count).toBe(2);
     expect(result.pending_release_count).toBe(1);
+  });
+
+  it('surfaces structured API error messages', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ message: 'data config algorithm input missing' }),
+      text: async () => '',
+    });
+
+    await expect(fetchSummary(fetchMock as unknown as typeof fetch)).rejects.toThrow(
+      'data config algorithm input missing',
+    );
   });
 });
 
@@ -1066,6 +1338,154 @@ describe('management action clients', () => {
       method: 'POST',
     });
   });
+
+  it('persists and reviews governed agent proposals through dedicated APIs', async () => {
+    const proposal = {
+      proposalId: 'proposal-1',
+      status: 'pending_review',
+      title: '点位补全',
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => proposal,
+    });
+    const createRequest = {
+      agentId: 'edgeops-agent',
+      createdBy: 'console-operator',
+      kind: 'point_mapping' as const,
+      risk: 'low' as const,
+      summary: '补全 flow_rate',
+      title: '点位补全',
+    };
+
+    await createAgentProposal(createRequest, fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/agent/proposals', {
+      body: JSON.stringify(createRequest),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    await fetchAgentProposals(fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/agent/proposals');
+    await reviewAgentProposal(
+      'proposal-1',
+      'approve',
+      { reviewer: 'reviewer-a' },
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/agent/proposals/proposal-1/approve',
+      {
+        body: JSON.stringify({ reviewer: 'reviewer-a' }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      },
+    );
+  });
+
+  it('loads Agent provider status and sends chat to the backend', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        configured: false,
+        message: '本地分析结果',
+        mode: 'deterministic',
+        model: 'edgeops-local-analysis',
+      }),
+    });
+
+    await fetchAgentProviderStatus(fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/agent/provider');
+    await sendAgentChat(
+      { edgeId: 'edge-dev', message: '分析运行状态' },
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/agent/chat', {
+      body: JSON.stringify({ edgeId: 'edge-dev', message: '分析运行状态' }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    });
+  });
+
+  it('lists and deletes scoped Agent conversations', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [],
+      text: async () => '',
+    });
+
+    await fetchAgentConversations(
+      'operator a',
+      'demo plant',
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/agent/conversations?operatorId=operator+a&projectId=demo+plant',
+    );
+    await deleteAgentConversation(
+      'conversation/1',
+      'operator a',
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/agent/conversations/conversation%2F1?operatorId=operator%20a',
+      { method: 'DELETE' },
+    );
+  });
+
+  it('manages governed Agent knowledge through scoped APIs', async () => {
+    const document = {
+      documentId: 'knowledge-1',
+      projectId: 'demo-plant',
+      title: 'Modbus 运维手册',
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => document,
+      text: async () => '',
+    });
+    const request = {
+      actor: 'knowledge-admin',
+      content: '超时后检查串口参数。',
+      enabled: true,
+      projectId: 'demo-plant',
+      sourceUri: 'kb://manual/modbus',
+      tags: ['Modbus'],
+      title: 'Modbus 运维手册',
+    };
+
+    await fetchAgentKnowledgeDocuments(
+      'demo plant',
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/agent/knowledge?projectId=demo%20plant',
+    );
+    await createAgentKnowledgeDocument(request, fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/agent/knowledge', {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    await saveAgentKnowledgeDocument(
+      'knowledge/1',
+      request,
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/agent/knowledge/knowledge%2F1', {
+      body: JSON.stringify(request),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    });
+    await deleteAgentKnowledgeDocument(
+      'knowledge/1',
+      'knowledge admin',
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/agent/knowledge/knowledge%2F1?actor=knowledge%20admin',
+      { method: 'DELETE' },
+    );
+  });
 });
 
 describe('edge node lifecycle actions', () => {
@@ -1087,6 +1507,8 @@ describe('edge node lifecycle actions', () => {
     const result = await createEdgeNode(
       {
         displayName: '一号产线边端',
+        productId: 'pump-collection-uplink',
+        projectId: 'demo-plant',
         site: '制造/一号线',
       },
       fetchMock as unknown as typeof fetch,
@@ -1095,12 +1517,69 @@ describe('edge node lifecycle actions', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/edge-nodes', {
       body: JSON.stringify({
         displayName: '一号产线边端',
+        productId: 'pump-collection-uplink',
+        projectId: 'demo-plant',
         site: '制造/一号线',
       }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
     });
     expect(result.edgeId).toBe('edge-draft-2');
+  });
+
+  it('generates a one-time access token through the edge endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        accessToken: 'edge_new_secret',
+        createdAt: '2026-06-26T00:00:00Z',
+        credentialId: 'credential-1',
+        edgeId: 'edge/dev',
+      }),
+    });
+
+    const result = await generateEdgeAccessToken(
+      'edge/dev',
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/edge-nodes/edge%2Fdev/access-token', {
+      method: 'POST',
+    });
+    expect(result.accessToken).toBe('edge_new_secret');
+  });
+
+  it('persists an edge product binding through the dedicated API', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        edgeId: 'edge-dev',
+        productId: 'pump-collection-uplink',
+        projectId: 'demo-plant',
+        desiredProductVersion: 'v1.4.3',
+      }),
+    });
+
+    const result = await bindEdgeProduct(
+      'edge/dev',
+      {
+        desiredVersion: 'v1.4.3',
+        productId: 'pump-collection-uplink',
+        projectId: 'demo-plant',
+      },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/edge-nodes/edge%2Fdev/product-binding', {
+      body: JSON.stringify({
+        desiredVersion: 'v1.4.3',
+        productId: 'pump-collection-uplink',
+        projectId: 'demo-plant',
+      }),
+      headers: { 'content-type': 'application/json' },
+      method: 'PUT',
+    });
+    expect(result.desiredProductVersion).toBe('v1.4.3');
   });
 
 });

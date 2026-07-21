@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde::{Deserialize, Serialize};
 
 use crate::{AlgorithmSpec, DeviceSpec, NumberRange, TelemetryType};
@@ -115,6 +117,30 @@ impl ProtocolConnection {
             serial: Some(serial),
         }
     }
+
+    pub fn dlt645_serial(
+        connection_id: impl Into<String>,
+        serial: SerialConnectionSettings,
+    ) -> Self {
+        Self {
+            connection_id: connection_id.into(),
+            protocol: ProtocolType::Dlt645,
+            endpoint: Some(serial.port.clone()),
+            serial: Some(serial),
+        }
+    }
+
+    pub fn iec101_serial(
+        connection_id: impl Into<String>,
+        serial: SerialConnectionSettings,
+    ) -> Self {
+        Self {
+            connection_id: connection_id.into(),
+            protocol: ProtocolType::Iec101,
+            endpoint: Some(serial.port.clone()),
+            serial: Some(serial),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -170,6 +196,12 @@ pub struct MqttUplinkConfig {
     pub sink_id: String,
     pub broker: String,
     pub client_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_env: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_ca_path: Option<String>,
     pub topic_template: String,
     pub qos: u8,
     pub batch_size: u32,
@@ -186,6 +218,9 @@ impl MqttUplinkConfig {
             sink_id: sink_id.into(),
             broker: broker.into(),
             client_id: client_id.into(),
+            username: None,
+            password_env: None,
+            tls_ca_path: None,
             topic_template: "edge/{edge_id}/device/{device_id}/telemetry".to_string(),
             qos: 1,
             batch_size: 100,
@@ -200,6 +235,21 @@ impl MqttUplinkConfig {
 
     pub fn with_qos(mut self, qos: u8) -> Self {
         self.qos = qos;
+        self
+    }
+
+    pub fn with_credentials_env(
+        mut self,
+        username: impl Into<String>,
+        password_env: impl Into<String>,
+    ) -> Self {
+        self.username = Some(username.into());
+        self.password_env = Some(password_env.into());
+        self
+    }
+
+    pub fn with_tls_ca_path(mut self, tls_ca_path: impl Into<String>) -> Self {
+        self.tls_ca_path = Some(tls_ca_path.into());
         self
     }
 }
@@ -289,7 +339,172 @@ pub enum DataConfigGraphNodeKind {
 pub struct DataConfigGraphEdge {
     pub edge_id: String,
     pub from: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_port: Option<String>,
     pub to: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_port: Option<String>,
+}
+
+pub fn validate_data_config_visual_graph(data_config: &DataConfig) -> Result<(), String> {
+    macro_rules! invalid {
+        ($($arg:tt)*) => {
+            return Err(format!($($arg)*))
+        };
+    }
+
+    let graph = &data_config.visual_graph;
+    if graph.nodes.is_empty() && graph.edges.is_empty() {
+        return Ok(());
+    }
+    if graph.nodes.is_empty() {
+        invalid!(
+            "data config {} graph has edges but no nodes",
+            data_config.config_id
+        );
+    }
+
+    let mut node_kinds = BTreeMap::new();
+    for node in &graph.nodes {
+        if node.node_id.trim().is_empty() {
+            invalid!(
+                "data config {} graph node id is required",
+                data_config.config_id
+            );
+        }
+        if node_kinds
+            .insert(node.node_id.as_str(), node.kind)
+            .is_some()
+        {
+            invalid!(
+                "data config {} graph has duplicate node {}",
+                data_config.config_id,
+                node.node_id
+            );
+        }
+        if node.kind == DataConfigGraphNodeKind::Point {
+            let point_id = node.ref_id.as_deref().unwrap_or_default();
+            if !data_config
+                .points
+                .iter()
+                .any(|point| point.point_id == point_id)
+            {
+                invalid!(
+                    "data config {} graph point node {} references missing point {}",
+                    data_config.config_id,
+                    node.node_id,
+                    point_id
+                );
+            }
+        }
+    }
+
+    let mut indegree = node_kinds
+        .keys()
+        .map(|node_id| (*node_id, 0usize))
+        .collect::<BTreeMap<_, _>>();
+    let mut outgoing = BTreeSet::new();
+    let mut incoming = BTreeSet::new();
+    let mut edge_ids = BTreeSet::new();
+    for edge in &graph.edges {
+        if !edge_ids.insert(edge.edge_id.as_str()) {
+            invalid!(
+                "data config {} graph has duplicate edge {}",
+                data_config.config_id,
+                edge.edge_id
+            );
+        }
+        let Some(from_kind) = node_kinds.get(edge.from.as_str()) else {
+            invalid!(
+                "data config {} graph edge {} references missing source {}",
+                data_config.config_id,
+                edge.edge_id,
+                edge.from
+            );
+        };
+        let Some(to_kind) = node_kinds.get(edge.to.as_str()) else {
+            invalid!(
+                "data config {} graph edge {} references missing target {}",
+                data_config.config_id,
+                edge.edge_id,
+                edge.to
+            );
+        };
+        if *from_kind == DataConfigGraphNodeKind::Mqtt {
+            invalid!(
+                "data config {} graph MQTT node {} cannot have outgoing edges",
+                data_config.config_id,
+                edge.from
+            );
+        }
+        if *to_kind == DataConfigGraphNodeKind::Point {
+            invalid!(
+                "data config {} graph point node {} cannot have incoming edges",
+                data_config.config_id,
+                edge.to
+            );
+        }
+        *indegree.entry(edge.to.as_str()).or_default() += 1;
+        outgoing.insert(edge.from.as_str());
+        incoming.insert(edge.to.as_str());
+    }
+
+    let mqtt_nodes = graph
+        .nodes
+        .iter()
+        .filter(|node| node.kind == DataConfigGraphNodeKind::Mqtt)
+        .collect::<Vec<_>>();
+    if mqtt_nodes.is_empty() {
+        invalid!(
+            "data config {} graph requires at least one MQTT output",
+            data_config.config_id
+        );
+    }
+    if let Some(node) = mqtt_nodes
+        .iter()
+        .find(|node| !incoming.contains(node.node_id.as_str()))
+    {
+        invalid!(
+            "data config {} graph MQTT output {} is disconnected",
+            data_config.config_id,
+            node.node_id
+        );
+    }
+    if let Some(node) = graph.nodes.iter().find(|node| {
+        node.kind != DataConfigGraphNodeKind::Mqtt && !outgoing.contains(node.node_id.as_str())
+    }) {
+        invalid!(
+            "data config {} graph node {} has no downstream output",
+            data_config.config_id,
+            node.node_id
+        );
+    }
+
+    let mut queue = indegree
+        .iter()
+        .filter_map(|(node_id, count)| (*count == 0).then_some(*node_id))
+        .collect::<Vec<_>>();
+    let mut visited = 0usize;
+    while let Some(node_id) = queue.pop() {
+        visited += 1;
+        for edge in graph.edges.iter().filter(|edge| edge.from == node_id) {
+            let count = indegree
+                .get_mut(edge.to.as_str())
+                .expect("validated graph target exists");
+            *count -= 1;
+            if *count == 0 {
+                queue.push(edge.to.as_str());
+            }
+        }
+    }
+    if visited != graph.nodes.len() {
+        invalid!(
+            "data config {} graph contains a cycle",
+            data_config.config_id
+        );
+    }
+
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -474,6 +689,166 @@ pub struct PointAddress {
     pub value: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomSerialChecksum {
+    #[default]
+    None,
+    Sum8,
+    Xor8,
+    ModbusCrc16,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomSerialValueEncoding {
+    BoolU8,
+    U8,
+    I8,
+    U16Be,
+    U16Le,
+    I16Be,
+    I16Le,
+    U32Be,
+    U32Le,
+    I32Be,
+    I32Le,
+    F32Be,
+    F32Le,
+    F64Be,
+    F64Le,
+    Utf8,
+}
+
+impl CustomSerialValueEncoding {
+    pub fn fixed_width(self) -> Option<usize> {
+        match self {
+            Self::BoolU8 | Self::U8 | Self::I8 => Some(1),
+            Self::U16Be | Self::U16Le | Self::I16Be | Self::I16Le => Some(2),
+            Self::U32Be | Self::U32Le | Self::I32Be | Self::I32Le | Self::F32Be | Self::F32Le => {
+                Some(4)
+            }
+            Self::F64Be | Self::F64Le => Some(8),
+            Self::Utf8 => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomSerialPointSpec {
+    pub request_hex: String,
+    #[serde(default)]
+    pub request_checksum: CustomSerialChecksum,
+    #[serde(default)]
+    pub response_checksum: CustomSerialChecksum,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_prefix_hex: Option<String>,
+    pub value_offset: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_length: Option<usize>,
+    pub value_encoding: CustomSerialValueEncoding,
+    #[serde(default = "default_custom_serial_scale")]
+    pub scale: f64,
+    #[serde(default)]
+    pub offset: f64,
+}
+
+impl CustomSerialPointSpec {
+    pub fn new(
+        request_hex: impl Into<String>,
+        value_offset: usize,
+        value_encoding: CustomSerialValueEncoding,
+    ) -> Self {
+        Self {
+            request_hex: request_hex.into(),
+            request_checksum: CustomSerialChecksum::None,
+            response_checksum: CustomSerialChecksum::None,
+            response_prefix_hex: None,
+            value_offset,
+            value_length: value_encoding.fixed_width(),
+            value_encoding,
+            scale: 1.0,
+            offset: 0.0,
+        }
+    }
+
+    pub fn value_width(&self) -> Result<usize, String> {
+        match self.value_encoding.fixed_width() {
+            Some(width) => {
+                if let Some(configured) = self.value_length {
+                    if configured != width {
+                        return Err(format!(
+                            "valueLength must be {width} for {:?}",
+                            self.value_encoding
+                        ));
+                    }
+                }
+                Ok(width)
+            }
+            None => self
+                .value_length
+                .filter(|length| *length > 0)
+                .ok_or_else(|| "valueLength is required for utf8 values".to_string()),
+        }
+    }
+}
+
+fn default_custom_serial_scale() -> f64 {
+    1.0
+}
+
+pub fn decode_custom_serial_hex(value: &str) -> Result<Vec<u8>, String> {
+    let value = value.trim();
+    let value = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .unwrap_or(value);
+    let compact = value
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace() && !matches!(character, ':' | '-'))
+        .collect::<String>();
+    if compact.len() % 2 != 0 {
+        return Err("hex value must contain complete byte pairs".to_string());
+    }
+    compact
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let pair = std::str::from_utf8(pair).expect("hex pairs are valid UTF-8");
+            u8::from_str_radix(pair, 16).map_err(|_| format!("invalid hex byte: {pair}"))
+        })
+        .collect()
+}
+
+pub fn validate_custom_serial_point_spec(spec: &CustomSerialPointSpec) -> Result<(), String> {
+    let request = decode_custom_serial_hex(&spec.request_hex)?;
+    if request.is_empty() {
+        return Err("requestHex must contain at least one byte".to_string());
+    }
+    if request.len() > 1024 {
+        return Err("requestHex exceeds the 1024-byte limit".to_string());
+    }
+    if let Some(prefix) = &spec.response_prefix_hex {
+        let prefix = decode_custom_serial_hex(prefix)?;
+        if prefix.len() > 256 {
+            return Err("responsePrefixHex exceeds the 256-byte limit".to_string());
+        }
+    }
+    if !spec.scale.is_finite() || !spec.offset.is_finite() {
+        return Err("scale and offset must be finite numbers".to_string());
+    }
+    let width = spec.value_width()?;
+    let end = spec
+        .value_offset
+        .checked_add(width)
+        .ok_or_else(|| "value range overflows".to_string())?;
+    if end > 4096 {
+        return Err("value range exceeds the 4096-byte response limit".to_string());
+    }
+    Ok(())
+}
+
 impl PointAddress {
     pub fn simulated(value: impl Into<String>) -> Self {
         Self {
@@ -488,6 +863,43 @@ impl PointAddress {
             value: address.to_string(),
         }
     }
+
+    pub fn dlt645(meter_address: impl AsRef<str>, data_identifier: impl AsRef<str>) -> Self {
+        Self {
+            kind: "dlt645_address".to_string(),
+            value: format!("{}:{}", meter_address.as_ref(), data_identifier.as_ref()),
+        }
+    }
+
+    pub fn dlt645_scaled(
+        meter_address: impl AsRef<str>,
+        data_identifier: impl AsRef<str>,
+        decimal_places: u8,
+    ) -> Self {
+        Self {
+            kind: "dlt645_address".to_string(),
+            value: format!(
+                "{}:{}:{}",
+                meter_address.as_ref(),
+                data_identifier.as_ref(),
+                decimal_places
+            ),
+        }
+    }
+
+    pub fn iec101(link_address: u8, common_address: u16, information_object_address: u32) -> Self {
+        Self {
+            kind: "iec101_ioa".to_string(),
+            value: format!("{link_address}:{common_address}:{information_object_address}"),
+        }
+    }
+
+    pub fn custom_serial(spec: &CustomSerialPointSpec) -> Result<Self, serde_json::Error> {
+        Ok(Self {
+            kind: "custom_serial_frame".to_string(),
+            value: serde_json::to_string(spec)?,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -496,6 +908,83 @@ pub struct DiscoveryReport {
     pub protocol_connection_id: String,
     pub discovered_points: Vec<DiscoveredPoint>,
     pub suggestions: Vec<PointMappingSuggestion>,
+}
+
+pub const MAX_DISCOVERY_POINTS: u16 = 128;
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryAddressKind {
+    HoldingRegister,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscoveryRequest {
+    pub job_id: String,
+    pub protocol_connection_id: String,
+    pub address_kind: DiscoveryAddressKind,
+    pub start_address: u32,
+    pub end_address: u32,
+    pub slave_id: u8,
+}
+
+impl DiscoveryRequest {
+    pub fn modbus_holding_registers(
+        job_id: impl Into<String>,
+        protocol_connection_id: impl Into<String>,
+        start_address: u32,
+        end_address: u32,
+    ) -> Self {
+        Self {
+            job_id: job_id.into(),
+            protocol_connection_id: protocol_connection_id.into(),
+            address_kind: DiscoveryAddressKind::HoldingRegister,
+            start_address,
+            end_address,
+            slave_id: 1,
+        }
+    }
+
+    pub fn with_slave_id(mut self, slave_id: u8) -> Self {
+        self.slave_id = slave_id;
+        self
+    }
+
+    pub fn point_count(&self) -> Result<u16, String> {
+        if self.start_address > self.end_address {
+            return Err("discovery start address must not exceed end address".to_string());
+        }
+        let count = self
+            .end_address
+            .checked_sub(self.start_address)
+            .and_then(|span| span.checked_add(1))
+            .ok_or_else(|| "discovery address range overflows".to_string())?;
+        u16::try_from(count).map_err(|_| "discovery address range is too large".to_string())
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.job_id.trim().is_empty() {
+            return Err("discovery job id is required".to_string());
+        }
+        if self.protocol_connection_id.trim().is_empty() {
+            return Err("discovery protocol connection id is required".to_string());
+        }
+        if self.slave_id == 0 || self.slave_id > 247 {
+            return Err("Modbus discovery slave id must be between 1 and 247".to_string());
+        }
+        let point_count = self.point_count()?;
+        if point_count > MAX_DISCOVERY_POINTS {
+            return Err(format!(
+                "discovery range exceeds the {MAX_DISCOVERY_POINTS}-point safety limit"
+            ));
+        }
+        if self.start_address < 40001 || self.end_address > 105536 {
+            return Err(
+                "holding register discovery addresses must be between 40001 and 105536".to_string(),
+            );
+        }
+        Ok(())
+    }
 }
 
 impl DiscoveryReport {

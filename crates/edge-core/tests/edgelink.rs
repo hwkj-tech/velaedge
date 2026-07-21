@@ -1,7 +1,7 @@
 use edge_core::{
     decode_edgelink_frame, encode_edgelink_frame, DiscoveredPoint, DiscoveryReport,
-    EdgeConfigPackage, EdgeLinkMessage, EdgeLinkMessageKind, EdgeLinkPayload, PointAddress,
-    PointMappingSuggestion, TelemetryType,
+    DiscoveryRequest, EdgeConfigPackage, EdgeLinkMessage, EdgeLinkMessageKind, EdgeLinkPayload,
+    PointAddress, PointMappingSuggestion, TelemetryType,
 };
 
 #[test]
@@ -35,6 +35,24 @@ fn edgelink_frame_round_trips_hello_message() {
         Some("2026.06.26-001")
     );
     assert_eq!(hello.capabilities.len(), 2);
+}
+
+#[test]
+fn edgelink_discovery_request_round_trips_bounded_scan() {
+    let request =
+        DiscoveryRequest::modbus_holding_registers("job-2", "meter-rs485-bus-1", 40001, 40008)
+            .with_slave_id(7);
+    let message = EdgeLinkMessage::discovery_request("edge-dev", "runtime-dev", 5, request.clone());
+
+    let decoded = decode_edgelink_frame(&encode_edgelink_frame(&message).unwrap()).unwrap();
+
+    assert_eq!(decoded.kind, EdgeLinkMessageKind::DiscoveryRequest);
+    let EdgeLinkPayload::DiscoveryRequest(payload) = decoded.payload else {
+        panic!("expected discovery request payload");
+    };
+    assert_eq!(payload, request);
+    assert_eq!(payload.point_count().unwrap(), 8);
+    assert!(payload.validate().is_ok());
 }
 
 #[test]

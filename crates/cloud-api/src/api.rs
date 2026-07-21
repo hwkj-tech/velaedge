@@ -1,27 +1,42 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    middleware,
     response::IntoResponse,
     routing::{get, post, put},
-    Json, Router,
+    Extension, Json, Router,
 };
-use cloud_control::{AuditAction, EdgeNode, ReleaseService, ReleaseStatus};
+use chrono::Utc;
+use cloud_control::{
+    AgentConversation, AgentConversationCitation, AgentConversationMessage, AgentConversationRole,
+    AgentProposal, AgentProposalKind, AgentProposalRisk, AgentProposalStatus, AuditAction,
+    AuditRecord, EdgeAccessCredential, EdgeNode, KnowledgeDocument, PointSet, PointSetPoint,
+    Product, ProductVersion, ProductVersionStatus, Project, ReleaseService, ReleaseStatus,
+};
 use edge_core::{
-    AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
+    validate_custom_serial_point_spec, validate_data_config_visual_graph, AlgorithmDsl,
+    AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
     AlgorithmReportPolicy, AlgorithmRuntime, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger,
-    CollectionTask, DataConfig, DataConfigCollection, DataConfigGraphEdge, DataConfigGraphNode,
-    DataConfigGraphNodeKind, DataConfigPayload, DataConfigPayloadMode, DataConfigPoint,
-    DataConfigPublish, DataConfigVisualGraph, DeviceSpec, DiscoveredPoint, DiscoveryReport,
-    EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, MqttUplinkConfig,
-    NumberRange, PointAddress, PointMappingSuggestion, ProtocolConnection, ProtocolType,
+    CollectionTask, CustomSerialPointSpec, DataConfig, DataConfigCollection, DataConfigGraphEdge,
+    DataConfigGraphNode, DataConfigGraphNodeKind, DataConfigPayload, DataConfigPayloadMode,
+    DataConfigPoint, DataConfigPublish, DataConfigVisualGraph, DeviceSpec, DiscoveredPoint,
+    DiscoveryReport, DiscoveryRequest, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent,
+    EdgeRuntimeMetricsSnapshot, MqttUplinkConfig, NumberRange, PointAddress,
+    PointMappingSuggestion, ProtocolConnection, ProtocolType, SerialConnectionSettings,
     TelemetryPoint, TelemetryPointMapping, TelemetryType,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use tokio::time::Duration;
 use tower_http::services::{ServeDir, ServeFile};
 
-use crate::AppState;
+use crate::{
+    auth::{auth_status, authorize_api_request, ApiPrincipal},
+    gateway::EdgeGatewayDispatchError,
+    AppState,
+};
 
 #[derive(Serialize)]
 pub struct SummaryResponse {
@@ -29,13 +44,191 @@ pub struct SummaryResponse {
     pub pending_release_count: usize,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthResponse {
+    pub status: &'static str,
+    pub service: &'static str,
+    pub version: &'static str,
+    pub checks: BTreeMap<&'static str, &'static str>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProjectRequest {
+    pub project_id: String,
+    pub name: String,
+    pub environment: String,
+    pub owner: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavePointSetRequest {
+    pub point_set_id: String,
+    pub project_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub protocol: ProtocolType,
+    #[serde(default)]
+    pub points: Vec<PointSetPoint>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProductRequest {
+    pub product_id: String,
+    pub project_id: String,
+    pub name: String,
+    pub product_type: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProductVersionRequest {
+    pub version: String,
+    #[serde(default)]
+    pub point_set_ids: Vec<String>,
+    #[serde(default)]
+    pub device_models: Vec<DeviceSpec>,
+    #[serde(default)]
+    pub devices: Vec<edge_core::DeviceInstance>,
+    #[serde(default)]
+    pub protocol_connections: Vec<ProtocolConnection>,
+    #[serde(default)]
+    pub collection_tasks: Vec<CollectionTask>,
+    #[serde(default)]
+    pub algorithms: Vec<AlgorithmSpec>,
+    #[serde(default)]
+    pub data_configs: Vec<DataConfig>,
+    #[serde(default)]
+    pub mqtt_uplinks: Vec<MqttUplinkConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAgentProposalRequest {
+    pub agent_id: String,
+    pub kind: AgentProposalKind,
+    pub project_id: Option<String>,
+    pub edge_id: Option<String>,
+    pub title: String,
+    pub summary: String,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+    pub risk: AgentProposalRisk,
+    pub created_by: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewAgentProposalRequest {
+    pub reviewer: String,
+    pub note: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentChatRequest {
+    pub message: String,
+    pub project_id: Option<String>,
+    pub edge_id: Option<String>,
+    pub conversation_id: Option<uuid::Uuid>,
+    #[serde(default = "default_agent_operator")]
+    pub operator_id: String,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentConversationQuery {
+    pub project_id: Option<String>,
+    pub operator_id: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteAgentConversationQuery {
+    pub operator_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveKnowledgeDocumentRequest {
+    pub project_id: Option<String>,
+    pub title: String,
+    pub source_uri: Option<String>,
+    pub content: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub actor: String,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeDocumentQuery {
+    pub project_id: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+pub struct DeleteKnowledgeDocumentQuery {
+    pub actor: Option<String>,
+}
+
 pub fn app(state: AppState) -> Router {
+    let auth = state.api_auth.clone();
     let api = Router::new()
+        .route("/api/auth/me", get(auth_status))
         .route("/api/summary", get(summary))
+        .route("/api/projects", get(projects).post(create_project))
+        .route(
+            "/api/projects/{project_id}",
+            put(save_project).delete(delete_project),
+        )
+        .route("/api/point-sets", get(point_sets).post(create_point_set))
+        .route(
+            "/api/point-sets/{point_set_id}",
+            put(save_point_set).delete(delete_point_set),
+        )
+        .route("/api/products", get(products).post(create_product))
+        .route(
+            "/api/products/{product_id}",
+            put(save_product).delete(delete_product),
+        )
+        .route(
+            "/api/products/{product_id}/versions",
+            get(product_versions).post(create_product_version),
+        )
+        .route(
+            "/api/products/{product_id}/versions/{version}",
+            put(save_product_version).delete(delete_product_version),
+        )
+        .route(
+            "/api/products/{product_id}/versions/{version}/publish",
+            post(publish_product_version),
+        )
+        .route(
+            "/api/products/{product_id}/versions/{version}/rollback",
+            post(rollback_product_version),
+        )
         .route("/api/edge-nodes", get(edge_nodes).post(create_edge_node))
         .route(
             "/api/edge-nodes/{edge_id}",
             axum::routing::delete(delete_edge_node),
+        )
+        .route(
+            "/api/edge-nodes/{edge_id}/product-binding",
+            put(bind_edge_product),
+        )
+        .route(
+            "/api/edge-nodes/{edge_id}/access-token",
+            post(generate_edge_access_token),
         )
         .route(
             "/api/device-models",
@@ -136,13 +329,45 @@ pub fn app(state: AppState) -> Router {
         .route("/api/edges/{edge_id}/releases/diff", post(release_diff))
         .route("/api/agent/safety-check", post(agent_safety_check))
         .route("/api/agent/suggestions", post(agent_suggestions))
-        .with_state(state);
+        .route("/api/agent/provider", get(agent_provider_status))
+        .route("/api/agent/chat", post(agent_chat))
+        .route("/api/agent/conversations", get(agent_conversations))
+        .route(
+            "/api/agent/conversations/{conversation_id}",
+            get(agent_conversation).delete(delete_agent_conversation),
+        )
+        .route(
+            "/api/agent/knowledge",
+            get(agent_knowledge_documents).post(create_agent_knowledge_document),
+        )
+        .route(
+            "/api/agent/knowledge/{document_id}",
+            put(save_agent_knowledge_document).delete(delete_agent_knowledge_document),
+        )
+        .route(
+            "/api/agent/proposals",
+            get(agent_proposals).post(create_agent_proposal),
+        )
+        .route(
+            "/api/agent/proposals/{proposal_id}/approve",
+            post(approve_agent_proposal),
+        )
+        .route(
+            "/api/agent/proposals/{proposal_id}/reject",
+            post(reject_agent_proposal),
+        )
+        .route_layer(middleware::from_fn_with_state(auth, authorize_api_request));
 
     let console_dir = console_dist_dir();
     let static_files = ServeDir::new(&console_dir)
         .not_found_service(ServeFile::new(console_dir.join("index.html")));
 
-    api.fallback_service(static_files)
+    Router::new()
+        .route("/health/live", get(liveness))
+        .route("/health/ready", get(readiness))
+        .merge(api)
+        .with_state(state)
+        .fallback_service(static_files)
 }
 
 fn console_dist_dir() -> PathBuf {
@@ -151,6 +376,46 @@ fn console_dist_dir() -> PathBuf {
         .unwrap_or_else(|_| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/console/dist")
         })
+}
+
+async fn liveness() -> Json<HealthResponse> {
+    Json(HealthResponse {
+        status: "ok",
+        service: "cloud-api",
+        version: env!("CARGO_PKG_VERSION"),
+        checks: BTreeMap::from([("process", "ok")]),
+    })
+}
+
+async fn readiness(State(state): State<AppState>) -> impl IntoResponse {
+    let mut checks = BTreeMap::from([("memory", "ok")]);
+    if let Some(sqlite_store) = &state.sqlite_store {
+        if sqlite_store.health_check().await.is_err() {
+            checks.insert("sqlite", "unavailable");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(HealthResponse {
+                    status: "not_ready",
+                    service: "cloud-api",
+                    version: env!("CARGO_PKG_VERSION"),
+                    checks,
+                }),
+            );
+        }
+        checks.insert("sqlite", "ok");
+    } else {
+        checks.insert("sqlite", "not_configured");
+    }
+
+    (
+        StatusCode::OK,
+        Json(HealthResponse {
+            status: "ready",
+            service: "cloud-api",
+            version: env!("CARGO_PKG_VERSION"),
+            checks,
+        }),
+    )
 }
 
 async fn summary(State(state): State<AppState>) -> Json<SummaryResponse> {
@@ -163,6 +428,544 @@ async fn summary(State(state): State<AppState>) -> Json<SummaryResponse> {
             .filter(|release| release.status == ReleaseStatus::Pending)
             .count(),
     })
+}
+
+async fn projects(State(state): State<AppState>) -> Json<Vec<Project>> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    Json(store.projects().cloned().collect())
+}
+
+async fn create_project(
+    State(state): State<AppState>,
+    Json(request): Json<SaveProjectRequest>,
+) -> Result<(StatusCode, Json<Project>), (StatusCode, Json<ErrorResponse>)> {
+    validate_project_request(&request)?;
+    {
+        let store = state.store.lock().expect("store mutex poisoned");
+        if store.project(&request.project_id).is_some() {
+            return Err(error(StatusCode::CONFLICT, "project already exists"));
+        }
+    }
+    let project = build_project(request, None);
+    state
+        .persist_project(project.clone())
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_project(project.clone());
+    store.push_audit(
+        AuditAction::UpdateConfig,
+        format!("project:{}", project.project_id),
+    );
+    Ok((StatusCode::CREATED, Json(project)))
+}
+
+async fn save_project(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    Json(request): Json<SaveProjectRequest>,
+) -> Result<Json<Project>, (StatusCode, Json<ErrorResponse>)> {
+    if request.project_id != project_id {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "project id does not match path",
+        ));
+    }
+    validate_project_request(&request)?;
+    let existing = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        store
+            .project(&project_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing project"))?
+    };
+    let project = build_project(request, Some(existing));
+    state
+        .persist_project(project.clone())
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_project(project.clone());
+    store.push_audit(AuditAction::UpdateConfig, format!("project:{project_id}"));
+    Ok(Json(project))
+}
+
+async fn delete_project(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    {
+        let store = state.store.lock().expect("store mutex poisoned");
+        if store.project(&project_id).is_none() {
+            return Err(error(StatusCode::NOT_FOUND, "missing project"));
+        }
+        if store
+            .point_sets()
+            .any(|point_set| point_set.project_id == project_id)
+            || store
+                .products()
+                .any(|product| product.project_id == project_id)
+        {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "project still owns point sets or products",
+            ));
+        }
+    }
+    state
+        .delete_project(&project_id)
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.remove_project(&project_id);
+    store.push_audit(
+        AuditAction::UpdateConfig,
+        format!("project:{project_id}:delete"),
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn point_sets(State(state): State<AppState>) -> Json<Vec<PointSet>> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    Json(store.point_sets().cloned().collect())
+}
+
+async fn create_point_set(
+    State(state): State<AppState>,
+    Json(request): Json<SavePointSetRequest>,
+) -> Result<(StatusCode, Json<PointSet>), (StatusCode, Json<ErrorResponse>)> {
+    validate_point_set_request(&request)?;
+    {
+        let store = state.store.lock().expect("store mutex poisoned");
+        ensure_project_exists(&store, &request.project_id)?;
+        if store.point_set(&request.point_set_id).is_some() {
+            return Err(error(StatusCode::CONFLICT, "point set already exists"));
+        }
+    }
+    let point_set = build_point_set(request, None);
+    state
+        .persist_point_set(point_set.clone())
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_point_set(point_set.clone());
+    store.push_audit(
+        AuditAction::UpdateConfig,
+        format!("point-set:{}", point_set.point_set_id),
+    );
+    Ok((StatusCode::CREATED, Json(point_set)))
+}
+
+async fn save_point_set(
+    State(state): State<AppState>,
+    Path(point_set_id): Path<String>,
+    Json(request): Json<SavePointSetRequest>,
+) -> Result<Json<PointSet>, (StatusCode, Json<ErrorResponse>)> {
+    if request.point_set_id != point_set_id {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "point set id does not match path",
+        ));
+    }
+    validate_point_set_request(&request)?;
+    let existing = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        ensure_project_exists(&store, &request.project_id)?;
+        store
+            .point_set(&point_set_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing point set"))?
+    };
+    let point_set = build_point_set(request, Some(existing));
+    state
+        .persist_point_set(point_set.clone())
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_point_set(point_set.clone());
+    store.push_audit(
+        AuditAction::UpdateConfig,
+        format!("point-set:{point_set_id}"),
+    );
+    Ok(Json(point_set))
+}
+
+async fn delete_point_set(
+    State(state): State<AppState>,
+    Path(point_set_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    {
+        let store = state.store.lock().expect("store mutex poisoned");
+        if store.point_set(&point_set_id).is_none() {
+            return Err(error(StatusCode::NOT_FOUND, "missing point set"));
+        }
+        if store
+            .product_versions()
+            .any(|version| version.point_set_ids.iter().any(|id| id == &point_set_id))
+        {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "point set is referenced by a product version",
+            ));
+        }
+    }
+    state
+        .delete_point_set(&point_set_id)
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.remove_point_set(&point_set_id);
+    store.push_audit(
+        AuditAction::UpdateConfig,
+        format!("point-set:{point_set_id}:delete"),
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn products(State(state): State<AppState>) -> Json<Vec<Product>> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    Json(store.products().cloned().collect())
+}
+
+async fn create_product(
+    State(state): State<AppState>,
+    Json(request): Json<SaveProductRequest>,
+) -> Result<(StatusCode, Json<Product>), (StatusCode, Json<ErrorResponse>)> {
+    validate_product_request(&request)?;
+    {
+        let store = state.store.lock().expect("store mutex poisoned");
+        ensure_project_exists(&store, &request.project_id)?;
+        if store.product(&request.product_id).is_some() {
+            return Err(error(StatusCode::CONFLICT, "product already exists"));
+        }
+    }
+    let product = build_product(request, None);
+    state
+        .persist_product(product.clone())
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_product(product.clone());
+    store.push_audit(
+        AuditAction::UpdateConfig,
+        format!("product:{}", product.product_id),
+    );
+    Ok((StatusCode::CREATED, Json(product)))
+}
+
+async fn save_product(
+    State(state): State<AppState>,
+    Path(product_id): Path<String>,
+    Json(request): Json<SaveProductRequest>,
+) -> Result<Json<Product>, (StatusCode, Json<ErrorResponse>)> {
+    if request.product_id != product_id {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "product id does not match path",
+        ));
+    }
+    validate_product_request(&request)?;
+    let existing = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        ensure_project_exists(&store, &request.project_id)?;
+        store
+            .product(&product_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing product"))?
+    };
+    let product = build_product(request, Some(existing));
+    state
+        .persist_product(product.clone())
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_product(product.clone());
+    store.push_audit(AuditAction::UpdateConfig, format!("product:{product_id}"));
+    Ok(Json(product))
+}
+
+async fn delete_product(
+    State(state): State<AppState>,
+    Path(product_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    {
+        let store = state.store.lock().expect("store mutex poisoned");
+        let product = store
+            .product(&product_id)
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing product"))?;
+        if product.latest_version.is_some() {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "published product cannot be deleted",
+            ));
+        }
+    }
+    state
+        .delete_product(&product_id)
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.remove_product(&product_id);
+    store.push_audit(
+        AuditAction::UpdateConfig,
+        format!("product:{product_id}:delete"),
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn product_versions(
+    State(state): State<AppState>,
+    Path(product_id): Path<String>,
+) -> Result<Json<Vec<ProductVersion>>, (StatusCode, Json<ErrorResponse>)> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    if store.product(&product_id).is_none() {
+        return Err(error(StatusCode::NOT_FOUND, "missing product"));
+    }
+    Ok(Json(
+        store
+            .product_versions()
+            .filter(|version| version.product_id == product_id)
+            .cloned()
+            .collect(),
+    ))
+}
+
+async fn create_product_version(
+    State(state): State<AppState>,
+    Path(product_id): Path<String>,
+    Json(request): Json<SaveProductVersionRequest>,
+) -> Result<(StatusCode, Json<ProductVersion>), (StatusCode, Json<ErrorResponse>)> {
+    validate_product_version_request(&product_id, &request, &state, false)?;
+    let version = build_product_version(product_id.clone(), request, None);
+    state
+        .persist_product_version(version.clone())
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_product_version(version.clone());
+    store.push_audit(
+        AuditAction::UpdateConfig,
+        format!("product:{product_id}:version:{}", version.version),
+    );
+    Ok((StatusCode::CREATED, Json(version)))
+}
+
+async fn save_product_version(
+    State(state): State<AppState>,
+    Path((product_id, version_id)): Path<(String, String)>,
+    Json(request): Json<SaveProductVersionRequest>,
+) -> Result<Json<ProductVersion>, (StatusCode, Json<ErrorResponse>)> {
+    if request.version != version_id {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "product version does not match path",
+        ));
+    }
+    validate_product_version_request(&product_id, &request, &state, true)?;
+    let existing = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        store
+            .product_version(&product_id, &version_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing product version"))?
+    };
+    if existing.status != ProductVersionStatus::Draft {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "published or retired product version is immutable",
+        ));
+    }
+    let version = build_product_version(product_id.clone(), request, Some(existing));
+    state
+        .persist_product_version(version.clone())
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_product_version(version.clone());
+    store.push_audit(
+        AuditAction::UpdateConfig,
+        format!("product:{product_id}:version:{version_id}"),
+    );
+    Ok(Json(version))
+}
+
+async fn delete_product_version(
+    State(state): State<AppState>,
+    Path((product_id, version)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    {
+        let store = state.store.lock().expect("store mutex poisoned");
+        let candidate = store
+            .product_version(&product_id, &version)
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing product version"))?;
+        if candidate.status != ProductVersionStatus::Draft {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "only draft product versions can be deleted",
+            ));
+        }
+    }
+    state
+        .delete_product_version(&product_id, &version)
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.remove_product_version(&product_id, &version);
+    store.push_audit(
+        AuditAction::UpdateConfig,
+        format!("product:{product_id}:version:{version}:delete"),
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn publish_product_version(
+    State(state): State<AppState>,
+    Path((product_id, version)): Path<(String, String)>,
+) -> Result<Json<ProductVersion>, (StatusCode, Json<ErrorResponse>)> {
+    transition_product_version(state, product_id, version, false).await
+}
+
+async fn rollback_product_version(
+    State(state): State<AppState>,
+    Path((product_id, version)): Path<(String, String)>,
+) -> Result<Json<ProductVersion>, (StatusCode, Json<ErrorResponse>)> {
+    transition_product_version(state, product_id, version, true).await
+}
+
+async fn transition_product_version(
+    state: AppState,
+    product_id: String,
+    target_version: String,
+    rollback: bool,
+) -> Result<Json<ProductVersion>, (StatusCode, Json<ErrorResponse>)> {
+    let (mut product, mut target, previous) = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        let product = store
+            .product(&product_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing product"))?;
+        let target = store
+            .product_version(&product_id, &target_version)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing product version"))?;
+        let previous = product
+            .latest_version
+            .as_ref()
+            .filter(|version| *version != &target_version)
+            .and_then(|version| store.product_version(&product_id, version))
+            .cloned();
+        (product, target, previous)
+    };
+
+    if product.latest_version.as_deref() == Some(target_version.as_str())
+        && target.status == ProductVersionStatus::Published
+    {
+        return Ok(Json(target));
+    }
+
+    if rollback {
+        if target.status == ProductVersionStatus::Draft {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "cannot roll back to a draft product version",
+            ));
+        }
+    } else if target.status != ProductVersionStatus::Draft {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "only draft product versions can be published",
+        ));
+    }
+    validate_publishable_product_version(&target)?;
+
+    let mut changed_versions = Vec::new();
+    if let Some(mut previous) = previous {
+        previous.status = ProductVersionStatus::Retired;
+        changed_versions.push(previous);
+    }
+    target.status = ProductVersionStatus::Published;
+    changed_versions.push(target.clone());
+    product.latest_version = Some(target_version.clone());
+    product.updated_at = Utc::now();
+
+    let (rollout_edges, rollout_packages, rollout_releases) = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        let mut edges = store
+            .edge_nodes()
+            .filter(|edge| edge.product_id.as_deref() == Some(product_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut packages = Vec::with_capacity(edges.len());
+        let mut releases = Vec::new();
+
+        for edge in &mut edges {
+            edge.desired_product_version = Some(target_version.clone());
+            let package = materialize_product_config_package(&store, &edge.edge_id, &target)?;
+
+            releases.extend(
+                store
+                    .releases()
+                    .filter(|release| {
+                        release.edge_id == edge.edge_id && release.status == ReleaseStatus::Pending
+                    })
+                    .cloned()
+                    .map(|mut release| {
+                        release.status = ReleaseStatus::Superseded;
+                        release
+                    }),
+            );
+            releases.push(ReleaseService::prepare_release(&package).map_err(|errors| {
+                error(
+                    StatusCode::BAD_REQUEST,
+                    errors
+                        .into_iter()
+                        .map(|error| error.message)
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                )
+            })?);
+            packages.push(package);
+        }
+
+        (edges, packages, releases)
+    };
+
+    state
+        .persist_product_version_transition(
+            product.clone(),
+            changed_versions.clone(),
+            rollout_edges.clone(),
+            rollout_packages.clone(),
+            rollout_releases.clone(),
+        )
+        .await
+        .map_err(persistence_error)?;
+
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_product(product);
+    for version in changed_versions {
+        store.upsert_product_version(version);
+    }
+    for edge in rollout_edges {
+        store.register_edge(edge);
+    }
+    for package in rollout_packages {
+        store.upsert_config_package(package);
+    }
+    for release in rollout_releases {
+        let is_pending = release.status == ReleaseStatus::Pending;
+        let release_id = release.release_id;
+        store.insert_release(release);
+        if is_pending {
+            store.push_audit(AuditAction::CreateRelease, release_id.to_string());
+        }
+    }
+    let action = if rollback { "rollback" } else { "publish" };
+    store.push_audit(
+        AuditAction::UpdateConfig,
+        format!("product:{product_id}:version:{target_version}:{action}"),
+    );
+    Ok(Json(target))
 }
 
 async fn point_mappings(State(state): State<AppState>) -> Json<Vec<PointMappingResponse>> {
@@ -320,10 +1123,37 @@ async fn save_edge_mqtt_uplink(
     Path(edge_id): Path<String>,
     Json(request): Json<SaveMqttUplinkRequest>,
 ) -> Result<Json<MqttUplinkResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let username = non_empty(request.username);
+    let password_env = non_empty(request.password_env);
+    let tls_ca_path = non_empty(request.tls_ca_path);
+    if username.is_some() != password_env.is_some() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "MQTT username and password environment reference must be configured together",
+        ));
+    }
+    if tls_ca_path.is_some()
+        && !matches!(
+            request
+                .broker
+                .split_once("://")
+                .map(|(scheme, _)| scheme.to_ascii_lowercase())
+                .as_deref(),
+            Some("mqtts" | "ssl")
+        )
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "MQTT TLS CA path requires an mqtts:// broker",
+        ));
+    }
     let uplink = MqttUplinkConfig {
         sink_id: request.sink_id,
         broker: request.broker,
         client_id: request.client_id,
+        username,
+        password_env,
+        tls_ca_path,
         topic_template: request.topic_template,
         qos: request.qos,
         batch_size: request.batch_size,
@@ -360,22 +1190,64 @@ async fn run_edge_discovery(
     Path(edge_id): Path<String>,
     Json(request): Json<RunDiscoveryRequest>,
 ) -> Result<(StatusCode, Json<DiscoveryReportResponse>), (StatusCode, Json<ErrorResponse>)> {
-    let report = simulated_discovery_report(&edge_id, &request.connection_id);
+    let (start_address, end_address) = parse_holding_register_range(&request.address_range)
+        .map_err(|message| error(StatusCode::BAD_REQUEST, message))?;
+    let discovery = DiscoveryRequest::modbus_holding_registers(
+        format!("discovery-{edge_id}-{}", Utc::now().timestamp_millis()),
+        request.connection_id.clone(),
+        start_address,
+        end_address,
+    );
+    discovery
+        .validate()
+        .map_err(|message| error(StatusCode::BAD_REQUEST, message))?;
+
     {
-        let mut store = state.store.lock().expect("store mutex poisoned");
-        if store.latest_config_package_for_edge(&edge_id).is_none() {
+        let store = state.store.lock().expect("store mutex poisoned");
+        let Some(package) = store.latest_config_package_for_edge(&edge_id) else {
             return Err(error(StatusCode::NOT_FOUND, "missing edge config package"));
+        };
+        let Some(connection) = package
+            .protocol_connections
+            .iter()
+            .find(|connection| connection.connection_id == request.connection_id)
+        else {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "discovery connection is not configured for this edge",
+            ));
+        };
+        if connection.protocol != ProtocolType::ModbusRtu {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "runtime discovery currently supports Modbus RTU connections only",
+            ));
         }
-        store.insert_discovery_report(edge_id.clone(), report.clone());
-        store.push_audit(AuditAction::UpdateConfig, format!("{edge_id}:discovery"));
     }
 
-    state
-        .persist_discovery_report(&edge_id, report.clone())
+    let report = state
+        .gateway_commands
+        .dispatch_discovery(&edge_id, discovery, Duration::from_secs(10))
         .await
-        .map_err(persistence_error)?;
-
+        .map_err(discovery_dispatch_error)?;
+    state
+        .store
+        .lock()
+        .expect("store mutex poisoned")
+        .push_audit(AuditAction::UpdateConfig, format!("{edge_id}:discovery"));
     Ok((StatusCode::CREATED, Json(discovery_report_response(report))))
+}
+
+fn discovery_dispatch_error(
+    error_value: EdgeGatewayDispatchError,
+) -> (StatusCode, Json<ErrorResponse>) {
+    let status = match error_value {
+        EdgeGatewayDispatchError::Offline => StatusCode::SERVICE_UNAVAILABLE,
+        EdgeGatewayDispatchError::Busy => StatusCode::CONFLICT,
+        EdgeGatewayDispatchError::Timeout => StatusCode::GATEWAY_TIMEOUT,
+        EdgeGatewayDispatchError::Failed(_) => StatusCode::BAD_GATEWAY,
+    };
+    error(status, error_value.to_string())
 }
 
 async fn edge_discovery_suggestions(
@@ -392,44 +1264,33 @@ async fn edge_discovery_suggestions(
     )
 }
 
-fn simulated_discovery_report(edge_id: &str, connection_id: &str) -> DiscoveryReport {
-    let job_id = format!(
-        "discovery-{edge_id}-{}",
-        if edge_id == "edge-dev" { 1 } else { 0 }
-    );
-    DiscoveryReport::new(job_id, connection_id)
-        .with_point(
-            DiscoveredPoint::new(
-                connection_id,
-                PointAddress::modbus_holding_register(40001),
-                TelemetryType::Float,
-            )
-            .with_sample_values(vec!["220.1".to_string(), "220.3".to_string()])
-            .with_confidence(0.72),
-        )
-        .with_suggestion(
-            PointMappingSuggestion::new(
-                "pump_flow_rate",
-                "pump-1",
-                "pump.flow_rate",
-                connection_id,
-                PointAddress::modbus_holding_register(40001),
-                TelemetryType::Float,
-            )
-            .with_unit("m3/h")
-            .with_confidence(0.82)
-            .with_evidence("数值范围和波动特征符合泵流量"),
-        )
+fn parse_holding_register_range(value: &str) -> Result<(u32, u32), String> {
+    let (kind, range) = value
+        .split_once(':')
+        .ok_or_else(|| "addressRange must use holding_register:start-end".to_string())?;
+    if kind != "holding_register" {
+        return Err("only holding_register discovery ranges are supported".to_string());
+    }
+    let (start, end) = range
+        .split_once('-')
+        .ok_or_else(|| "addressRange must include a start and end address".to_string())?;
+    let start = start
+        .parse::<u32>()
+        .map_err(|_| "invalid discovery start address".to_string())?;
+    let end = end
+        .parse::<u32>()
+        .map_err(|_| "invalid discovery end address".to_string())?;
+    Ok((start, end))
 }
 
 async fn create_edge_node(
     State(state): State<AppState>,
     Json(request): Json<CreateEdgeNodeRequest>,
 ) -> Result<(StatusCode, Json<EdgeNodeResponse>), (StatusCode, Json<ErrorResponse>)> {
-    let (node, package, response) = {
+    let (node, package, credential, response) = {
         let mut store = state.store.lock().expect("store mutex poisoned");
         let edge_id = next_edge_id(&store.edge_nodes().cloned().collect::<Vec<_>>());
-        let node = EdgeNode::new(
+        let mut node = EdgeNode::new(
             edge_id.clone(),
             request
                 .display_name
@@ -443,13 +1304,131 @@ async fn create_edge_node(
                 .unwrap_or_else(|| "待分配".to_string()),
         )
         .with_capability("registration:draft");
-        let package = EdgeConfigPackage::new(edge_id, "registration-draft-001");
+        let product_id = request
+            .product_id
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| error(StatusCode::BAD_REQUEST, "productId is required"))?;
+        let product = store
+            .product(&product_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing product"))?;
+        let project_id = request
+            .project_id
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| product.project_id.clone());
+        if project_id != product.project_id {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "edge project does not match product project",
+            ));
+        }
+        let desired_version = product
+            .latest_version
+            .clone()
+            .ok_or_else(|| error(StatusCode::CONFLICT, "product has no published version"))?;
+        let product_version = store
+            .product_version(&product_id, &desired_version)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::CONFLICT, "missing published product version"))?;
+        if product_version.status != ProductVersionStatus::Published {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "product latest version is not published",
+            ));
+        }
+        node = node
+            .with_capability(format!("project:{project_id}"))
+            .with_capability(format!("product:{product_id}"))
+            .bind_product(&project_id, &product_id, &desired_version);
+        let package = materialize_product_config_package(&store, &node.edge_id, &product_version)?;
+        let (access_token, credential) = new_edge_access_credential(&node.edge_id);
 
         store.register_edge(node.clone());
+        store.replace_edge_credential(credential.clone());
         store.upsert_config_package(package.clone());
         store.push_audit(AuditAction::UpdateConfig, node.edge_id.clone());
 
-        let response = edge_node_response(&node, None);
+        let mut response = edge_node_response(&node, None);
+        response.access_token = Some(access_token);
+        (node, package, credential, response)
+    };
+
+    state
+        .persist_edge_node(node)
+        .await
+        .map_err(persistence_error)?;
+    state
+        .persist_config_package(package)
+        .await
+        .map_err(persistence_error)?;
+    state
+        .persist_edge_credential(credential)
+        .await
+        .map_err(persistence_error)?;
+
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+async fn bind_edge_product(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+    Json(request): Json<BindEdgeProductRequest>,
+) -> Result<Json<EdgeNodeResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let (node, package, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut node = store
+            .edge_nodes()
+            .find(|edge| edge.edge_id == edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge node"))?;
+        let product = store
+            .product(&request.product_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing product"))?;
+        if product.project_id != request.project_id {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "edge project does not match product project",
+            ));
+        }
+        let desired_version = request
+            .desired_version
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| product.latest_version.clone())
+            .ok_or_else(|| error(StatusCode::CONFLICT, "product has no published version"))?;
+        let product_version = store
+            .product_version(&request.product_id, &desired_version)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing product version"))?;
+        if product_version.status != ProductVersionStatus::Published {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "only published product versions can be bound to an edge",
+            ));
+        }
+
+        node.project_id = Some(request.project_id.clone());
+        node.product_id = Some(request.product_id.clone());
+        node.desired_product_version = Some(desired_version);
+        node.capabilities.retain(|capability| {
+            !capability.starts_with("project:") && !capability.starts_with("product:")
+        });
+        node.capabilities
+            .push(format!("project:{}", request.project_id));
+        node.capabilities
+            .push(format!("product:{}", request.product_id));
+        let package = materialize_product_config_package(&store, &edge_id, &product_version)?;
+        store.register_edge(node.clone());
+        store.upsert_config_package(package.clone());
+        store.push_audit(
+            AuditAction::UpdateConfig,
+            format!(
+                "{edge_id}:product-binding:{}@{}",
+                product_version.product_id, product_version.version
+            ),
+        );
+        let runtime = store.runtime_metrics(&edge_id);
+        let response = edge_node_response(&node, runtime);
         (node, package, response)
     };
 
@@ -462,7 +1441,38 @@ async fn create_edge_node(
         .await
         .map_err(persistence_error)?;
 
-    Ok((StatusCode::CREATED, Json(response)))
+    Ok(Json(response))
+}
+
+async fn generate_edge_access_token(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> Result<Json<EdgeAccessTokenResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let (credential, response) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        if store.edge_nodes().all(|edge| edge.edge_id != edge_id) {
+            return Err(error(StatusCode::NOT_FOUND, "missing edge node"));
+        }
+        let (access_token, credential) = new_edge_access_credential(&edge_id);
+        store.replace_edge_credential(credential.clone());
+        store.push_audit(
+            AuditAction::UpdateConfig,
+            format!("{edge_id}:access-token:{}", credential.credential_id),
+        );
+        let response = EdgeAccessTokenResponse {
+            access_token,
+            created_at: credential.created_at,
+            credential_id: credential.credential_id.to_string(),
+            edge_id,
+        };
+        (credential, response)
+    };
+
+    state
+        .persist_edge_credential(credential)
+        .await
+        .map_err(persistence_error)?;
+    Ok(Json(response))
 }
 
 async fn delete_edge_node(
@@ -742,13 +1752,14 @@ async fn create_edge_protocol_connection(
             .cloned()
             .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing edge config package"))?;
         let connection_id = next_connection_id(&package);
+        let protocol = request.protocol_type.unwrap_or(ProtocolType::ModbusTcp);
+        let (endpoint, serial) =
+            normalize_connection_transport(protocol, request.endpoint, request.serial, None)?;
         let connection = ProtocolConnection {
             connection_id,
-            protocol: request.protocol_type.unwrap_or(ProtocolType::ModbusTcp),
-            endpoint: request
-                .endpoint
-                .filter(|endpoint| !endpoint.trim().is_empty()),
-            serial: None,
+            protocol,
+            endpoint,
+            serial,
         };
 
         package.version = next_version(&package.version);
@@ -1285,6 +2296,459 @@ async fn agent_suggestions(State(state): State<AppState>) -> Json<AgentActionRes
     })
 }
 
+async fn agent_provider_status(
+    State(state): State<AppState>,
+) -> Json<crate::agent_service::AgentProviderStatus> {
+    Json(state.agent_service.status())
+}
+
+async fn agent_chat(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Json(request): Json<AgentChatRequest>,
+) -> Result<Json<crate::agent_service::AgentChatResult>, (StatusCode, Json<ErrorResponse>)> {
+    let message = request.message.trim();
+    if message.is_empty() {
+        return Err(error(StatusCode::BAD_REQUEST, "agent message is required"));
+    }
+    if message.chars().count() > 4_000 {
+        return Err(error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "agent message exceeds 4000 characters",
+        ));
+    }
+
+    let operator_id = effective_actor(&principal, &request.operator_id)?;
+    let requested_project_id = normalized_optional(request.project_id);
+    let requested_edge_id = normalized_optional(request.edge_id);
+    let existing_conversation = if let Some(conversation_id) = request.conversation_id {
+        let store = state.store.lock().expect("store mutex poisoned");
+        let conversation = store
+            .agent_conversation(conversation_id)
+            .filter(|conversation| conversation.operator_id == operator_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing agent conversation"))?;
+        if requested_project_id.is_some()
+            && requested_project_id.as_deref() != conversation.project_id.as_deref()
+        {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "agent conversation project scope cannot change",
+            ));
+        }
+        if requested_edge_id.is_some()
+            && requested_edge_id.as_deref() != conversation.edge_id.as_deref()
+        {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "agent conversation edge scope cannot change",
+            ));
+        }
+        Some(conversation)
+    } else {
+        None
+    };
+
+    let context_project_id = existing_conversation
+        .as_ref()
+        .and_then(|conversation| conversation.project_id.clone())
+        .or_else(|| requested_project_id.clone());
+    let context_edge_id = existing_conversation
+        .as_ref()
+        .and_then(|conversation| conversation.edge_id.clone())
+        .or_else(|| requested_edge_id.clone());
+
+    let mut context = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        build_agent_context(
+            &store,
+            context_project_id.as_deref(),
+            context_edge_id.as_deref(),
+        )?
+    };
+    let effective_project_id = context_project_id.clone().or_else(|| {
+        context
+            .get("edge")
+            .and_then(|edge| edge.get("projectId"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    });
+    let knowledge = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        retrieve_agent_knowledge(&store, message, effective_project_id.as_deref())
+    };
+    context["knowledge"] = serde_json::Value::Array(knowledge);
+    if let Some(conversation) = &existing_conversation {
+        context["conversationHistory"] = agent_conversation_history(conversation);
+    }
+    let mut result = state
+        .agent_service
+        .chat(message, &context)
+        .await
+        .map_err(agent_provider_error)?;
+
+    let is_new = existing_conversation.is_none();
+    let mut conversation = existing_conversation.unwrap_or_else(|| {
+        AgentConversation::new(
+            effective_project_id,
+            context_edge_id,
+            operator_id.clone(),
+            agent_conversation_title(message),
+        )
+    });
+    conversation.push_message(AgentConversationMessage::new(
+        AgentConversationRole::User,
+        message,
+    ));
+    conversation.push_message(
+        AgentConversationMessage::new(AgentConversationRole::Assistant, result.message.clone())
+            .with_citations(
+                result
+                    .citations
+                    .iter()
+                    .map(|citation| AgentConversationCitation {
+                        document_id: citation.document_id.clone(),
+                        title: citation.title.clone(),
+                        source_uri: citation.source_uri.clone(),
+                        excerpt: citation.excerpt.clone(),
+                    })
+                    .collect(),
+            ),
+    );
+    result.conversation_id = Some(conversation.conversation_id.to_string());
+    result.conversation_title = Some(conversation.title.clone());
+
+    let audit = is_new.then(|| {
+        AuditRecord::by_actor(
+            AuditAction::CreateAgentConversation,
+            format!("agent-conversation:{}", conversation.conversation_id),
+            operator_id,
+        )
+    });
+    if let Some(audit) = &audit {
+        state
+            .persist_agent_conversation_transition(conversation.clone(), audit.clone())
+            .await
+            .map_err(persistence_error)?;
+    } else {
+        state
+            .persist_agent_conversation(conversation.clone())
+            .await
+            .map_err(persistence_error)?;
+    }
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_agent_conversation(conversation);
+    if let Some(audit) = audit {
+        store.push_audit_record(audit);
+    }
+    Ok(Json(result))
+}
+
+async fn agent_conversations(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Query(query): Query<AgentConversationQuery>,
+) -> Result<Json<Vec<AgentConversation>>, (StatusCode, Json<ErrorResponse>)> {
+    let operator_id =
+        effective_actor(&principal, query.operator_id.as_deref().unwrap_or_default())?;
+    let project_filter_requested = query.project_id.is_some();
+    let project_id = normalized_optional(query.project_id);
+    let store = state.store.lock().expect("store mutex poisoned");
+    let mut conversations = store
+        .agent_conversations()
+        .filter(|conversation| conversation.operator_id == operator_id)
+        .filter(|conversation| {
+            if project_filter_requested {
+                conversation.project_id.as_deref() == project_id.as_deref()
+            } else {
+                true
+            }
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    conversations.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| right.conversation_id.cmp(&left.conversation_id))
+    });
+    Ok(Json(conversations))
+}
+
+async fn agent_conversation(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Path(conversation_id): Path<uuid::Uuid>,
+    Query(query): Query<AgentConversationQuery>,
+) -> Result<Json<AgentConversation>, (StatusCode, Json<ErrorResponse>)> {
+    let operator_id =
+        effective_actor(&principal, query.operator_id.as_deref().unwrap_or_default())?;
+    let store = state.store.lock().expect("store mutex poisoned");
+    let conversation = store
+        .agent_conversation(conversation_id)
+        .filter(|conversation| conversation.operator_id == operator_id)
+        .cloned()
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing agent conversation"))?;
+    Ok(Json(conversation))
+}
+
+async fn delete_agent_conversation(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Path(conversation_id): Path<uuid::Uuid>,
+    Query(query): Query<DeleteAgentConversationQuery>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let operator_id =
+        effective_actor(&principal, query.operator_id.as_deref().unwrap_or_default())?;
+    {
+        let store = state.store.lock().expect("store mutex poisoned");
+        if store
+            .agent_conversation(conversation_id)
+            .filter(|conversation| conversation.operator_id == operator_id)
+            .is_none()
+        {
+            return Err(error(StatusCode::NOT_FOUND, "missing agent conversation"));
+        }
+    }
+    let audit = AuditRecord::by_actor(
+        AuditAction::DeleteAgentConversation,
+        format!("agent-conversation:{conversation_id}"),
+        operator_id,
+    );
+    state
+        .delete_agent_conversation_transition(conversation_id, audit.clone())
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.remove_agent_conversation(conversation_id);
+    store.push_audit_record(audit);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn agent_knowledge_documents(
+    State(state): State<AppState>,
+    Query(query): Query<KnowledgeDocumentQuery>,
+) -> Json<Vec<KnowledgeDocument>> {
+    let project_id = normalized_optional(query.project_id);
+    let store = state.store.lock().expect("store mutex poisoned");
+    let mut documents = store
+        .knowledge_documents()
+        .filter(|document| {
+            project_id
+                .as_deref()
+                .map(|project_id| {
+                    document.project_id.is_none()
+                        || document.project_id.as_deref() == Some(project_id)
+                })
+                .unwrap_or(true)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    documents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    Json(documents)
+}
+
+async fn create_agent_knowledge_document(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Json(request): Json<SaveKnowledgeDocumentRequest>,
+) -> Result<(StatusCode, Json<KnowledgeDocument>), (StatusCode, Json<ErrorResponse>)> {
+    let actor = effective_actor(&principal, &request.actor)?;
+    validate_knowledge_document_request(&state, &request, &actor)?;
+    let mut document = KnowledgeDocument::new(
+        normalized_optional(request.project_id.clone()),
+        request.title.trim(),
+        request.content.trim(),
+        &actor,
+    );
+    apply_knowledge_document_request(&mut document, &request);
+    let audit = AuditRecord::by_actor(
+        AuditAction::CreateKnowledgeDocument,
+        format!("knowledge:{}", document.document_id),
+        &actor,
+    );
+    state
+        .persist_knowledge_document_transition(document.clone(), audit.clone())
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_knowledge_document(document.clone());
+    store.push_audit_record(audit);
+    Ok((StatusCode::CREATED, Json(document)))
+}
+
+async fn save_agent_knowledge_document(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Path(document_id): Path<uuid::Uuid>,
+    Json(request): Json<SaveKnowledgeDocumentRequest>,
+) -> Result<Json<KnowledgeDocument>, (StatusCode, Json<ErrorResponse>)> {
+    let actor = effective_actor(&principal, &request.actor)?;
+    validate_knowledge_document_request(&state, &request, &actor)?;
+    let mut document = state
+        .store
+        .lock()
+        .expect("store mutex poisoned")
+        .knowledge_document(document_id)
+        .cloned()
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing knowledge document"))?;
+    apply_knowledge_document_request(&mut document, &request);
+    document.updated_at = Utc::now();
+    let audit = AuditRecord::by_actor(
+        AuditAction::UpdateKnowledgeDocument,
+        format!("knowledge:{document_id}"),
+        &actor,
+    );
+    state
+        .persist_knowledge_document_transition(document.clone(), audit.clone())
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_knowledge_document(document.clone());
+    store.push_audit_record(audit);
+    Ok(Json(document))
+}
+
+async fn delete_agent_knowledge_document(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Path(document_id): Path<uuid::Uuid>,
+    Query(query): Query<DeleteKnowledgeDocumentQuery>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    if state
+        .store
+        .lock()
+        .expect("store mutex poisoned")
+        .knowledge_document(document_id)
+        .is_none()
+    {
+        return Err(error(StatusCode::NOT_FOUND, "missing knowledge document"));
+    }
+    let submitted_actor =
+        normalized_optional(query.actor).unwrap_or_else(|| "console-operator".to_string());
+    let actor = effective_actor(&principal, &submitted_actor)?;
+    let audit = AuditRecord::by_actor(
+        AuditAction::DeleteKnowledgeDocument,
+        format!("knowledge:{document_id}"),
+        &actor,
+    );
+    state
+        .delete_knowledge_document_transition(document_id, audit.clone())
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.remove_knowledge_document(document_id);
+    store.push_audit_record(audit);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn agent_proposals(State(state): State<AppState>) -> Json<Vec<AgentProposal>> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    let mut proposals = store.agent_proposals().cloned().collect::<Vec<_>>();
+    proposals.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    Json(proposals)
+}
+
+async fn create_agent_proposal(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Json(request): Json<CreateAgentProposalRequest>,
+) -> Result<(StatusCode, Json<AgentProposal>), (StatusCode, Json<ErrorResponse>)> {
+    let created_by = effective_actor(&principal, &request.created_by)?;
+    validate_agent_proposal_request(&state, &request, &created_by)?;
+    let mut proposal = AgentProposal::new(
+        request.agent_id.trim(),
+        request.kind,
+        request.title.trim(),
+        request.summary.trim(),
+        &created_by,
+    );
+    proposal.project_id = normalized_optional(request.project_id);
+    proposal.edge_id = normalized_optional(request.edge_id);
+    proposal.payload = request.payload;
+    proposal.risk = request.risk;
+    let audit = AuditRecord::by_actor(
+        AuditAction::CreateAgentProposal,
+        format!("agent-proposal:{}", proposal.proposal_id),
+        proposal.created_by.clone(),
+    );
+
+    state
+        .persist_agent_proposal_transition(proposal.clone(), audit.clone())
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_agent_proposal(proposal.clone());
+    store.push_audit_record(audit);
+    Ok((StatusCode::CREATED, Json(proposal)))
+}
+
+async fn approve_agent_proposal(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Path(proposal_id): Path<uuid::Uuid>,
+    Json(request): Json<ReviewAgentProposalRequest>,
+) -> Result<Json<AgentProposal>, (StatusCode, Json<ErrorResponse>)> {
+    review_agent_proposal(
+        state,
+        principal,
+        proposal_id,
+        request,
+        AgentProposalStatus::Approved,
+    )
+    .await
+}
+
+async fn reject_agent_proposal(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Path(proposal_id): Path<uuid::Uuid>,
+    Json(request): Json<ReviewAgentProposalRequest>,
+) -> Result<Json<AgentProposal>, (StatusCode, Json<ErrorResponse>)> {
+    review_agent_proposal(
+        state,
+        principal,
+        proposal_id,
+        request,
+        AgentProposalStatus::Rejected,
+    )
+    .await
+}
+
+async fn review_agent_proposal(
+    state: AppState,
+    principal: ApiPrincipal,
+    proposal_id: uuid::Uuid,
+    request: ReviewAgentProposalRequest,
+    decision: AgentProposalStatus,
+) -> Result<Json<AgentProposal>, (StatusCode, Json<ErrorResponse>)> {
+    let reviewer = effective_actor(&principal, &request.reviewer)?;
+    let mut proposal = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        store
+            .agent_proposal(proposal_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing agent proposal"))?
+    };
+    proposal
+        .review(decision, &reviewer, request.note)
+        .map_err(|review_error| error(StatusCode::CONFLICT, review_error.to_string()))?;
+    let action = match decision {
+        AgentProposalStatus::Approved => AuditAction::ApproveAgentProposal,
+        AgentProposalStatus::Rejected => AuditAction::RejectAgentProposal,
+        AgentProposalStatus::PendingReview => unreachable!("review decision is validated"),
+    };
+    let audit = AuditRecord::by_actor(action, format!("agent-proposal:{proposal_id}"), &reviewer);
+    state
+        .persist_agent_proposal_transition(proposal.clone(), audit.clone())
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_agent_proposal(proposal.clone());
+    store.push_audit_record(audit);
+    Ok(Json(proposal))
+}
+
 async fn save_point_mapping(
     State(state): State<AppState>,
     Path(point_id): Path<String>,
@@ -1528,14 +2992,22 @@ async fn save_edge_protocol_connection(
             .iter()
             .position(|connection| connection.connection_id == connection_id)
             .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing protocol connection"))?;
+        let existing_serial = package.protocol_connections[connection_index]
+            .serial
+            .clone();
+        let (endpoint, serial) = normalize_connection_transport(
+            request.protocol_type,
+            request.endpoint,
+            request.serial,
+            existing_serial.as_ref(),
+        )?;
 
         package.version = next_version(&package.version);
         {
             let connection = &mut package.protocol_connections[connection_index];
             connection.protocol = request.protocol_type;
-            connection.endpoint = request
-                .endpoint
-                .filter(|endpoint| !endpoint.trim().is_empty());
+            connection.endpoint = endpoint;
+            connection.serial = serial;
         }
 
         let response = protocol_connection_response(
@@ -1779,6 +3251,7 @@ fn release_list_response(store: &cloud_control::CloudControlStore) -> ReleaseLis
                     ReleaseStatus::Pending => "等待下发",
                     ReleaseStatus::Applied => "已应用",
                     ReleaseStatus::Failed => "应用失败",
+                    ReleaseStatus::Superseded => "已取代",
                 }
                 .to_string(),
                 heartbeat: "18 秒前".to_string(),
@@ -1791,7 +3264,8 @@ fn release_status_rank(status: ReleaseStatus) -> u8 {
     match status {
         ReleaseStatus::Pending => 0,
         ReleaseStatus::Failed => 1,
-        ReleaseStatus::Applied => 2,
+        ReleaseStatus::Superseded => 2,
+        ReleaseStatus::Applied => 3,
     }
 }
 
@@ -1891,6 +3365,12 @@ pub struct EdgeNodeResponse {
     pub resources: String,
     pub heartbeat: String,
     pub capabilities: Vec<String>,
+    pub project_id: Option<String>,
+    pub product_id: Option<String>,
+    pub desired_product_version: Option<String>,
+    pub reported_product_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_token: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -1914,7 +3394,26 @@ pub struct EdgeNodesPageResponse {
 #[serde(rename_all = "camelCase")]
 pub struct CreateEdgeNodeRequest {
     pub display_name: Option<String>,
+    pub product_id: Option<String>,
+    pub project_id: Option<String>,
     pub site: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BindEdgeProductRequest {
+    pub project_id: String,
+    pub product_id: String,
+    pub desired_version: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeAccessTokenResponse {
+    pub access_token: String,
+    pub created_at: chrono::DateTime<Utc>,
+    pub credential_id: String,
+    pub edge_id: String,
 }
 
 #[derive(Serialize)]
@@ -1998,6 +3497,7 @@ pub struct ProtocolConnectionResponse {
     pub protocol_type: ProtocolType,
     pub protocol: String,
     pub endpoint: String,
+    pub serial: Option<SerialConnectionSettingsDto>,
     pub status: String,
     pub policy: String,
 }
@@ -2094,7 +3594,9 @@ pub struct DataConfigGraphNodeDto {
 pub struct DataConfigGraphEdgeDto {
     pub edge_id: String,
     pub from: String,
+    pub from_port: Option<String>,
     pub to: String,
+    pub to_port: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -2143,6 +3645,12 @@ pub struct MqttUplinkResponse {
     pub sink_id: String,
     pub broker: String,
     pub client_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password_env: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_ca_path: Option<String>,
     pub topic_template: String,
     pub qos: u8,
     pub batch_size: u32,
@@ -2155,6 +3663,12 @@ pub struct SaveMqttUplinkRequest {
     pub sink_id: String,
     pub broker: String,
     pub client_id: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password_env: Option<String>,
+    #[serde(default)]
+    pub tls_ca_path: Option<String>,
     pub topic_template: String,
     pub qos: u8,
     pub batch_size: u32,
@@ -2284,6 +3798,8 @@ pub struct SaveDataConfigRequest {
 pub struct SaveProtocolConnectionRequest {
     pub protocol_type: ProtocolType,
     pub endpoint: Option<String>,
+    #[serde(default)]
+    pub serial: Option<SerialConnectionSettingsDto>,
 }
 
 #[derive(Deserialize)]
@@ -2291,6 +3807,18 @@ pub struct SaveProtocolConnectionRequest {
 pub struct CreateProtocolConnectionRequest {
     pub protocol_type: Option<ProtocolType>,
     pub endpoint: Option<String>,
+    #[serde(default)]
+    pub serial: Option<SerialConnectionSettingsDto>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SerialConnectionSettingsDto {
+    pub port: String,
+    pub baud_rate: u32,
+    pub data_bits: u8,
+    pub stop_bits: u8,
+    pub parity: String,
 }
 
 #[derive(Deserialize)]
@@ -2710,7 +4238,104 @@ fn build_data_config_from_request(
         data_config = data_config.with_point(data_point);
     }
 
+    validate_data_config_algorithm_bindings(package, &data_config)?;
+    validate_data_config_visual_graph(&data_config)
+        .map_err(|cause| error(StatusCode::BAD_REQUEST, cause))?;
+
     Ok(data_config)
+}
+
+fn validate_data_config_algorithm_bindings(
+    package: &EdgeConfigPackage,
+    data_config: &DataConfig,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if data_config.algorithm_ids.is_empty() {
+        return Ok(());
+    }
+
+    let point_ids = data_config
+        .points
+        .iter()
+        .map(|point| point.point_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut json_fields = data_config
+        .points
+        .iter()
+        .map(|point| point.json_field.clone())
+        .collect::<BTreeSet<_>>();
+
+    for algorithm_id in &data_config.algorithm_ids {
+        let algorithm = package
+            .algorithms
+            .iter()
+            .find(|algorithm| algorithm.id == *algorithm_id)
+            .ok_or_else(|| {
+                error(
+                    StatusCode::BAD_REQUEST,
+                    format!("data config algorithm `{algorithm_id}` missing"),
+                )
+            })?;
+
+        for input_id in algorithm.inputs() {
+            if !point_ids.contains(input_id.as_str()) {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "data config algorithm `{algorithm_id}` input point `{input_id}` is not included in data config points"
+                    ),
+                ));
+            }
+        }
+
+        for output_field in algorithm_output_json_fields(algorithm) {
+            if !json_fields.insert(output_field.clone()) {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "data config algorithm `{algorithm_id}` output json field `{output_field}` conflicts with another payload field"
+                    ),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn algorithm_output_json_fields(algorithm: &AlgorithmSpec) -> Vec<String> {
+    if algorithm.dsl.outputs.is_empty() {
+        return algorithm
+            .outputs()
+            .into_iter()
+            .map(|point_id| data_config_json_field_from_point_id(&point_id))
+            .collect();
+    }
+
+    algorithm
+        .dsl
+        .outputs
+        .iter()
+        .map(|output| {
+            if output.name.trim().is_empty() {
+                data_config_json_field_from_point_id(&output.point_id)
+            } else {
+                output.name.clone()
+            }
+        })
+        .collect()
+}
+
+fn data_config_json_field_from_point_id(point_id: &str) -> String {
+    point_id
+        .chars()
+        .map(|value| {
+            if value.is_ascii_alphanumeric() {
+                value
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn data_config_visual_graph_from_request(
@@ -2732,7 +4357,9 @@ fn data_config_visual_graph_from_request(
         edges.push(DataConfigGraphEdge {
             edge_id: non_empty_field(edge.edge_id, "visualGraph.edges.edgeId")?,
             from: non_empty_field(edge.from, "visualGraph.edges.from")?,
+            from_port: non_empty_optional(edge.from_port),
             to: non_empty_field(edge.to, "visualGraph.edges.to")?,
+            to_port: non_empty_optional(edge.to_port),
         });
     }
     Ok(DataConfigVisualGraph { nodes, edges })
@@ -2831,10 +4458,18 @@ fn validate_algorithm_dsl(
         ));
     }
     if let Some(input) = dsl.inputs.iter().find(|input| {
-        !package
+        let is_device_point = package
             .point_mappings
             .iter()
-            .any(|mapping| mapping.point_id == input.point_id)
+            .any(|mapping| mapping.point_id == input.point_id);
+        let is_algorithm_output = package.algorithms.iter().any(|algorithm| {
+            algorithm
+                .dsl
+                .outputs
+                .iter()
+                .any(|output| output.point_id == input.point_id)
+        });
+        !is_device_point && !is_algorithm_output
     }) {
         return Err(error(
             StatusCode::BAD_REQUEST,
@@ -2912,7 +4547,107 @@ fn edge_node_response(
             .map(|snapshot| format!("{} 秒前", snapshot.cloud_sync.last_sync_seconds_ago))
             .unwrap_or_else(|| "-".to_string()),
         capabilities: edge.capabilities.clone(),
+        project_id: edge.project_id.clone(),
+        product_id: edge.product_id.clone(),
+        desired_product_version: edge.desired_product_version.clone(),
+        reported_product_version: edge.reported_product_version.clone(),
+        access_token: None,
     }
+}
+
+fn new_edge_access_credential(edge_id: &str) -> (String, EdgeAccessCredential) {
+    let access_token = format!("edge_{}_{}", edge_id, uuid::Uuid::new_v4().simple());
+    let digest = Sha256::digest(access_token.as_bytes());
+    let token_hash = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let credential = EdgeAccessCredential::new(edge_id, token_hash);
+    (access_token, credential)
+}
+
+fn materialize_product_config_package(
+    store: &cloud_control::CloudControlStore,
+    edge_id: &str,
+    version: &ProductVersion,
+) -> Result<EdgeConfigPackage, (StatusCode, Json<ErrorResponse>)> {
+    let default_connection_id = version
+        .data_configs
+        .first()
+        .map(|config| config.protocol_connection_id.clone())
+        .or_else(|| {
+            version
+                .protocol_connections
+                .first()
+                .map(|connection| connection.connection_id.clone())
+        })
+        .ok_or_else(|| {
+            error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "product version has no protocol connection",
+            )
+        })?;
+    let default_device_id = version
+        .data_configs
+        .first()
+        .map(|config| config.device_id.clone())
+        .or_else(|| {
+            version
+                .devices
+                .first()
+                .map(|device| device.device_id.clone())
+        })
+        .unwrap_or_else(|| "device-1".to_string());
+
+    let mut point_mappings = Vec::new();
+    for point_set_id in &version.point_set_ids {
+        let point_set = store.point_set(point_set_id).ok_or_else(|| {
+            error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "product version references a missing point set",
+            )
+        })?;
+        point_mappings.extend(point_set.points.iter().map(|point| {
+            let mut mapping = TelemetryPointMapping::new(
+                point.point_id.clone(),
+                default_device_id.clone(),
+                point.semantic_id.clone(),
+                default_connection_id.clone(),
+                point.address.clone(),
+                point.value_type,
+            )
+            .with_interval_ms(point.interval_ms);
+            mapping.unit = point.unit.clone();
+            mapping
+        }));
+    }
+
+    Ok(EdgeConfigPackage {
+        edge_id: edge_id.to_string(),
+        version: version.version.clone(),
+        device_models: version.device_models.clone(),
+        devices: version.devices.clone(),
+        protocol_connections: version.protocol_connections.clone(),
+        mqtt_uplinks: version
+            .mqtt_uplinks
+            .iter()
+            .cloned()
+            .map(|mut uplink| {
+                uplink.client_id = if uplink.client_id.contains("{edge_id}") {
+                    uplink.client_id.replace("{edge_id}", edge_id)
+                } else if let Some(suffix) = uplink.client_id.strip_prefix("edge-dev") {
+                    format!("{edge_id}{suffix}")
+                } else {
+                    uplink.client_id
+                };
+                uplink
+            })
+            .collect(),
+        data_configs: version.data_configs.clone(),
+        point_mappings,
+        collection_tasks: version.collection_tasks.clone(),
+        algorithms: version.algorithms.clone(),
+    })
 }
 
 fn edge_display_name(edge: &EdgeNode) -> String {
@@ -2993,6 +4728,97 @@ fn agent_suggestion_list(store: &cloud_control::CloudControlStore) -> Vec<AgentS
             state: "可查看".to_string(),
         },
     ]
+}
+
+fn build_agent_context(
+    store: &cloud_control::CloudControlStore,
+    project_id: Option<&str>,
+    edge_id: Option<&str>,
+) -> Result<serde_json::Value, (StatusCode, Json<ErrorResponse>)> {
+    let project_id = project_id.map(str::trim).filter(|value| !value.is_empty());
+    let edge_id = edge_id.map(str::trim).filter(|value| !value.is_empty());
+    if let Some(project_id) = project_id {
+        if store.project(project_id).is_none() {
+            return Err(error(
+                StatusCode::NOT_FOUND,
+                "missing Agent context project",
+            ));
+        }
+    }
+    let edge = if let Some(edge_id) = edge_id {
+        Some(
+            store
+                .edge_nodes()
+                .find(|edge| edge.edge_id == edge_id)
+                .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing Agent context edge"))?,
+        )
+    } else {
+        None
+    };
+    if let (Some(project_id), Some(edge)) = (project_id, edge) {
+        if edge.project_id.as_deref() != Some(project_id) {
+            return Err(error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Agent context edge does not belong to project",
+            ));
+        }
+    }
+
+    let package = edge.and_then(|edge| store.latest_config_package_for_edge(&edge.edge_id));
+    let metrics = edge.and_then(|edge| store.runtime_metrics(&edge.edge_id));
+    let online_count = store
+        .runtime_metrics_snapshots()
+        .filter(|snapshot| snapshot.health != EdgeHealth::Offline)
+        .count();
+    let context = serde_json::json!({
+        "contextVersion": "edgeops-agent-context/v1",
+        "fleet": {
+            "edgeCount": store.edge_nodes().count(),
+            "onlineCount": online_count,
+        },
+        "governance": {
+            "pendingReleaseCount": store
+                .releases()
+                .filter(|release| release.status == ReleaseStatus::Pending)
+                .count(),
+            "pendingProposalCount": store
+                .agent_proposals()
+                .filter(|proposal| proposal.status == AgentProposalStatus::PendingReview)
+                .count(),
+        },
+        "scope": {
+            "projectId": project_id,
+            "edgeId": edge_id,
+        },
+        "edge": edge.map(|edge| serde_json::json!({
+            "edgeId": edge.edge_id,
+            "displayName": edge.display_name,
+            "site": edge.site,
+            "projectId": edge.project_id,
+            "productId": edge.product_id,
+            "desiredProductVersion": edge.desired_product_version,
+            "reportedProductVersion": edge.reported_product_version,
+        })),
+        "runtime": metrics.map(|metrics| serde_json::json!({
+            "health": format_health(metrics.health),
+            "configVersion": metrics.config_version,
+            "cpuPercent": metrics.system.cpu_percent,
+            "memoryPercent": metrics.system.memory_percent,
+            "diskPercent": metrics.system.disk_percent,
+            "collectionSuccessRate": metrics.collection.success_rate,
+            "pendingUploads": metrics.cloud_sync.pending_uploads,
+        })),
+        "configuration": package.map(|package| serde_json::json!({
+            "version": package.version,
+            "protocolConnectionCount": package.protocol_connections.len(),
+            "pointCount": package.point_mappings.len(),
+            "collectionTaskCount": package.collection_tasks.len(),
+            "algorithmCount": package.algorithms.len(),
+            "dataConfigCount": package.data_configs.len(),
+            "mqttSinkCount": package.mqtt_uplinks.len(),
+        })),
+    });
+    Ok(context)
 }
 
 fn point_mapping_response(
@@ -3124,7 +4950,9 @@ fn data_config_visual_graph_response(graph: &DataConfigVisualGraph) -> DataConfi
             .map(|edge| DataConfigGraphEdgeDto {
                 edge_id: edge.edge_id.clone(),
                 from: edge.from.clone(),
+                from_port: edge.from_port.clone(),
                 to: edge.to.clone(),
+                to_port: edge.to_port.clone(),
             })
             .collect(),
     }
@@ -3153,6 +4981,16 @@ fn protocol_connection_response(
             .endpoint
             .clone()
             .unwrap_or_else(|| "runtime://simulated".to_string()),
+        serial: connection
+            .serial
+            .as_ref()
+            .map(|serial| SerialConnectionSettingsDto {
+                port: serial.port.clone(),
+                baud_rate: serial.baud_rate,
+                data_bits: serial.data_bits,
+                stop_bits: serial.stop_bits,
+                parity: serial.parity.clone(),
+            }),
         status: connected
             .map(|connected| {
                 if connected {
@@ -3162,8 +5000,118 @@ fn protocol_connection_response(
                 }
             })
             .unwrap_or_else(|| "启用".to_string()),
-        policy: "1000ms timeout / 3 retry".to_string(),
+        policy: connection
+            .serial
+            .as_ref()
+            .map(format_serial_policy)
+            .unwrap_or_else(|| "1000ms timeout / 3 retry".to_string()),
     }
+}
+
+fn normalize_connection_transport(
+    protocol: ProtocolType,
+    endpoint: Option<String>,
+    requested_serial: Option<SerialConnectionSettingsDto>,
+    existing_serial: Option<&SerialConnectionSettings>,
+) -> Result<(Option<String>, Option<SerialConnectionSettings>), (StatusCode, Json<ErrorResponse>)> {
+    let endpoint = endpoint.and_then(|value| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    });
+    if !is_serial_protocol(protocol) {
+        return Ok((endpoint, None));
+    }
+
+    let mut serial = if let Some(requested) = requested_serial {
+        SerialConnectionSettings {
+            port: requested.port.trim().to_string(),
+            baud_rate: requested.baud_rate,
+            data_bits: requested.data_bits,
+            stop_bits: requested.stop_bits,
+            parity: requested.parity,
+        }
+    } else if let Some(existing) = existing_serial {
+        existing.clone()
+    } else {
+        default_serial_settings(protocol, endpoint.clone().unwrap_or_default())
+    };
+
+    if let Some(endpoint) = endpoint {
+        serial.port = endpoint;
+    }
+    serial.port = serial.port.trim().to_string();
+    if serial.port.is_empty() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "serial port is required for the selected protocol",
+        ));
+    }
+    if serial.baud_rate == 0 {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "baudRate must be greater than zero",
+        ));
+    }
+    if !(5..=8).contains(&serial.data_bits) {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "dataBits must be between 5 and 8",
+        ));
+    }
+    if !matches!(serial.stop_bits, 1 | 2) {
+        return Err(error(StatusCode::BAD_REQUEST, "stopBits must be 1 or 2"));
+    }
+    serial.parity = normalize_parity(&serial.parity)?;
+
+    Ok((Some(serial.port.clone()), Some(serial)))
+}
+
+fn is_serial_protocol(protocol: ProtocolType) -> bool {
+    matches!(
+        protocol,
+        ProtocolType::ModbusRtu
+            | ProtocolType::Dlt645
+            | ProtocolType::Iec101
+            | ProtocolType::CustomSerial
+    )
+}
+
+fn default_serial_settings(protocol: ProtocolType, port: String) -> SerialConnectionSettings {
+    let baud_rate = if protocol == ProtocolType::Dlt645 {
+        2_400
+    } else {
+        9_600
+    };
+    let parity = if matches!(protocol, ProtocolType::Dlt645 | ProtocolType::Iec101) {
+        "even"
+    } else {
+        "none"
+    };
+    SerialConnectionSettings::new(port, baud_rate).with_parity(parity)
+}
+
+fn normalize_parity(parity: &str) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+    match parity.trim().to_ascii_lowercase().as_str() {
+        "n" | "none" => Ok("none".to_string()),
+        "e" | "even" => Ok("even".to_string()),
+        "o" | "odd" => Ok("odd".to_string()),
+        _ => Err(error(
+            StatusCode::BAD_REQUEST,
+            "parity must be none, even, or odd",
+        )),
+    }
+}
+
+fn format_serial_policy(serial: &SerialConnectionSettings) -> String {
+    let parity = match serial.parity.as_str() {
+        "even" => "E",
+        "odd" => "O",
+        _ => "N",
+    };
+    format!(
+        "{} baud · {}{}{}",
+        serial.baud_rate, serial.data_bits, parity, serial.stop_bits
+    )
 }
 
 fn algorithm_response(package: &EdgeConfigPackage, algorithm: &AlgorithmSpec) -> AlgorithmResponse {
@@ -3267,6 +5215,704 @@ fn next_device_model_type(package: &EdgeConfigPackage) -> String {
     }
 }
 
+fn validate_catalog_id(label: &str, value: &str) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("{label} is required"),
+        ));
+    }
+    if !value
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("{label} contains unsupported characters"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_required_text(
+    label: &str,
+    value: &str,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if value.trim().is_empty() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("{label} is required"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_project_request(
+    request: &SaveProjectRequest,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    validate_catalog_id("projectId", &request.project_id)?;
+    validate_required_text("name", &request.name)?;
+    validate_required_text("environment", &request.environment)?;
+    validate_required_text("owner", &request.owner)
+}
+
+fn build_project(request: SaveProjectRequest, existing: Option<Project>) -> Project {
+    let now = Utc::now();
+    Project {
+        project_id: request.project_id,
+        name: request.name.trim().to_string(),
+        environment: request.environment.trim().to_string(),
+        owner: request.owner.trim().to_string(),
+        description: request.description.trim().to_string(),
+        created_at: existing
+            .as_ref()
+            .map(|project| project.created_at)
+            .unwrap_or(now),
+        updated_at: now,
+    }
+}
+
+fn validate_point_set_request(
+    request: &SavePointSetRequest,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    validate_catalog_id("pointSetId", &request.point_set_id)?;
+    validate_catalog_id("projectId", &request.project_id)?;
+    validate_required_text("name", &request.name)?;
+    let mut point_ids = BTreeSet::new();
+    for point in &request.points {
+        validate_catalog_id("pointId", &point.point_id)?;
+        validate_required_text("semanticId", &point.semantic_id)?;
+        validate_required_text("address.kind", &point.address.kind)?;
+        validate_required_text("address.value", &point.address.value)?;
+        if request.protocol == ProtocolType::CustomSerial {
+            if point.address.kind != "custom_serial_frame" {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "point {} must use custom_serial_frame address kind",
+                        point.point_id
+                    ),
+                ));
+            }
+            let spec = serde_json::from_str::<CustomSerialPointSpec>(&point.address.value)
+                .map_err(|parse_error| {
+                    error(
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "point {} custom serial frame is invalid JSON: {parse_error}",
+                            point.point_id
+                        ),
+                    )
+                })?;
+            validate_custom_serial_point_spec(&spec).map_err(|validation_error| {
+                error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "point {} custom serial frame is invalid: {validation_error}",
+                        point.point_id
+                    ),
+                )
+            })?;
+        }
+        if point.interval_ms == 0 {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "point {} intervalMs must be greater than zero",
+                    point.point_id
+                ),
+            ));
+        }
+        if !point_ids.insert(point.point_id.as_str()) {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "duplicate point id in point set",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn build_point_set(request: SavePointSetRequest, existing: Option<PointSet>) -> PointSet {
+    let now = Utc::now();
+    PointSet {
+        point_set_id: request.point_set_id,
+        project_id: request.project_id,
+        name: request.name.trim().to_string(),
+        description: request.description.trim().to_string(),
+        protocol: request.protocol,
+        points: request.points,
+        created_at: existing
+            .as_ref()
+            .map(|point_set| point_set.created_at)
+            .unwrap_or(now),
+        updated_at: now,
+    }
+}
+
+fn validate_product_request(
+    request: &SaveProductRequest,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    validate_catalog_id("productId", &request.product_id)?;
+    validate_catalog_id("projectId", &request.project_id)?;
+    validate_required_text("name", &request.name)?;
+    validate_required_text("productType", &request.product_type)
+}
+
+fn build_product(request: SaveProductRequest, existing: Option<Product>) -> Product {
+    let now = Utc::now();
+    Product {
+        product_id: request.product_id,
+        project_id: request.project_id,
+        name: request.name.trim().to_string(),
+        product_type: request.product_type.trim().to_string(),
+        description: request.description.trim().to_string(),
+        latest_version: existing
+            .as_ref()
+            .and_then(|product| product.latest_version.clone()),
+        created_at: existing
+            .as_ref()
+            .map(|product| product.created_at)
+            .unwrap_or(now),
+        updated_at: now,
+    }
+}
+
+fn ensure_project_exists(
+    store: &cloud_control::CloudControlStore,
+    project_id: &str,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if store.project(project_id).is_none() {
+        return Err(error(StatusCode::NOT_FOUND, "missing project"));
+    }
+    Ok(())
+}
+
+fn validate_product_version_request(
+    product_id: &str,
+    request: &SaveProductVersionRequest,
+    state: &AppState,
+    updating: bool,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    validate_catalog_id("productId", product_id)?;
+    validate_catalog_id("version", &request.version)?;
+    let store = state.store.lock().expect("store mutex poisoned");
+    let product = store
+        .product(product_id)
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing product"))?;
+    if !updating
+        && store
+            .product_version(product_id, &request.version)
+            .is_some()
+    {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "product version already exists",
+        ));
+    }
+
+    let mut point_set_ids = BTreeSet::new();
+    for point_set_id in &request.point_set_ids {
+        if !point_set_ids.insert(point_set_id.as_str()) {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "duplicate point set reference in product version",
+            ));
+        }
+        let point_set = store
+            .point_set(point_set_id)
+            .ok_or_else(|| error(StatusCode::BAD_REQUEST, "missing product point set"))?;
+        if point_set.project_id != product.project_id {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "product version cannot reference a point set from another project",
+            ));
+        }
+    }
+
+    ensure_unique_ids(
+        request
+            .protocol_connections
+            .iter()
+            .map(|connection| connection.connection_id.as_str()),
+        "protocol connection",
+    )?;
+    ensure_unique_ids(
+        request
+            .collection_tasks
+            .iter()
+            .map(|task| task.task_id.as_str()),
+        "collection task",
+    )?;
+    ensure_unique_ids(
+        request
+            .algorithms
+            .iter()
+            .map(|algorithm| algorithm.id.as_str()),
+        "algorithm",
+    )?;
+    ensure_unique_ids(
+        request
+            .data_configs
+            .iter()
+            .map(|config| config.config_id.as_str()),
+        "data config",
+    )?;
+    ensure_unique_ids(
+        request
+            .mqtt_uplinks
+            .iter()
+            .map(|uplink| uplink.sink_id.as_str()),
+        "MQTT sink",
+    )?;
+    for uplink in &request.mqtt_uplinks {
+        if uplink.username.is_some() != uplink.password_env.is_some() {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "MQTT sink {} username and password environment reference must be configured together",
+                    uplink.sink_id
+                ),
+            ));
+        }
+        if uplink
+            .username
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+            || uplink
+                .password_env
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "MQTT sink {} credential references must not be empty",
+                    uplink.sink_id
+                ),
+            ));
+        }
+        if uplink
+            .tls_ca_path
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!("MQTT sink {} TLS CA path must not be empty", uplink.sink_id),
+            ));
+        }
+        if uplink.tls_ca_path.is_some()
+            && !matches!(
+                uplink
+                    .broker
+                    .split_once("://")
+                    .map(|(scheme, _)| scheme.to_ascii_lowercase())
+                    .as_deref(),
+                Some("mqtts" | "ssl")
+            )
+        {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "MQTT sink {} TLS CA path requires an mqtts:// broker",
+                    uplink.sink_id
+                ),
+            ));
+        }
+    }
+
+    let connection_ids = request
+        .protocol_connections
+        .iter()
+        .map(|connection| connection.connection_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let algorithm_ids = request
+        .algorithms
+        .iter()
+        .map(|algorithm| algorithm.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let sink_ids = request
+        .mqtt_uplinks
+        .iter()
+        .map(|uplink| uplink.sink_id.as_str())
+        .collect::<BTreeSet<_>>();
+    for config in &request.data_configs {
+        if !connection_ids.contains(config.protocol_connection_id.as_str()) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "data config {} references missing protocol connection {}",
+                    config.config_id, config.protocol_connection_id
+                ),
+            ));
+        }
+        if !sink_ids.contains(config.publish.sink_id.as_str()) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "data config {} references missing MQTT sink {}",
+                    config.config_id, config.publish.sink_id
+                ),
+            ));
+        }
+        if let Some(missing) = config
+            .algorithm_ids
+            .iter()
+            .find(|algorithm_id| !algorithm_ids.contains(algorithm_id.as_str()))
+        {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "data config {} references missing algorithm {}",
+                    config.config_id, missing
+                ),
+            ));
+        }
+        validate_data_config_visual_graph(config)
+            .map_err(|cause| error(StatusCode::UNPROCESSABLE_ENTITY, cause))?;
+    }
+    Ok(())
+}
+
+fn ensure_unique_ids<'a>(
+    ids: impl IntoIterator<Item = &'a str>,
+    label: &str,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    let mut seen = BTreeSet::new();
+    for id in ids {
+        validate_catalog_id(label, id)?;
+        if !seen.insert(id) {
+            return Err(error(StatusCode::CONFLICT, format!("duplicate {label} id")));
+        }
+    }
+    Ok(())
+}
+
+fn validate_publishable_product_version(
+    version: &ProductVersion,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if version.point_set_ids.is_empty() {
+        return Err(error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "product version requires at least one point set before publishing",
+        ));
+    }
+    if version.protocol_connections.is_empty() {
+        return Err(error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "product version requires a protocol connection before publishing",
+        ));
+    }
+    if version.data_configs.is_empty() {
+        return Err(error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "product version requires a data config before publishing",
+        ));
+    }
+    if version.mqtt_uplinks.is_empty() {
+        return Err(error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "product version requires an MQTT sink before publishing",
+        ));
+    }
+    Ok(())
+}
+
+fn build_product_version(
+    product_id: String,
+    request: SaveProductVersionRequest,
+    existing: Option<ProductVersion>,
+) -> ProductVersion {
+    ProductVersion {
+        product_id,
+        version: request.version,
+        status: ProductVersionStatus::Draft,
+        point_set_ids: request.point_set_ids,
+        device_models: request.device_models,
+        devices: request.devices,
+        protocol_connections: request.protocol_connections,
+        collection_tasks: request.collection_tasks,
+        algorithms: request.algorithms,
+        data_configs: request.data_configs,
+        mqtt_uplinks: request.mqtt_uplinks,
+        created_at: existing
+            .map(|version| version.created_at)
+            .unwrap_or_else(Utc::now),
+    }
+}
+
+fn validate_agent_proposal_request(
+    state: &AppState,
+    request: &CreateAgentProposalRequest,
+    created_by: &str,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    for (label, value) in [
+        ("agent id", request.agent_id.as_str()),
+        ("title", request.title.as_str()),
+        ("summary", request.summary.as_str()),
+        ("created by", created_by),
+    ] {
+        if value.trim().is_empty() {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!("{label} is required"),
+            ));
+        }
+    }
+
+    let store = state.store.lock().expect("store mutex poisoned");
+    if let Some(project_id) = request.project_id.as_deref().map(str::trim) {
+        if !project_id.is_empty() && store.project(project_id).is_none() {
+            return Err(error(StatusCode::NOT_FOUND, "missing proposal project"));
+        }
+    }
+    if let Some(edge_id) = request.edge_id.as_deref().map(str::trim) {
+        if !edge_id.is_empty() && !store.edge_nodes().any(|edge| edge.edge_id == edge_id) {
+            return Err(error(StatusCode::NOT_FOUND, "missing proposal edge"));
+        }
+    }
+    Ok(())
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_agent_operator() -> String {
+    "console-operator".to_string()
+}
+
+fn normalized_required_actor(actor: &str) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+    let actor = actor.trim();
+    if actor.is_empty() {
+        return Err(error(StatusCode::BAD_REQUEST, "agent operator is required"));
+    }
+    if actor.chars().count() > 120 {
+        return Err(error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "agent operator exceeds 120 characters",
+        ));
+    }
+    Ok(actor.to_string())
+}
+
+fn effective_actor(
+    principal: &ApiPrincipal,
+    submitted_actor: &str,
+) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+    if principal.authentication_enabled {
+        normalized_required_actor(&principal.subject)
+    } else {
+        normalized_required_actor(submitted_actor)
+    }
+}
+
+fn validate_knowledge_document_request(
+    state: &AppState,
+    request: &SaveKnowledgeDocumentRequest,
+    actor: &str,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    let title = request.title.trim();
+    let content = request.content.trim();
+    if title.is_empty() || content.is_empty() || actor.is_empty() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "knowledge title, content and actor are required",
+        ));
+    }
+    if title.chars().count() > 120
+        || content.chars().count() > 100_000
+        || actor.chars().count() > 120
+        || request
+            .source_uri
+            .as_deref()
+            .is_some_and(|value| value.chars().count() > 500)
+    {
+        return Err(error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "knowledge document exceeds field limits",
+        ));
+    }
+    if request.tags.len() > 20
+        || request
+            .tags
+            .iter()
+            .any(|tag| tag.trim().is_empty() || tag.chars().count() > 64)
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "knowledge tags must contain at most 20 non-empty values of 64 characters",
+        ));
+    }
+    if let Some(project_id) = request
+        .project_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if state
+            .store
+            .lock()
+            .expect("store mutex poisoned")
+            .project(project_id)
+            .is_none()
+        {
+            return Err(error(
+                StatusCode::NOT_FOUND,
+                "missing knowledge document project",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn apply_knowledge_document_request(
+    document: &mut KnowledgeDocument,
+    request: &SaveKnowledgeDocumentRequest,
+) {
+    document.project_id = normalized_optional(request.project_id.clone());
+    document.title = request.title.trim().to_string();
+    document.source_uri = normalized_optional(request.source_uri.clone());
+    document.content = request.content.trim().to_string();
+    document.tags = request
+        .tags
+        .iter()
+        .map(|tag| tag.trim().to_string())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    document.enabled = request.enabled;
+}
+
+fn retrieve_agent_knowledge(
+    store: &cloud_control::CloudControlStore,
+    query: &str,
+    project_id: Option<&str>,
+) -> Vec<serde_json::Value> {
+    let terms = knowledge_search_terms(query);
+    let mut matches = store
+        .knowledge_documents()
+        .filter(|document| {
+            document.enabled
+                && (document.project_id.is_none() || document.project_id.as_deref() == project_id)
+        })
+        .filter_map(|document| {
+            let title = document.title.to_lowercase();
+            let content = document.content.to_lowercase();
+            let tags = document.tags.join(" ").to_lowercase();
+            let score = terms.iter().fold(0usize, |score, term| {
+                score
+                    + usize::from(title.contains(term)) * 5
+                    + usize::from(tags.contains(term)) * 3
+                    + usize::from(content.contains(term))
+            });
+            (score > 0).then_some((score, document))
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by(|(left_score, left), (right_score, right)| {
+        right_score
+            .cmp(left_score)
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+    });
+    matches
+        .into_iter()
+        .take(5)
+        .map(|(_, document)| {
+            serde_json::json!({
+                "documentId": document.document_id,
+                "title": document.title,
+                "sourceUri": document.source_uri,
+                "excerpt": safe_knowledge_excerpt(&document.content, 600),
+            })
+        })
+        .collect()
+}
+
+fn knowledge_search_terms(query: &str) -> BTreeSet<String> {
+    const CJK_STOP: &str = "的是了在和与及或一个这那请帮我如何当前进行支持";
+    let normalized = query.to_lowercase();
+    let mut terms = normalized
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|term| term.chars().count() >= 2 && term.chars().count() <= 32)
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    terms.extend(
+        normalized
+            .chars()
+            .filter(|character| {
+                ('\u{4e00}'..='\u{9fff}').contains(character) && !CJK_STOP.contains(*character)
+            })
+            .map(|character| character.to_string()),
+    );
+    terms
+}
+
+fn safe_knowledge_excerpt(content: &str, max_chars: usize) -> String {
+    const SENSITIVE_MARKERS: [&str; 7] = [
+        "password",
+        "secret",
+        "api_key",
+        "apikey",
+        "access_token",
+        "private key",
+        "authorization:",
+    ];
+    content
+        .lines()
+        .filter(|line| {
+            let normalized = line.to_lowercase();
+            !SENSITIVE_MARKERS
+                .iter()
+                .any(|marker| normalized.contains(marker))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .chars()
+        .take(max_chars)
+        .collect()
+}
+
+fn agent_conversation_title(message: &str) -> String {
+    let title = message.trim().chars().take(48).collect::<String>();
+    if message.trim().chars().count() > 48 {
+        format!("{title}...")
+    } else {
+        title
+    }
+}
+
+fn agent_conversation_history(conversation: &AgentConversation) -> serde_json::Value {
+    serde_json::Value::Array(
+        conversation
+            .messages
+            .iter()
+            .rev()
+            .take(12)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|message| {
+                serde_json::json!({
+                    "role": match message.role {
+                        AgentConversationRole::User => "user",
+                        AgentConversationRole::Assistant => "assistant",
+                    },
+                    "content": message.content,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn normalized_optional(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
 fn error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {
     (
         status,
@@ -3280,6 +5926,13 @@ fn persistence_error(cause: anyhow::Error) -> (StatusCode, Json<ErrorResponse>) 
     error(
         StatusCode::INTERNAL_SERVER_ERROR,
         format!("persist cloud state failed: {cause}"),
+    )
+}
+
+fn agent_provider_error(cause: anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
+    error(
+        StatusCode::BAD_GATEWAY,
+        format!("Agent provider unavailable: {cause}"),
     )
 }
 
@@ -3324,11 +5977,21 @@ fn mqtt_uplink_response(uplink: MqttUplinkConfig) -> MqttUplinkResponse {
         sink_id: uplink.sink_id,
         broker: uplink.broker,
         client_id: uplink.client_id,
+        username: uplink.username,
+        password_env: uplink.password_env,
+        tls_ca_path: uplink.tls_ca_path,
         topic_template: uplink.topic_template,
         qos: uplink.qos,
         batch_size: uplink.batch_size,
         flush_interval_ms: uplink.flush_interval_ms,
     }
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let value = value.trim().to_string();
+        (!value.is_empty()).then_some(value)
+    })
 }
 
 fn discovery_report_response(report: DiscoveryReport) -> DiscoveryReportResponse {
@@ -3457,6 +6120,14 @@ fn format_audit_action(action: AuditAction) -> String {
         AuditAction::CreateRelease => "create_release",
         AuditAction::ApplyRelease => "apply_release",
         AuditAction::UpdateConfig => "update_config",
+        AuditAction::CreateAgentProposal => "create_agent_proposal",
+        AuditAction::ApproveAgentProposal => "approve_agent_proposal",
+        AuditAction::RejectAgentProposal => "reject_agent_proposal",
+        AuditAction::CreateKnowledgeDocument => "create_knowledge_document",
+        AuditAction::UpdateKnowledgeDocument => "update_knowledge_document",
+        AuditAction::DeleteKnowledgeDocument => "delete_knowledge_document",
+        AuditAction::CreateAgentConversation => "create_agent_conversation",
+        AuditAction::DeleteAgentConversation => "delete_agent_conversation",
     }
     .to_string()
 }

@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -10,15 +10,19 @@ use edge_core::{
     TelemetrySample, TelemetryValue,
 };
 use edge_runtime::{
+    publish_edgelink_runtime_daemon_session, publish_edgelink_runtime_status_authenticated_once,
+    publish_edgelink_runtime_status_tls_once,
     publish_edgelink_runtime_status_with_mqtt_uplink_once,
     publish_edgelink_runtime_status_with_store_and_capabilities_once,
-    sync_and_report_mqtt_uplink_once, sync_and_report_once, CollectionRunStats, CollectionSchedule,
-    ConfiguredEdgeRuntime, DataConfigSchedule, EdgeConfigSyncClient, EdgeRuntime,
-    HttpEdgeConfigSyncClient, HttpRuntimeStatusReporter, JsonlLocalStore, MqttPublisher,
-    RocksEdgeRuntimeStore, RumqttcMqttPublisher, RuntimeCapabilityConfig, RuntimeStatusReporter,
-    SimulatedProtocolAdapter, SimulatedRuntimeMetricsCollector, TokioSerialBusFactory,
+    sync_and_report_mqtt_uplink_with_store_once, sync_and_report_once, AppliedEdgeConfig,
+    CollectionRunStats, CollectionSchedule, ConfiguredEdgeRuntime, DataConfigSchedule,
+    EdgeConfigSyncClient, EdgeLinkClientTlsConfig, EdgeRuntime, HttpEdgeConfigSyncClient,
+    HttpRuntimeStatusReporter, JsonlLocalStore, MqttOutboxStats, MqttPublisher,
+    MultiBrokerMqttPublisher, RocksEdgeRuntimeStore, RuntimeCapabilityConfig,
+    RuntimeStatusReporter, SimulatedProtocolAdapter, SimulatedRuntimeMetricsCollector,
+    TokioSerialBusFactory,
 };
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Debug, Parser)]
 #[command(name = "edge-runtime")]
@@ -39,7 +43,25 @@ struct Args {
     #[arg(long)]
     cloud_gateway_addr: Option<String>,
     #[arg(long)]
+    edgelink_tls_ca: Option<PathBuf>,
+    #[arg(long)]
+    edgelink_tls_cert: Option<PathBuf>,
+    #[arg(long)]
+    edgelink_tls_key: Option<PathBuf>,
+    #[arg(long, default_value = "localhost")]
+    edgelink_tls_server_name: String,
+    #[arg(long)]
+    access_token: Option<String>,
+    #[arg(long, conflicts_with = "access_token")]
+    access_token_env: Option<String>,
+    #[arg(long)]
     mqtt_uplink: bool,
+    #[arg(long)]
+    edgelink_daemon: bool,
+    #[arg(long, default_value_t = 30_000)]
+    edgelink_command_wait_ms: u64,
+    #[arg(long, default_value_t = 1_000)]
+    edgelink_reconnect_ms: u64,
     #[arg(long, default_value_t = 0)]
     scheduled_ticks: u32,
     #[arg(long, default_value_t = 1000)]
@@ -56,13 +78,97 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
-    if let Some(cloud_gateway_addr) = args.cloud_gateway_addr {
-        let snapshot = runtime_metrics_snapshot(&args.edge_id, &args.runtime_id, &args.storage);
+    if let Some(cloud_gateway_addr) = args.cloud_gateway_addr.as_deref() {
+        let access_token = resolve_access_token(&args)?;
+        let edgelink_tls = load_edgelink_tls_config(&args)?;
         let runtime_store = RocksEdgeRuntimeStore::open(&args.runtime_db)?;
         let capabilities = RuntimeCapabilityConfig::serial_mqtt_defaults().capabilities();
-        let report = if args.mqtt_uplink {
+        if args.edgelink_daemon {
+            loop {
+                let active_config = runtime_store
+                    .recover_active_config(&args.edge_id)
+                    .context("failed to recover active runtime config")?;
+                let snapshot = runtime_metrics_snapshot(
+                    &args.edge_id,
+                    &args.runtime_id,
+                    &args.storage,
+                    active_config,
+                    Some(runtime_store.mqtt_outbox_stats()?),
+                );
+                match publish_edgelink_runtime_daemon_session(
+                    cloud_gateway_addr,
+                    &args.edge_id,
+                    &args.runtime_id,
+                    env!("CARGO_PKG_VERSION"),
+                    snapshot,
+                    Vec::new(),
+                    &runtime_store,
+                    capabilities.clone(),
+                    access_token.as_deref(),
+                    args.mqtt_uplink,
+                    edgelink_tls.as_ref(),
+                    Duration::from_millis(args.edgelink_command_wait_ms),
+                )
+                .await
+                {
+                    Ok(report) => info!(
+                        edge_id = %report.edge_id,
+                        runtime_id = %report.runtime_id,
+                        acked_message_count = report.acked_message_count,
+                        discovery_reports_published = report.discovery_reports_published,
+                        "edgelink daemon session completed"
+                    ),
+                    Err(error) => warn!(
+                        edge_id = %args.edge_id,
+                        error = %error,
+                        "edgelink daemon session failed; reconnecting"
+                    ),
+                }
+                tokio::time::sleep(Duration::from_millis(args.edgelink_reconnect_ms)).await;
+            }
+        }
+        let active_config = runtime_store
+            .recover_active_config(&args.edge_id)
+            .context("failed to recover active runtime config")?;
+        let snapshot = runtime_metrics_snapshot(
+            &args.edge_id,
+            &args.runtime_id,
+            &args.storage,
+            active_config,
+            Some(runtime_store.mqtt_outbox_stats()?),
+        );
+        let report = if let Some(tls_config) = edgelink_tls.as_ref() {
+            publish_edgelink_runtime_status_tls_once(
+                cloud_gateway_addr,
+                &args.edge_id,
+                &args.runtime_id,
+                env!("CARGO_PKG_VERSION"),
+                snapshot,
+                Vec::new(),
+                &runtime_store,
+                capabilities,
+                access_token.as_deref(),
+                args.mqtt_uplink,
+                tls_config,
+            )
+            .await?
+        } else if let Some(access_token) = access_token.as_deref() {
+            publish_edgelink_runtime_status_authenticated_once(
+                cloud_gateway_addr,
+                &args.edge_id,
+                &args.runtime_id,
+                env!("CARGO_PKG_VERSION"),
+                snapshot,
+                Vec::new(),
+                &runtime_store,
+                capabilities,
+                access_token,
+                args.mqtt_uplink,
+            )
+            .await?
+        } else if args.mqtt_uplink {
             publish_edgelink_runtime_status_with_mqtt_uplink_once(
-                &cloud_gateway_addr,
+                cloud_gateway_addr,
                 &args.edge_id,
                 &args.runtime_id,
                 env!("CARGO_PKG_VERSION"),
@@ -74,7 +180,7 @@ async fn main() -> Result<()> {
             .await?
         } else {
             publish_edgelink_runtime_status_with_store_and_capabilities_once(
-                &cloud_gateway_addr,
+                cloud_gateway_addr,
                 &args.edge_id,
                 &args.runtime_id,
                 env!("CARGO_PKG_VERSION"),
@@ -91,7 +197,9 @@ async fn main() -> Result<()> {
             runtime_id = %report.runtime_id,
             gateway_addr = %report.gateway_addr,
             acked_message_count = report.acked_message_count,
+            samples_collected = report.samples_collected,
             mqtt_messages_published = report.mqtt_messages_published,
+            discovery_reports_published = report.discovery_reports_published,
             runtime_db = %args.runtime_db.display(),
             "edgelink runtime status report completed"
         );
@@ -100,6 +208,7 @@ async fn main() -> Result<()> {
     }
 
     if let Some(cloud_api_url) = args.cloud_api_url {
+        let runtime_store = RocksEdgeRuntimeStore::open(&args.runtime_db)?;
         let mut config_client = HttpEdgeConfigSyncClient::new(&cloud_api_url)?;
         let mut runtime_reporter = HttpRuntimeStatusReporter::new(&cloud_api_url)?;
         if args.scheduled_ticks > 0 {
@@ -111,6 +220,7 @@ async fn main() -> Result<()> {
                 args.scheduled_ticks,
                 args.scheduler_tick_ms,
                 args.mqtt_uplink,
+                &runtime_store,
             )
             .await?;
 
@@ -130,11 +240,12 @@ async fn main() -> Result<()> {
         }
 
         if args.mqtt_uplink {
-            let report = sync_and_report_mqtt_uplink_once(
+            let report = sync_and_report_mqtt_uplink_with_store_once(
                 &args.edge_id,
                 &args.runtime_id,
                 &mut config_client,
                 &mut runtime_reporter,
+                &runtime_store,
             )
             .await?;
 
@@ -194,6 +305,54 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+fn resolve_access_token(args: &Args) -> Result<Option<String>> {
+    if let Some(variable_name) = args.access_token_env.as_deref() {
+        let variable_name = variable_name.trim();
+        anyhow::ensure!(
+            !variable_name.is_empty(),
+            "--access-token-env cannot be empty"
+        );
+        let token = std::env::var(variable_name).with_context(|| {
+            format!("missing EdgeLink access token environment variable {variable_name}")
+        })?;
+        anyhow::ensure!(
+            !token.trim().is_empty(),
+            "EdgeLink access token environment variable {variable_name} is empty"
+        );
+        return Ok(Some(token));
+    }
+
+    Ok(args.access_token.clone())
+}
+
+fn load_edgelink_tls_config(args: &Args) -> Result<Option<EdgeLinkClientTlsConfig>> {
+    match (
+        args.edgelink_tls_ca.as_ref(),
+        args.edgelink_tls_cert.as_ref(),
+        args.edgelink_tls_key.as_ref(),
+    ) {
+        (None, None, None) => Ok(None),
+        (Some(ca_path), Some(cert_path), Some(key_path)) => Ok(Some(EdgeLinkClientTlsConfig {
+            ca_cert_pem: std::fs::read_to_string(ca_path).with_context(|| {
+                format!("failed to read EdgeLink CA certificate {}", ca_path.display())
+            })?,
+            client_cert_pem: std::fs::read_to_string(cert_path).with_context(|| {
+                format!(
+                    "failed to read EdgeLink client certificate {}",
+                    cert_path.display()
+                )
+            })?,
+            client_key_pem: std::fs::read_to_string(key_path).with_context(|| {
+                format!("failed to read EdgeLink client key {}", key_path.display())
+            })?,
+            server_name: args.edgelink_tls_server_name.clone(),
+        })),
+        _ => anyhow::bail!(
+            "--edgelink-tls-ca, --edgelink-tls-cert and --edgelink-tls-key must be configured together"
+        ),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ScheduledCloudRunReport {
     applied_version: String,
@@ -211,12 +370,14 @@ async fn run_scheduled_cloud_ticks<C, R>(
     scheduled_ticks: u32,
     scheduler_tick_ms: u64,
     mqtt_uplink: bool,
+    store: &RocksEdgeRuntimeStore,
 ) -> Result<ScheduledCloudRunReport>
 where
     C: EdgeConfigSyncClient + Send,
     R: RuntimeStatusReporter + Send,
 {
     let desired = config_client.fetch_desired_config(edge_id).await?;
+    store.put_desired_config(&desired.package)?;
     if desired.package.edge_id != edge_id {
         anyhow::bail!(
             "desired package targets edge {}, but runtime is {}",
@@ -234,12 +395,8 @@ where
 
     let applied = edge_runtime::AppliedEdgeConfig::apply(desired.package.clone())?;
     if mqtt_uplink && !applied.package().data_configs.is_empty() {
-        let uplink = applied
-            .package()
-            .mqtt_uplinks
-            .first()
-            .context("scheduled data config mqtt uplink requires at least one mqtt sink")?;
-        let mut publisher = RumqttcMqttPublisher::connect_from_uplink(uplink)?;
+        let mut publisher =
+            MultiBrokerMqttPublisher::connect_from_uplinks(&applied.package().mqtt_uplinks)?;
         return run_scheduled_data_config_ticks(
             edge_id,
             runtime_id,
@@ -248,6 +405,7 @@ where
             applied,
             scheduled_ticks,
             scheduler_tick_ms,
+            store,
             &mut publisher,
         )
         .await;
@@ -291,11 +449,13 @@ where
     }
 
     let applied_version = runtime.reported_version().to_string();
+    store.promote_active_config(edge_id, &applied_version)?;
     config_client
         .report_applied_version(edge_id, &applied_version)
         .await?;
     let snapshot = SimulatedRuntimeMetricsCollector::new(runtime_id, applied)
         .with_collection_metrics(stats.metrics())
+        .with_mqtt_outbox_stats(store.mqtt_outbox_stats()?)
         .snapshot();
     runtime_reporter.report_metrics(snapshot).await?;
     let events_reported = failure_events.len();
@@ -320,6 +480,7 @@ async fn run_scheduled_data_config_ticks<C, R, P>(
     applied: edge_runtime::AppliedEdgeConfig,
     scheduled_ticks: u32,
     scheduler_tick_ms: u64,
+    store: &RocksEdgeRuntimeStore,
     publisher: &mut P,
 ) -> Result<ScheduledCloudRunReport>
 where
@@ -327,6 +488,7 @@ where
     R: RuntimeStatusReporter + Send,
     P: MqttPublisher + Send,
 {
+    store.put_desired_config(applied.package())?;
     let mut schedule = DataConfigSchedule::from_package(applied.package())?;
     let mut runtime = ConfiguredEdgeRuntime::new(applied.package().clone(), TokioSerialBusFactory)?;
     let mut stats = CollectionRunStats::new(
@@ -346,7 +508,12 @@ where
         let now_ms = u64::from(tick).saturating_mul(scheduler_tick_ms);
         let started = Instant::now();
         let report = runtime
-            .collect_due_data_configs_resilient_once(&mut schedule, now_ms, publisher)
+            .collect_due_data_configs_resilient_once_with_outbox(
+                &mut schedule,
+                now_ms,
+                store,
+                publisher,
+            )
             .await?;
         let latency_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
         stats.record_tick(
@@ -367,11 +534,13 @@ where
     }
 
     let applied_version = runtime.reported_version().to_string();
+    store.promote_active_config(edge_id, &applied_version)?;
     config_client
         .report_applied_version(edge_id, &applied_version)
         .await?;
     let snapshot = SimulatedRuntimeMetricsCollector::new(runtime_id, applied)
         .with_collection_metrics(stats.metrics())
+        .with_mqtt_outbox_stats(store.mqtt_outbox_stats()?)
         .snapshot();
     runtime_reporter.report_metrics(snapshot).await?;
     let events_reported = failure_events.len();
@@ -392,8 +561,10 @@ fn runtime_metrics_snapshot(
     edge_id: &str,
     runtime_id: &str,
     storage: &std::path::Path,
+    active_config: Option<AppliedEdgeConfig>,
+    mqtt_outbox_stats: Option<MqttOutboxStats>,
 ) -> EdgeRuntimeMetricsSnapshot {
-    EdgeRuntimeMetricsSnapshot {
+    let fallback = EdgeRuntimeMetricsSnapshot {
         edge_id: edge_id.to_string(),
         runtime_id: runtime_id.to_string(),
         config_version: "local-runtime".to_string(),
@@ -438,7 +609,37 @@ fn runtime_metrics_snapshot(
             desired_version: "local-runtime".to_string(),
             reported_version: "local-runtime".to_string(),
         },
+    };
+    let Some(active_config) = active_config else {
+        return apply_outbox_stats(fallback, mqtt_outbox_stats);
+    };
+
+    let mut collector = SimulatedRuntimeMetricsCollector::new(runtime_id, active_config);
+    if let Some(stats) = mqtt_outbox_stats {
+        collector = collector.with_mqtt_outbox_stats(stats);
     }
+    let mut recovered = collector.snapshot();
+    recovered.timestamp = fallback.timestamp;
+    recovered.system = fallback.system;
+    recovered.local_store = fallback.local_store;
+    apply_outbox_stats(recovered, mqtt_outbox_stats)
+}
+
+fn apply_outbox_stats(
+    mut snapshot: EdgeRuntimeMetricsSnapshot,
+    stats: Option<MqttOutboxStats>,
+) -> EdgeRuntimeMetricsSnapshot {
+    let Some(stats) = stats else {
+        return snapshot;
+    };
+    snapshot.local_store.backend = "rocksdb-mqtt-outbox".to_string();
+    snapshot.local_store.buffered_records = stats.pending_messages;
+    snapshot.local_store.oldest_buffer_age_seconds = stats.oldest_message_age_seconds;
+    snapshot.cloud_sync.pending_uploads = stats.pending_messages;
+    if stats.pending_messages > 0 {
+        snapshot.health = EdgeHealth::Degraded;
+    }
+    snapshot
 }
 
 #[cfg(test)]
@@ -450,6 +651,7 @@ mod tests {
         MqttUplinkConfig, PointAddress, ProtocolConnection, TelemetryPointMapping, TelemetryType,
     };
     use edge_runtime::{AppliedEdgeConfig, EdgeDesiredConfig, RecordingMqttPublisher};
+    use tempfile::tempdir;
 
     use super::*;
 
@@ -583,6 +785,8 @@ mod tests {
         };
         let mut reporter = MemoryRuntimeReporter::default();
         let mut publisher = RecordingMqttPublisher::default();
+        let dir = tempdir().unwrap();
+        let store = RocksEdgeRuntimeStore::open(dir.path().join("runtime.rocksdb")).unwrap();
 
         let report = run_scheduled_data_config_ticks(
             "edge-dev",
@@ -592,6 +796,7 @@ mod tests {
             applied,
             2,
             1000,
+            &store,
             &mut publisher,
         )
         .await
@@ -613,6 +818,11 @@ mod tests {
         assert_eq!(reporter.metrics[0].collection.active_task_count, 2);
         assert_eq!(reporter.metrics[0].collection.success_rate, 1.0);
         assert_eq!(publisher.messages().len(), 3);
+        assert_eq!(
+            store.active_version("edge-dev").unwrap().as_deref(),
+            Some("2026.07.01-scheduled-data")
+        );
+        assert_eq!(store.mqtt_outbox_len().unwrap(), 0);
         assert_eq!(
             publisher.messages()[0].topic,
             "factory/edge-dev/pump-1/status"

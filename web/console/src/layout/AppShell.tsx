@@ -1,22 +1,30 @@
 import {
   Activity,
   Bot,
-  Cpu,
+  Boxes,
+  Database,
+  FolderKanban,
   LayoutDashboard,
+  LogOut,
   RadioTower,
-  Search,
   ScrollText,
   ShieldCheck,
+  Sparkles,
+  UserRound,
   type LucideIcon,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 
+import type { AuthStatusResponse } from '../api/types';
 import './AppShell.css';
 
 export type PageKey =
   | 'dashboard'
   | 'edges'
   | 'edgeConfig'
+  | 'projects'
+  | 'products'
+  | 'points'
   | 'deviceModels'
   | 'protocolConnections'
   | 'dataConfigs'
@@ -34,9 +42,10 @@ interface NavItem {
 
 export const navItems: NavItem[] = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { key: 'projects', label: '项目管理', icon: FolderKanban },
+  { key: 'products', label: '产品管理', icon: Boxes },
+  { key: 'points', label: '点位管理', icon: Database },
   { key: 'edges', label: '边端管理', icon: RadioTower },
-  { key: 'deviceModels', label: '设备模型', icon: Cpu },
-  { key: 'discovery', label: '点位探测', icon: Search },
   { key: 'runtimeStatus', label: '运行状态', icon: Activity },
   { key: 'auditLog', label: '审计日志', icon: ScrollText },
   { key: 'agentAssistant', label: 'Agent 助手', icon: Bot },
@@ -56,22 +65,26 @@ export interface PlatformStatus {
 }
 
 const defaultPlatformStatus: PlatformStatus = {
-  environment: 'staging',
+  environment: '未配置',
   onlineEdgeCount: 0,
   pendingReleaseCount: 0,
-  project: 'demo-plant',
+  project: '暂无项目',
 };
 
 export function AppShell({
   activePage,
   children,
   onNavigate,
+  onLogout,
   platformStatus = defaultPlatformStatus,
+  principal,
 }: {
   activePage: PageKey;
   children: ReactNode;
   onNavigate: (page: PageKey) => void;
+  onLogout?: () => void;
   platformStatus?: PlatformStatus;
+  principal?: AuthStatusResponse;
 }) {
   const activeTitle = pageTitleByKey.get(activePage) ?? 'Dashboard';
   const releaseStatus =
@@ -83,9 +96,11 @@ export function AppShell({
     <div className="app-shell">
       <aside className="sidebar" aria-label="主导航">
         <div className="brand">
-          <strong>EdgeOps Cloud</strong>
-          <span>边云一体化管理台</span>
+          <div className="brand-mark" aria-hidden="true"><span>EA</span></div>
+          <div><strong>EDGE AGENT</strong><span>Autonomous Edge Fabric</span><span className="sr-only">EdgeOps Cloud</span></div>
         </div>
+
+        <div className="nav-caption">CONTROL CENTER</div>
 
         <nav className="nav-list">
           {navItems.map(({ key, label, icon: Icon }) => (
@@ -101,12 +116,18 @@ export function AppShell({
             </button>
           ))}
         </nav>
+
+        <div className="sidebar-footer">
+          <div className="agent-pulse"><span /> Agent Core</div>
+          <strong>系统运行正常</strong>
+          <small>v2.4.0 · 安全策略已启用</small>
+        </div>
       </aside>
 
       <div className="main">
         <header className="topbar">
           <div>
-            <span className="breadcrumb">云端配置 / {activeTitle}</span>
+            <span className="breadcrumb">EDGE AGENT / {activeTitle}</span>
             <h1>{activeTitle}</h1>
           </div>
 
@@ -126,6 +147,27 @@ export function AppShell({
             >
               {releaseStatus}
             </span>
+            <button className="agent-command" type="button" onClick={() => onNavigate('agentAssistant')}>
+              <Sparkles size={14} aria-hidden="true" /> Ask Agent
+            </button>
+            {principal ? (
+              <span className="principal-status" title={principal.subject}>
+                <UserRound size={14} aria-hidden="true" />
+                <span>{principal.subject}</span>
+                <small>{roleLabel(principal.role)}</small>
+              </span>
+            ) : null}
+            {principal?.authenticationEnabled && onLogout ? (
+              <button
+                aria-label="退出控制台"
+                className="icon-command"
+                onClick={onLogout}
+                title="退出控制台"
+                type="button"
+              >
+                <LogOut size={15} aria-hidden="true" />
+              </button>
+            ) : null}
           </div>
         </header>
 
@@ -133,4 +175,8 @@ export function AppShell({
       </div>
     </div>
   );
+}
+
+function roleLabel(role: AuthStatusResponse['role']): string {
+  return { admin: '管理员', operator: '操作员', viewer: '只读' }[role];
 }

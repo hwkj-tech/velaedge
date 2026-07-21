@@ -2,13 +2,21 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  bindEdgeProduct,
+  createAgentProposal,
   createAlgorithmDraft,
   createCollectionTaskDraft,
   createEdgeDataConfig,
-  createDeviceModelDraft,
+  createEdgeNode,
+  createProduct,
+  createProductVersion,
+  createProject,
   createPointMappingDraft,
   fetchAlgorithms,
+  fetchAgentProposals,
+  fetchAgentProviderStatus,
   fetchAuditRecords,
+  fetchAuthStatus,
   fetchCollectionTasks,
   fetchDeviceModels,
   fetchEdgeAlgorithms,
@@ -18,26 +26,42 @@ import {
   fetchEdgeProtocolConnections,
   fetchEdgeNodes,
   fetchPointMappings,
+  fetchPointSets,
+  fetchProducts,
+  fetchProductVersions,
+  fetchProjects,
   fetchProtocolConnections,
   fetchReleaseList,
   fetchRuntimeStatus,
   fetchSummary,
   fetchMqttUplink,
   fetchDiscoverySuggestions,
+  generateEdgeAccessToken,
   generateAgentSuggestions,
   publishLatestRelease,
+  publishProductVersion,
+  rollbackProductVersion,
+  reviewAgentProposal,
   runDiscovery,
   runAgentSafetyCheck,
   runConfigValidation,
   runReleaseDiff,
   createEdgeProtocolConnection,
+  deleteEdgeNode,
   deleteEdgeDataConfig,
+  deleteProduct,
+  deleteProject,
   saveEdgeAlgorithm,
   saveEdgeCollectionTask,
   saveEdgeDataConfig,
   saveEdgePointMapping,
   saveEdgeProtocolConnection,
   saveMqttUplink,
+  saveProduct,
+  saveProductVersion,
+  saveProject,
+  sendAgentChat,
+  setApiToken,
 } from './api/client';
 import type {
   AlgorithmResponse,
@@ -47,6 +71,10 @@ import type {
   DeviceModelResponse,
   EdgeNodeResponse,
   PointMappingResponse,
+  PointSetResponse,
+  ProductResponse,
+  ProductVersionResponse,
+  ProjectResponse,
   ProtocolConnectionResponse,
   ReleaseListResponse,
   RuntimeStatusResponse,
@@ -55,16 +83,31 @@ import type {
   SaveDataConfigRequest,
   SaveProtocolConnectionRequest,
 } from './api/types';
-import App from './App';
+import {
+  ConsoleApp as App,
+  buildProductVersionRequest,
+  EDGE_CONFIG_TEMPLATES,
+  hydrateProductTemplate,
+  materializeProductRuntime,
+} from './App';
 
 vi.mock('./api/client', () => ({
+  bindEdgeProduct: vi.fn(),
+  createAgentProposal: vi.fn(),
   createAlgorithmDraft: vi.fn(),
   createCollectionTaskDraft: vi.fn(),
   createEdgeDataConfig: vi.fn(),
+  createEdgeNode: vi.fn(),
+  createProduct: vi.fn(),
+  createProductVersion: vi.fn(),
+  createProject: vi.fn(),
   createDeviceModelDraft: vi.fn(),
   createPointMappingDraft: vi.fn(),
   fetchAlgorithms: vi.fn(),
+  fetchAgentProposals: vi.fn(),
+  fetchAgentProviderStatus: vi.fn(),
   fetchAuditRecords: vi.fn(),
+  fetchAuthStatus: vi.fn(),
   fetchCollectionTasks: vi.fn(),
   fetchDeviceModels: vi.fn(),
   fetchEdgeAlgorithms: vi.fn(),
@@ -74,26 +117,42 @@ vi.mock('./api/client', () => ({
   fetchEdgeProtocolConnections: vi.fn(),
   fetchEdgeNodes: vi.fn(),
   fetchPointMappings: vi.fn(),
+  fetchPointSets: vi.fn(),
+  fetchProducts: vi.fn(),
+  fetchProductVersions: vi.fn(),
+  fetchProjects: vi.fn(),
   fetchProtocolConnections: vi.fn(),
   fetchReleaseList: vi.fn(),
   fetchRuntimeStatus: vi.fn(),
   fetchSummary: vi.fn(),
   fetchMqttUplink: vi.fn(),
   fetchDiscoverySuggestions: vi.fn(),
+  generateEdgeAccessToken: vi.fn(),
   generateAgentSuggestions: vi.fn(),
   publishLatestRelease: vi.fn(),
+  publishProductVersion: vi.fn(),
+  rollbackProductVersion: vi.fn(),
+  reviewAgentProposal: vi.fn(),
   runDiscovery: vi.fn(),
   runAgentSafetyCheck: vi.fn(),
   runConfigValidation: vi.fn(),
   runReleaseDiff: vi.fn(),
   createEdgeProtocolConnection: vi.fn(),
+  deleteEdgeNode: vi.fn(),
   deleteEdgeDataConfig: vi.fn(),
+  deleteProduct: vi.fn(),
+  deleteProject: vi.fn(),
   saveEdgeAlgorithm: vi.fn(),
   saveEdgeCollectionTask: vi.fn(),
   saveEdgeDataConfig: vi.fn(),
   saveEdgePointMapping: vi.fn(),
   saveEdgeProtocolConnection: vi.fn(),
   saveMqttUplink: vi.fn(),
+  saveProduct: vi.fn(),
+  saveProductVersion: vi.fn(),
+  saveProject: vi.fn(),
+  sendAgentChat: vi.fn(),
+  setApiToken: vi.fn(),
 }));
 
 const basePoint: PointMappingResponse = {
@@ -180,6 +239,10 @@ const edgeNodes: EdgeNodeResponse[] = [
     resources: '18.5% / 42% / 61%',
     heartbeat: '8 秒前',
     capabilities: ['protocol:modbus-tcp'],
+    projectId: 'demo-plant',
+    productId: 'pump-collection-uplink',
+    desiredProductVersion: 'v1.4.3',
+    reportedProductVersion: '2026.06.26-001',
   },
 ];
 
@@ -209,23 +272,6 @@ const deviceModels: DeviceModelResponse[] = [
     ],
   },
 ];
-
-const createdDeviceModel: DeviceModelResponse = {
-  commandCount: 0,
-  deviceType: 'meter',
-  eventCount: 0,
-  telemetry: [
-    {
-      description: 'A 相电压',
-      name: 'voltage_a',
-      range: '0-500',
-      telemetryId: 'voltage_a',
-      unit: 'V',
-      valueType: 'float32',
-    },
-  ],
-  version: 'v2',
-};
 
 const protocolConnections: ProtocolConnectionResponse[] = [
   {
@@ -419,9 +465,50 @@ const runtimeStatus: RuntimeStatusResponse = {
   events: [],
 };
 
+const catalogProjects: ProjectResponse[] = [
+  {
+    createdAt: '2026-06-26T00:00:00Z',
+    description: '研发实验室项目',
+    environment: 'staging',
+    name: 'demo-plant',
+    owner: 'platform-team',
+    projectId: 'demo-plant',
+    updatedAt: '2026-06-26T00:00:00Z',
+  },
+];
+
+const catalogPointSets: PointSetResponse[] = [
+  {
+    createdAt: '2026-06-26T00:00:00Z',
+    description: '泵站标准点位',
+    name: '泵站标准点位',
+    pointSetId: 'pump-standard-points',
+    points: [],
+    projectId: 'demo-plant',
+    protocol: 'ModbusRtu',
+    updatedAt: '2026-06-26T00:00:00Z',
+  },
+];
+
+const catalogProducts: ProductResponse[] = EDGE_CONFIG_TEMPLATES.map((template) => ({
+  createdAt: '2026-06-26T00:00:00Z',
+  description: template.description,
+  latestVersion: template.version,
+  name: template.name,
+  productId: template.templateId,
+  productType: template.productType,
+  projectId: template.projectId,
+  updatedAt: '2026-06-26T00:00:00Z',
+}));
+
 describe('App cloud console write actions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(fetchAuthStatus).mockResolvedValue({
+      authenticationEnabled: false,
+      role: 'admin',
+      subject: 'local-development',
+    });
     vi.mocked(fetchSummary).mockResolvedValue({
       edge_count: 1,
       pending_release_count: 0,
@@ -431,6 +518,30 @@ describe('App cloud console write actions', () => {
     vi.mocked(fetchProtocolConnections).mockResolvedValue(protocolConnections);
     vi.mocked(fetchEdgeProtocolConnections).mockResolvedValue(protocolConnections);
     vi.mocked(fetchPointMappings).mockResolvedValue([basePoint]);
+    vi.mocked(fetchPointSets).mockResolvedValue(catalogPointSets);
+    vi.mocked(fetchProducts).mockResolvedValue(catalogProducts);
+    vi.mocked(fetchProductVersions).mockImplementation(async (productId) => {
+      const product = catalogProducts.find((candidate) => candidate.productId === productId);
+      return product
+        ? [
+            {
+              algorithms: [],
+              collectionTasks: [],
+              createdAt: '2026-06-26T00:00:00Z',
+              dataConfigs: [],
+              deviceModels: [],
+              devices: [],
+              mqttUplinks: [],
+              pointSetIds: [],
+              productId,
+              protocolConnections: [],
+              status: 'published',
+              version: product.latestVersion ?? 'v1.0.0',
+            },
+          ]
+        : [];
+    });
+    vi.mocked(fetchProjects).mockResolvedValue(catalogProjects);
     vi.mocked(fetchEdgePointMappings).mockResolvedValue([basePoint]);
     vi.mocked(fetchCollectionTasks).mockResolvedValue(collectionTasks);
     vi.mocked(fetchEdgeCollectionTasks).mockResolvedValue(collectionTasks);
@@ -442,9 +553,80 @@ describe('App cloud console write actions', () => {
     vi.mocked(fetchAuditRecords).mockResolvedValue(auditRecords);
     vi.mocked(fetchMqttUplink).mockResolvedValue(mqttUplink);
     vi.mocked(fetchDiscoverySuggestions).mockResolvedValue(discoverySuggestions);
+    vi.mocked(fetchAgentProposals).mockResolvedValue([]);
+    vi.mocked(fetchAgentProviderStatus).mockResolvedValue({
+      configured: false,
+      mode: 'deterministic',
+      model: 'edgeops-local-analysis',
+    });
+    vi.mocked(sendAgentChat).mockResolvedValue({
+      citations: [],
+      message: '当前边端健康，建议先校验配置差异。',
+      mode: 'deterministic',
+      model: 'edgeops-local-analysis',
+    });
+    vi.mocked(createEdgeNode).mockResolvedValue({
+      edgeId: 'edge-draft-1',
+      displayName: '新边端',
+      site: '待分配',
+      runtimeId: '-',
+      status: '未上报',
+      resources: '-',
+      heartbeat: '-',
+      capabilities: ['product:pump-collection-uplink'],
+      projectId: 'demo-plant',
+      productId: 'pump-collection-uplink',
+      desiredProductVersion: 'v1.4.3',
+      accessToken: 'edge_created_secret',
+    });
+    vi.mocked(generateEdgeAccessToken).mockResolvedValue({
+      accessToken: 'edge_regenerated_secret',
+      createdAt: '2026-06-26T00:00:00Z',
+      credentialId: 'credential-1',
+      edgeId: 'edge-dev',
+    });
+    vi.mocked(bindEdgeProduct).mockResolvedValue(edgeNodes[0]);
+    vi.mocked(deleteEdgeNode).mockResolvedValue(undefined);
+    vi.mocked(deleteProject).mockResolvedValue(undefined);
+    vi.mocked(deleteProduct).mockResolvedValue(undefined);
+    vi.mocked(createProduct).mockImplementation(async (request) => ({
+      ...request,
+      createdAt: '2026-06-26T00:00:00Z',
+      latestVersion: null,
+      updatedAt: '2026-06-26T00:00:00Z',
+    }));
+    vi.mocked(saveProduct).mockImplementation(async (_productId, request) => ({
+      ...request,
+      createdAt: '2026-06-26T00:00:00Z',
+      latestVersion: 'v1.4.3',
+      updatedAt: '2026-06-26T00:00:00Z',
+    }));
+    vi.mocked(createProductVersion).mockImplementation(async (productId, request) => ({
+      ...request,
+      createdAt: '2026-06-26T00:00:00Z',
+      productId,
+      status: 'draft',
+    }));
+    vi.mocked(saveProductVersion).mockImplementation(
+      async (productId, _version, request) => ({
+        ...request,
+        createdAt: '2026-06-26T00:00:00Z',
+        productId,
+        status: 'draft',
+      }),
+    );
+    vi.mocked(createProject).mockImplementation(async (request) => ({
+      ...request,
+      createdAt: '2026-06-26T00:00:00Z',
+      updatedAt: '2026-06-26T00:00:00Z',
+    }));
+    vi.mocked(saveProject).mockImplementation(async (_projectId, request) => ({
+      ...request,
+      createdAt: '2026-06-26T00:00:00Z',
+      updatedAt: '2026-06-26T00:00:00Z',
+    }));
     vi.mocked(createAlgorithmDraft).mockResolvedValue(createdAlgorithm);
     vi.mocked(createCollectionTaskDraft).mockResolvedValue(createdCollectionTask);
-    vi.mocked(createDeviceModelDraft).mockResolvedValue(createdDeviceModel);
     vi.mocked(createPointMappingDraft).mockResolvedValue(createdPoint);
     vi.mocked(generateAgentSuggestions).mockResolvedValue({
       action: 'agent_generate_suggestions',
@@ -539,286 +721,490 @@ describe('App cloud console write actions', () => {
     });
   });
 
-  it('saves point drafts through the API and refreshes point mappings', async () => {
-    vi.mocked(fetchEdgePointMappings)
-      .mockResolvedValueOnce([basePoint])
-      .mockResolvedValueOnce([basePoint])
-      .mockResolvedValueOnce([
-        {
-          ...basePoint,
-          address: 'holding_register:40002',
-          interval: '2000ms',
-        },
-      ]);
+  it('loads a production empty database without querying an imaginary edge', async () => {
+    vi.mocked(fetchSummary).mockResolvedValue({
+      edge_count: 0,
+      pending_release_count: 0,
+    });
+    vi.mocked(fetchEdgeNodes).mockResolvedValue([]);
+    vi.mocked(fetchDeviceModels).mockResolvedValue([]);
+    vi.mocked(fetchPointSets).mockResolvedValue([]);
+    vi.mocked(fetchProducts).mockResolvedValue([]);
+    vi.mocked(fetchProjects).mockResolvedValue([]);
+    vi.mocked(fetchReleaseList).mockResolvedValue({
+      applyResults: [],
+      changeSummary: '暂无配置',
+      draftVersion: '-',
+      rolloutPolicy: '未配置',
+      validationStatus: '未校验',
+    });
+    vi.mocked(fetchRuntimeStatus).mockResolvedValue({
+      averageCollectionLatencyMs: 0,
+      criticalEdgeCount: 0,
+      degradedEdgeCount: 0,
+      edges: [],
+      events: [],
+      healthyEdgeCount: 0,
+    });
+    vi.mocked(fetchAuditRecords).mockResolvedValue([]);
 
     render(<App />);
 
-    await openEdgeConfiguration();
-    fireEvent.click(screen.getByRole('button', { name: /点位配置/ }));
-    expect(await screen.findByText('holding_register:40001')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '编辑点位 pressure' }));
+    expect(await screen.findByText('项目: 暂无项目')).toBeInTheDocument();
+    expect(fetchEdgeProtocolConnections).not.toHaveBeenCalled();
+    expect(fetchEdgePointMappings).not.toHaveBeenCalled();
+    expect(fetchEdgeCollectionTasks).not.toHaveBeenCalled();
+    expect(fetchEdgeDataConfigs).not.toHaveBeenCalled();
+    expect(fetchEdgeAlgorithms).not.toHaveBeenCalled();
+    expect(fetchMqttUplink).not.toHaveBeenCalled();
+    expect(fetchDiscoverySuggestions).not.toHaveBeenCalled();
 
-    fireEvent.change(screen.getByLabelText('地址值'), {
-      target: { value: '40002' },
-    });
-    fireEvent.change(screen.getByLabelText('采集周期(ms)'), {
-      target: { value: '2000' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
-
-    await waitFor(() => {
-      expect(saveEdgePointMapping).toHaveBeenCalledWith(
-        'edge-dev',
-        'pressure',
-        {
-          addressKind: 'holding_register',
-          addressValue: '40002',
-          intervalMs: 2000,
-          unit: 'MPa',
-        },
-      );
-    });
-    expect(await screen.findByText('holding_register:40002')).toBeInTheDocument();
-    expect(screen.getByText('已保存')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /项目管理/ }));
+    expect(await screen.findByText(/尚未创建项目/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '新建项目' }));
+    await waitFor(() => expect(createProject).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('dialog', { name: '项目详情' })).toBeInTheDocument();
   });
 
-  it('saves collection task drafts through the selected edge API', async () => {
-    vi.mocked(fetchEdgeCollectionTasks)
-      .mockResolvedValueOnce(collectionTasks)
-      .mockResolvedValueOnce(collectionTasks)
-      .mockResolvedValueOnce([
-        {
-          ...collectionTasks[0],
-          enabled: false,
-          interval: '2500ms',
-          intervalMs: 2500,
-          pointIds: ['pressure'],
-          pointList: 'pressure',
-          status: '暂停',
-        },
-      ]);
-
-    render(<App />);
-
-    await openEdgeConfiguration();
-    fireEvent.click(screen.getByRole('button', { name: /采集任务/ }));
-    expect((await screen.findAllByText('pressure, running')).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole('button', { name: '编辑任务 pump-main' }));
-
-    fireEvent.change(screen.getByLabelText('采集点位'), {
-      target: { value: 'pressure' },
-    });
-    fireEvent.change(screen.getByLabelText('采集周期(ms)'), {
-      target: { value: '2500' },
-    });
-    fireEvent.click(screen.getByLabelText('启用任务'));
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
-
-    const expectedRequest: SaveCollectionTaskRequest = {
-      deviceId: 'pump-1',
-      enabled: false,
-      intervalMs: 2500,
-      pointIds: ['pressure'],
+  it('materializes the visual product graph without collapsing compute or MQTT outputs', () => {
+    const template = JSON.parse(
+      JSON.stringify(EDGE_CONFIG_TEMPLATES[1]),
+    ) as (typeof EDGE_CONFIG_TEMPLATES)[number];
+    template.dataConfig.visualGraph = {
+      nodes: [
+        { kind: 'point', label: 'pressure', nodeId: 'point-pump_pressure', refId: 'pump_pressure', x: 50, y: 80 },
+        { kind: 'point', label: 'running', nodeId: 'point-pump_running', refId: 'pump_running', x: 50, y: 180 },
+        { kind: 'algorithm', label: '多点合并', nodeId: 'algorithm-merge_points', refId: 'merge_points', x: 320, y: 90 },
+        { kind: 'algorithm', label: '变化上报', nodeId: 'algorithm-change_report', refId: 'change_report', x: 320, y: 220 },
+        { kind: 'mqtt', label: '状态主题', nodeId: 'mqtt-status', refId: 'factory/{edge_id}/status', x: 650, y: 90 },
+        { kind: 'mqtt', label: '变化主题', nodeId: 'mqtt-change', refId: 'factory/{edge_id}/change', x: 650, y: 220 },
+      ],
+      edges: [
+        { edgeId: 'pressure-merge', from: 'point-pump_pressure', to: 'algorithm-merge_points' },
+        { edgeId: 'running-merge', from: 'point-pump_running', to: 'algorithm-merge_points' },
+        { edgeId: 'merge-status', from: 'algorithm-merge_points', to: 'mqtt-status' },
+        { edgeId: 'pressure-change', from: 'point-pump_pressure', to: 'algorithm-change_report' },
+        { edgeId: 'change-output', from: 'algorithm-change_report', to: 'mqtt-change' },
+      ],
     };
-    await waitFor(() => {
-      expect(saveEdgeCollectionTask).toHaveBeenCalledWith(
-        'edge-dev',
-        'pump-main',
-        expectedRequest,
-      );
+
+    const materialized = materializeProductRuntime(template, 'modbus-line-a');
+
+    expect(materialized.algorithms).toHaveLength(1);
+    expect(materialized.algorithms[0]).toMatchObject({
+      algorithmId: 'pump_status_telemetry__change_report',
+      algorithmKind: 'ChangeReport',
     });
-    expect((await screen.findAllByText('pressure')).length).toBeGreaterThan(0);
-    expect(screen.getByText('已保存')).toBeInTheDocument();
-  });
-
-  it('saves data configs through the selected edge API', async () => {
-    vi.mocked(fetchEdgeDataConfigs)
-      .mockResolvedValueOnce(dataConfigs)
-      .mockResolvedValueOnce(dataConfigs)
-      .mockResolvedValueOnce([{ ...dataConfigs[0], name: '泵状态' }]);
-
-    render(<App />);
-
-    await openEdgeConfiguration();
-    fireEvent.click(screen.getByRole('tab', { name: '数据上报' }));
-    fireEvent.click(screen.getByRole('button', { name: 'pump_status' }));
-    const dialog = screen.getByRole('dialog', { name: '编辑数据上报' });
-    fireEvent.change(within(dialog).getByLabelText('配置名称'), {
-      target: { value: '泵状态' },
-    });
-    fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
-    fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
-    fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));
-    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
-
-    await waitFor(() => {
-      expect(saveEdgeDataConfig).toHaveBeenCalledWith(
-        'edge-dev',
-        'pump_status',
-        expect.objectContaining({
-          configId: 'pump_status',
-          name: '泵状态',
-          visualGraph: expect.objectContaining({
-            nodes: expect.arrayContaining([
-              expect.objectContaining({ kind: 'json' }),
-              expect.objectContaining({ kind: 'mqtt' }),
-            ]),
-          }),
-        } satisfies Partial<SaveDataConfigRequest>),
-      );
-    });
-    expect(await screen.findByText('泵状态')).toBeInTheDocument();
-  });
-
-  it('saves protocol connection drafts through the selected edge API', async () => {
-    vi.mocked(fetchEdgeProtocolConnections)
-      .mockResolvedValueOnce(protocolConnections)
-      .mockResolvedValueOnce(protocolConnections)
-      .mockResolvedValueOnce([
-        {
-          ...protocolConnections[0],
-          endpoint: 'opc.tcp://10.12.0.80:4840',
-          protocol: 'OPC UA',
-          protocolType: 'OpcUa',
-        },
-      ]);
-
-    render(<App />);
-
-    await openEdgeConfiguration();
-    fireEvent.click(screen.getByRole('tab', { name: '协议连接' }));
-    expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '编辑连接 modbus-line-a' }));
-
-    fireEvent.change(screen.getByLabelText('协议类型'), {
-      target: { value: 'OpcUa' },
-    });
-    fireEvent.change(screen.getByLabelText('端点'), {
-      target: { value: 'opc.tcp://10.12.0.80:4840' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
-
-    const expectedRequest: SaveProtocolConnectionRequest = {
-      endpoint: 'opc.tcp://10.12.0.80:4840',
-      protocolType: 'OpcUa',
-    };
-    await waitFor(() => {
-      expect(saveEdgeProtocolConnection).toHaveBeenCalledWith(
-        'edge-dev',
-        'modbus-line-a',
-        expectedRequest,
-      );
-    });
-    expect(await screen.findByText('opc.tcp://10.12.0.80:4840')).toBeInTheDocument();
-    expect(screen.getByText('已保存')).toBeInTheDocument();
-  });
-
-  it('creates protocol connection drafts through the selected edge API', async () => {
-    vi.mocked(fetchEdgeProtocolConnections)
-      .mockResolvedValueOnce(protocolConnections)
-      .mockResolvedValueOnce(protocolConnections)
-      .mockResolvedValueOnce([...protocolConnections, createdProtocolConnection]);
-
-    render(<App />);
-
-    await openEdgeConfiguration();
-    fireEvent.click(screen.getByRole('tab', { name: '协议连接' }));
-    expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: '新建连接' }));
-    const dialog = screen.getByRole('dialog', { name: '新建协议连接' });
-    fireEvent.change(within(dialog).getByLabelText('新建协议类型'), {
-      target: { value: 'ModbusRtu' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('新建端点'), {
-      target: { value: '/dev/ttyUSB1' },
-    });
-    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
-
-    await waitFor(() => {
-      expect(createEdgeProtocolConnection).toHaveBeenCalledWith('edge-dev', {
-        endpoint: '/dev/ttyUSB1',
-        protocolType: 'ModbusRtu',
-      });
-    });
+    expect(materialized.dataConfig.algorithmIds).toEqual([
+      'pump_status_telemetry__change_report',
+    ]);
+    expect(materialized.dataConfig.visualGraph?.nodes.filter((node) => node.kind === 'mqtt'))
+      .toHaveLength(2);
+    expect(materialized.dataConfig.visualGraph?.edges).toHaveLength(5);
     expect(
-      await screen.findByRole('button', { name: '编辑连接 connection-draft-2' }),
+      materialized.dataConfig.visualGraph?.nodes.find(
+        (node) => node.nodeId === 'algorithm-change_report',
+      )?.refId,
+    ).toBe('pump_status_telemetry__change_report');
+  });
+
+  it('materializes repeated compute types as independent runtime algorithms', () => {
+    const template = JSON.parse(
+      JSON.stringify(EDGE_CONFIG_TEMPLATES[1]),
+    ) as (typeof EDGE_CONFIG_TEMPLATES)[number];
+    template.dataConfig.visualGraph = {
+      nodes: [
+        { kind: 'point', label: 'pressure', nodeId: 'point-pump_pressure', refId: 'pump_pressure', x: 50, y: 80 },
+        { kind: 'point', label: 'running', nodeId: 'point-pump_running', refId: 'pump_running', x: 50, y: 180 },
+        { kind: 'algorithm', label: '压力窗口', nodeId: 'algorithm-window_aggregate', refId: 'window_aggregate', x: 320, y: 80 },
+        { kind: 'algorithm', label: '状态窗口', nodeId: 'algorithm-window_aggregate-2', refId: 'window_aggregate', x: 320, y: 180 },
+        { kind: 'mqtt', label: '压力主题', nodeId: 'mqtt-pressure', refId: 'factory/{edge_id}/pressure', x: 650, y: 80 },
+        { kind: 'mqtt', label: '状态主题', nodeId: 'mqtt-status', refId: 'factory/{edge_id}/status', x: 650, y: 180 },
+      ],
+      edges: [
+        { edgeId: 'pressure-window', from: 'point-pump_pressure', to: 'algorithm-window_aggregate' },
+        { edgeId: 'window-pressure', from: 'algorithm-window_aggregate', to: 'mqtt-pressure' },
+        { edgeId: 'running-window', from: 'point-pump_running', to: 'algorithm-window_aggregate-2' },
+        { edgeId: 'window-status', from: 'algorithm-window_aggregate-2', to: 'mqtt-status' },
+      ],
+    };
+
+    const materialized = materializeProductRuntime(template, 'modbus-line-a');
+
+    expect(materialized.algorithms.map((algorithm) => algorithm.algorithmId)).toEqual([
+      'pump_status_telemetry__window_aggregate',
+      'pump_status_telemetry__window_aggregate-2',
+    ]);
+    expect(materialized.algorithms[0].dsl.inputs[0].pointId).toBe('pump_pressure');
+    expect(materialized.algorithms[1].dsl.inputs[0].pointId).toBe('pump_running');
+  });
+
+  it('restores visual compute kinds after a product version save and reload', () => {
+    const template = JSON.parse(
+      JSON.stringify(EDGE_CONFIG_TEMPLATES[1]),
+    ) as (typeof EDGE_CONFIG_TEMPLATES)[number];
+    template.dataConfig.visualGraph = {
+      nodes: [
+        { kind: 'point', label: 'pressure', nodeId: 'point-pump_pressure', refId: 'pump_pressure', x: 50, y: 80 },
+        { kind: 'point', label: 'running', nodeId: 'point-pump_running', refId: 'pump_running', x: 50, y: 180 },
+        { kind: 'algorithm', label: '压力窗口', nodeId: 'algorithm-window_aggregate', refId: 'window_aggregate', x: 320, y: 80 },
+        { kind: 'algorithm', label: '状态窗口', nodeId: 'algorithm-window_aggregate-2', refId: 'window_aggregate', x: 320, y: 180 },
+        { kind: 'mqtt', label: '压力主题', nodeId: 'mqtt-pressure', refId: 'factory/{edge_id}/pressure', x: 650, y: 80 },
+        { kind: 'mqtt', label: '状态主题', nodeId: 'mqtt-status', refId: 'factory/{edge_id}/status', x: 650, y: 180 },
+      ],
+      edges: [
+        { edgeId: 'pressure-window', from: 'point-pump_pressure', to: 'algorithm-window_aggregate' },
+        { edgeId: 'window-pressure', from: 'algorithm-window_aggregate', to: 'mqtt-pressure' },
+        { edgeId: 'running-window', from: 'point-pump_running', to: 'algorithm-window_aggregate-2' },
+        { edgeId: 'window-status', from: 'algorithm-window_aggregate-2', to: 'mqtt-status' },
+      ],
+    };
+
+    const saved = buildProductVersionRequest(template, 'v1.4.4', []);
+    const storedVersion: ProductVersionResponse = {
+      ...saved,
+      createdAt: '2026-07-15T00:00:00Z',
+      productId: template.templateId,
+      status: 'draft',
+    };
+    const hydrated = hydrateProductTemplate(template, storedVersion, []);
+
+    expect(
+      hydrated.dataConfig.visualGraph?.nodes
+        .filter((node) => node.kind === 'algorithm')
+        .map((node) => node.refId),
+    ).toEqual(['window_aggregate', 'window_aggregate']);
+
+    const rematerialized = materializeProductRuntime(hydrated, 'modbus-line-a');
+    expect(rematerialized.algorithms.map((algorithm) => algorithm.algorithmKind)).toEqual([
+      'WindowAggregate',
+      'WindowAggregate',
+    ]);
+    expect(rematerialized.algorithms[0].dsl.inputs[0].pointId).toBe('pump_pressure');
+    expect(rematerialized.algorithms[1].dsl.inputs[0].pointId).toBe('pump_running');
+  });
+
+  it('persists project edits through the catalog API only when explicitly saved', async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /项目管理/ }));
+    expect(await screen.findByRole('heading', { level: 2, name: '项目管理' }))
+      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '详情' }));
+
+    const dialog = screen.getByRole('dialog', { name: '项目详情' });
+    fireEvent.change(within(dialog).getByLabelText('项目名称'), {
+      target: { value: '研发边缘项目' },
+    });
+    expect(saveProject).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+    await waitFor(() => {
+      expect(saveProject).toHaveBeenCalledWith(
+        'demo-plant',
+        expect.objectContaining({
+          name: '研发边缘项目',
+          projectId: 'demo-plant',
+        }),
+      );
+    });
+    expect(within(dialog).getByText('已保存')).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByText('关闭'));
+    fireEvent.click(screen.getByRole('button', { name: '新建项目' }));
+    await waitFor(() => expect(createProject).toHaveBeenCalledOnce());
+    expect(await screen.findByDisplayValue('新项目 1')).toBeInTheDocument();
+  });
+
+  it('manages products from the dedicated product page', async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /产品管理/ }));
+    expect(await screen.findByRole('heading', { level: 2, name: '产品管理' })).toBeInTheDocument();
+    expect(screen.getByText('产品列表')).toBeInTheDocument();
+    expect(screen.queryByLabelText('产品名称')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button', { name: '配置' })[0]);
+    expect(screen.getByRole('dialog', { name: '产品配置' })).toBeInTheDocument();
+    expect(screen.getByLabelText('产品名称')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('产品名称'), {
+      target: { value: '泵站默认配置产品' },
+    });
+    expect(saveProduct).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => {
+      expect(saveProduct).toHaveBeenCalledWith(
+        'modbus-rtu-meter-basic',
+        expect.objectContaining({ name: '泵站默认配置产品' }),
+      );
+      expect(createProductVersion).toHaveBeenCalledWith(
+        'modbus-rtu-meter-basic',
+        expect.objectContaining({ version: 'v1.2.1' }),
+      );
+    });
+    expect(screen.getByText('已保存')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('关闭'));
+
+    fireEvent.click(screen.getByRole('button', { name: '新建产品' }));
+    expect(await screen.findByDisplayValue(/自定义边端产品/)).toBeInTheDocument();
+  });
+
+  it('publishes drafts and rolls back retired product versions from the release tab', async () => {
+    const draftVersion = {
+      algorithms: [],
+      collectionTasks: [],
+      createdAt: '2026-07-14T00:00:00Z',
+      dataConfigs: [{}],
+      deviceModels: [],
+      devices: [],
+      mqttUplinks: [{}],
+      pointSetIds: ['pump-standard-points'],
+      productId: 'modbus-rtu-meter-basic',
+      protocolConnections: [{}],
+      status: 'draft' as const,
+      version: 'v1.2.1',
+    };
+    const retiredVersion = {
+      ...draftVersion,
+      createdAt: '2026-06-20T00:00:00Z',
+      status: 'retired' as const,
+      version: 'v1.1.0',
+    };
+    vi.mocked(fetchProductVersions).mockImplementation(async (productId) =>
+      productId === 'modbus-rtu-meter-basic'
+        ? [draftVersion, retiredVersion]
+        : [],
+    );
+    vi.mocked(publishProductVersion).mockResolvedValue({
+      ...draftVersion,
+      status: 'published',
+    });
+    vi.mocked(rollbackProductVersion).mockResolvedValue({
+      ...retiredVersion,
+      status: 'published',
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /产品管理/ }));
+    await screen.findByText('产品列表');
+    fireEvent.click(screen.getAllByRole('button', { name: '配置' })[0]);
+    const dialog = screen.getByRole('dialog', { name: '产品配置' });
+    fireEvent.click(within(dialog).getByRole('tab', { name: '发布策略' }));
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '发布此版本' }));
+    await waitFor(() =>
+      expect(publishProductVersion).toHaveBeenCalledWith(
+        'modbus-rtu-meter-basic',
+        'v1.2.1',
+      ),
+    );
+    fireEvent.click(within(dialog).getByRole('button', { name: '回滚到此版本' }));
+    await waitFor(() =>
+      expect(rollbackProductVersion).toHaveBeenCalledWith(
+        'modbus-rtu-meter-basic',
+        'v1.1.0',
+      ),
+    );
+  });
+
+  it('configures product-bound points and collection orchestration in the product dialog', async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /产品管理/ }));
+    expect(await screen.findByText('产品列表')).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: '配置' })[0]);
+
+    const dialog = screen.getByRole('dialog', { name: '产品配置' });
+    fireEvent.click(within(dialog).getByRole('tab', { name: '绑定点位' }));
+    expect(within(dialog).getByText('从点位管理选择可复用输入点位，产品只保存引用关系')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: '绑定' }));
+    expect(within(dialog).getByText('有未保存修改')).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('tab', { name: '采集编排' }));
+    expect(within(dialog).getByLabelText('采集编排资源')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('采集编排画布')).toBeInTheDocument();
+    expect(dialog.querySelector('.node-red-canvas')).toBeInTheDocument();
+    expect(dialog.querySelector('.node-red-wires')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: '开始连线' })).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getAllByRole('button', { name: /窗口聚合/ })[0]);
+    expect(within(dialog).getByRole('button', { name: /流程节点 窗口聚合/ })).toBeInTheDocument();
+    fireEvent.contextMenu(within(dialog).getByRole('button', { name: /流程节点 窗口聚合/ }));
+    expect(within(dialog).getByRole('menuitem', { name: '编辑节点' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('menuitem', { name: '删除节点' })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('menuitem', { name: '编辑节点' }));
+    expect(within(dialog).getByRole('heading', { name: '编辑节点' })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: /流程节点 voltage_a/ }));
+    expect(within(dialog).queryByLabelText('产品 JSON 字段 meter_voltage_a')).not.toBeInTheDocument();
+    fireEvent.contextMenu(within(dialog).getByRole('button', { name: /流程节点 voltage_a/ }));
+    fireEvent.click(within(dialog).getByRole('menuitem', { name: '编辑节点' }));
+    expect(within(dialog).getByText('连接关系')).toBeInTheDocument();
+    expect(within(dialog).getByText('当前节点未建立连接。')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: '从 voltage_a 连线' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: '连接到 多点合并' }));
+    expect(
+      within(dialog).getByRole('button', {
+        name: '移除连接 point-meter_voltage_a:value-to-algorithm-merge_points:input',
+      }),
     ).toBeInTheDocument();
-    expect(screen.getByText('已创建连接 connection-draft-2')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: '从 多点合并 连线' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: '连接到 窗口聚合' }));
+    expect(dialog.querySelectorAll('.node-red-wires > g')).toHaveLength(2);
+    fireEvent.click(within(dialog).getByRole('button', { name: '从 窗口聚合 连线' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: '连接到 多点合并' }));
+    expect(dialog.querySelectorAll('.node-red-wires > g')).toHaveLength(2);
+    fireEvent.click(within(dialog).getByRole('button', { name: /流程节点 voltage_a/ }));
+    fireEvent.change(within(dialog).getByLabelText('产品 JSON 字段 meter_voltage_a'), {
+      target: { value: 'ua' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '从 窗口聚合 连线' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: '连接到 MQTT 输出 1' }));
+    fireEvent.contextMenu(within(dialog).getByRole('button', { name: '流程节点 MQTT 输出 1' }));
+    fireEvent.click(within(dialog).getByRole('menuitem', { name: '编辑节点' }));
+    fireEvent.change(within(dialog).getByLabelText('MQTT Topic'), {
+      target: { value: 'factory/{edge_id}/pump/status' },
+    });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /MQTT 输出 拖入画布创建独立主题/ }));
+    expect(within(dialog).getByText(/3 点位 \/ 2 计算节点 \/ 2 输出/)).toBeInTheDocument();
+    fireEvent.change(within(dialog).getByLabelText('MQTT 输出名称'), {
+      target: { value: '告警主题' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('MQTT Topic'), {
+      target: { value: 'factory/{edge_id}/pump/alarm' },
+    });
+
+    const dragSource = within(dialog).getByRole('button', { name: '从 窗口聚合 连线' });
+    const dragTarget = within(dialog).getByRole('button', { name: '连接到 告警主题' });
+    const originalElementFromPoint = document.elementFromPoint;
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: vi.fn(() => dragTarget),
+    });
+    const dispatchPointer = (type: string, clientX: number, clientY: number) => {
+      const event = new MouseEvent(type, { bubbles: true, button: 0, clientX, clientY });
+      Object.defineProperty(event, 'pointerId', { value: 7 });
+      fireEvent(dragSource, event);
+    };
+    dispatchPointer('pointerdown', 500, 220);
+    dispatchPointer('pointermove', 620, 300);
+    expect(dialog.querySelector('.node-red-wire-preview')).toBeInTheDocument();
+    dispatchPointer('pointerup', 760, 360);
+    expect(dialog.querySelector('.node-red-wire-preview')).not.toBeInTheDocument();
+    expect(within(dialog).getByText('窗口聚合 → 告警主题')).toBeInTheDocument();
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: originalElementFromPoint,
+    });
+
+    expect(within(dialog).getByText('当前 DSL')).toBeInTheDocument();
+    expect(within(dialog).getAllByText(/factory\/\{edge_id\}\/pump\/status/).length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText(/factory\/\{edge_id\}\/pump\/alarm/).length).toBeGreaterThan(0);
+    expect(within(dialog).getByText(/"field": "ua"/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/"runtimePlan"/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/"executionTree"/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/"nodeId": "mqtt-output"/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/"fromPort": "value"/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/"toPort": "payload"/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/"outputs"/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(createProductVersion).toHaveBeenCalledOnce());
+    expect(within(dialog).getByText('已保存')).toBeInTheDocument();
   });
 
-  it('opens configuration sections as editable management tabs from the selected edge', async () => {
+  it('adds repeated compute nodes without automatically wiring them', async () => {
     render(<App />);
 
-    expect(screen.queryByRole('button', { name: /协议连接/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /数据上报/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /产品管理/ }));
+    await screen.findByText('产品列表');
+    fireEvent.click(screen.getAllByRole('button', { name: '配置' })[0]);
+    const dialog = screen.getByRole('dialog', { name: '产品配置' });
+    fireEvent.click(within(dialog).getByRole('tab', { name: '采集编排' }));
 
-    await openEdgeConfiguration();
-    fireEvent.click(screen.getByRole('button', { name: '配置连接' }));
-    expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '新建连接' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '编辑连接 modbus-line-a' }));
-    expect(screen.getByText('编辑连接 modbus-line-a')).toBeInTheDocument();
-    expect(screen.queryByLabelText('当前边端')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('配置边端')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '保存草稿' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+    const paletteButton = within(dialog).getAllByRole('button', { name: /窗口聚合/ })[0];
+    fireEvent.click(paletteButton);
+    fireEvent.click(paletteButton);
 
-    fireEvent.click(screen.getByRole('tab', { name: '数据上报' }));
-    expect(await screen.findByRole('button', { name: 'pump_status' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '新建数据上报' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'pump_status' }));
-    expect(screen.getByText('编辑数据上报 pump_status')).toBeInTheDocument();
-    expect(screen.queryByLabelText('当前边端')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('配置边端')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
-
-    expect(screen.queryByRole('button', { name: /算法配置/ })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'pump_status' }));
-    const dataConfigDialog = screen.getByRole('dialog', { name: '编辑数据上报' });
-    fireEvent.click(within(dataConfigDialog).getByRole('button', { name: '2. 可视化编排' }));
-    expect(within(dataConfigDialog).getAllByText('pump-anomaly-v1').length).toBeGreaterThan(0);
+    expect(within(dialog).getByRole('button', { name: '流程节点 窗口聚合' }))
+      .toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: '流程节点 窗口聚合 2' }))
+      .toBeInTheDocument();
+    expect(dialog.querySelectorAll('.node-red-wires > g')).toHaveLength(0);
+    expect(within(dialog).getByText(/2 点位 \/ 3 计算节点 \/ 1 输出/)).toBeInTheDocument();
   });
 
-  it('keeps editable controls when switching configuration tabs', async () => {
-    render(<App />);
-
-    await openEdgeConfiguration();
-    fireEvent.click(screen.getByRole('tab', { name: '数据上报' }));
-    expect(screen.getByRole('button', { name: 'pump_status' })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('tab', { name: '协议连接' }));
-
-    expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '编辑连接 modbus-line-a' }));
-    expect(screen.getByText('编辑连接 modbus-line-a')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '新建连接' })).toBeInTheDocument();
-  });
-
-  it('opens selected edge configuration from the edge management row', async () => {
+  it('keeps edge management focused on access, product binding, monitoring and token creation', async () => {
     render(<App />);
 
     fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
     expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '配置 edge-dev' })).not.toBeInTheDocument();
+    expect(screen.getByText('泵站状态模板')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '配置 edge-dev' }));
-    expect(screen.getByRole('dialog', { name: '配置边端' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '打开配置总览' }));
+    fireEvent.click(screen.getByRole('button', { name: '接入信息 edge-dev' }));
+    const accessDialog = screen.getByRole('dialog', { name: '边端接入信息' });
+    expect(within(accessDialog).getByText('edge-dev')).toBeInTheDocument();
+    expect(
+      within(accessDialog).getByText('Token 仅在创建或重新生成时显示，Cloud 不保存明文。'),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      within(accessDialog).getByRole('button', { name: '重新生成 token' }),
+    );
+    expect(await within(accessDialog).findByText('edge_regenerated_secret')).toBeInTheDocument();
+    expect(
+      within(accessDialog).getByText(/edge-runtime --cloud-gateway-addr/),
+    ).toBeInTheDocument();
+    expect(generateEdgeAccessToken).toHaveBeenCalledWith('edge-dev');
+    fireEvent.click(within(accessDialog).getByRole('button', { name: '关闭' }));
 
-    expect(await screen.findByRole('heading', { name: '研发实验室边端' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: '配置总览' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('button', { name: '校验配置' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '发布到 runtime' })).toBeInTheDocument();
-    expect(screen.getAllByText('协议连接').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('数据上报').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('已配置').length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: '配置上报' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '配置上报' }));
-    expect(await screen.findByRole('button', { name: 'pump_status' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '新建数据上报' })).toBeInTheDocument();
-    await waitFor(() => {
-      expect(fetchEdgeDataConfigs).toHaveBeenCalledWith('edge-dev');
+    fireEvent.click(screen.getByRole('button', { name: '新增边端' }));
+    const createDialog = screen.getByRole('dialog', { name: '新增边端' });
+    fireEvent.change(within(createDialog).getByLabelText('边端名称'), {
+      target: { value: '产线 A 边端' },
     });
+    fireEvent.change(within(createDialog).getByLabelText('站点/分组'), {
+      target: { value: '产线/A' },
+    });
+    fireEvent.change(within(createDialog).getByLabelText('关联产品'), {
+      target: { value: 'pump-collection-uplink' },
+    });
+    fireEvent.click(within(createDialog).getByRole('button', { name: '生成接入 token' }));
+
+    await waitFor(() => {
+      expect(createEdgeNode).toHaveBeenCalledWith({
+        displayName: '产线 A 边端',
+        productId: 'pump-collection-uplink',
+        projectId: 'demo-plant',
+        site: '产线/A',
+      });
+    });
+    expect(await screen.findByText('已创建边端 edge-draft-1，token 已生成')).toBeInTheDocument();
+    const createdAccessDialog = screen.getByRole('dialog', { name: '边端接入信息' });
+    expect(within(createdAccessDialog).getByText('edge_created_secret')).toBeInTheDocument();
+  });
+
+  it('saves edge MQTT uplink overrides from edge management without opening product config', async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
+    expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'MQTT 配置 edge-dev' }));
+
+    const mqttDialog = screen.getByRole('dialog', { name: '边端 MQTT 配置' });
+    fireEvent.change(within(mqttDialog).getByLabelText('Broker 地址'), {
+      target: { value: 'mqtts://velamq.prod:8883' },
+    });
+    fireEvent.click(within(mqttDialog).getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(saveMqttUplink).toHaveBeenCalledWith(
+        'edge-dev',
+        expect.objectContaining({
+          broker: 'mqtts://velamq.prod:8883',
+        }),
+      );
+    });
+    expect(within(mqttDialog).getByText('已保存')).toBeInTheDocument();
   });
 
   it('opens selected edge runtime monitoring from the edge management row', async () => {
@@ -829,8 +1215,9 @@ describe('App cloud console write actions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '运行监控 edge-dev' }));
 
-    expect(await screen.findByText('正在监控 edge-dev')).toBeInTheDocument();
-    expect(screen.getByText('18.5%')).toBeInTheDocument();
+    const monitorDialog = await screen.findByRole('dialog', { name: '边端运行监控' });
+    expect(within(monitorDialog).getByText('runtime-dev')).toBeInTheDocument();
+    expect(within(monitorDialog).getByText('18.5%')).toBeInTheDocument();
   });
 
   it('keeps edge registration automatic from runtime connections', async () => {
@@ -841,142 +1228,10 @@ describe('App cloud console write actions', () => {
 
     expect(screen.queryByRole('button', { name: '注册边端' })).not.toBeInTheDocument();
     expect(
-      screen.getByText(
-        '边端由 runtime 通过 EdgeLink 主动连接后自动登记。云端负责查看运行状态、进入边端配置，并维护该边端的 MQTT 上报连接。',
-      ),
+      screen.getByText('手动登记边端，绑定产品，生成 runtime 接入 token。'),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '轮换凭证 edge-dev' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '维护模式 edge-dev' })).not.toBeInTheDocument();
-  });
-
-  it('opens edge-scoped algorithm configuration from the edge workspace', async () => {
-    render(<App />);
-    await openEdgeConfiguration();
-
-    fireEvent.click(screen.getByRole('tab', { name: '算法配置' }));
-
-    expect(await screen.findByRole('heading', { name: '算法模板', level: 3 })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '修改算法 pump-anomaly-v1' })).toBeInTheDocument();
-  });
-
-  it('saves algorithm drafts through the selected edge API', async () => {
-    vi.mocked(fetchEdgeAlgorithms)
-      .mockResolvedValueOnce(algorithms)
-      .mockResolvedValueOnce(algorithms)
-      .mockResolvedValueOnce([
-        {
-          ...algorithms[0],
-          algorithmKind: 'WindowAggregate',
-          dsl: {
-            inputs: [{ alias: 'p', pointId: 'pressure' }],
-            trigger: { type: 'window', everyMs: 60000 },
-            steps: [
-              {
-                type: 'windowAggregate',
-                source: 'p',
-                functions: [{ function: 'avg', output: 'avg_1m' }],
-              },
-            ],
-            outputs: [{ name: 'avg_1m', pointId: 'pressure.avg_1m' }],
-            report: { mode: 'WindowResult', sink: 'velamq-main' },
-          },
-          inputIds: ['pressure'],
-          inputs: 'pressure',
-          kind: '窗口聚合',
-          outputIds: ['pressure.avg_1m'],
-          outputs: 'pressure.avg_1m',
-          runtime: 'Rule',
-          version: '1.1.0',
-        },
-      ]);
-
-    render(<App />);
-
-    await openEdgeConfiguration();
-    fireEvent.click(screen.getByRole('tab', { name: '算法配置' }));
-    expect(await screen.findByText('pressure.reported')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '选择算法 pump-anomaly-v1' }));
-
-    fireEvent.change(screen.getByLabelText('算法版本'), {
-      target: { value: '1.1.0' },
-    });
-    fireEvent.change(screen.getByLabelText('算法类型'), {
-      target: { value: 'WindowAggregate' },
-    });
-    fireEvent.change(screen.getByLabelText('输入点位'), {
-      target: { value: 'pressure' },
-    });
-    fireEvent.change(screen.getByLabelText('输出虚拟点位'), {
-      target: { value: 'pressure.avg_1m' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
-
-    const expectedRequest: SaveAlgorithmRequest = {
-      version: '1.1.0',
-      algorithmKind: 'WindowAggregate',
-      dsl: {
-        inputs: [{ alias: 'p', pointId: 'pressure' }],
-        trigger: { type: 'window', everyMs: 60000 },
-        steps: [
-          {
-            type: 'windowAggregate',
-            source: 'p',
-            functions: [{ function: 'avg', output: 'avg_1m' }],
-          },
-        ],
-        outputs: [{ name: 'avg_1m', pointId: 'pressure.avg_1m' }],
-        report: { mode: 'WindowResult', sink: 'velamq-main' },
-      },
-    };
-    await waitFor(() => {
-      expect(saveEdgeAlgorithm).toHaveBeenCalledWith(
-        'edge-dev',
-        'pump-anomaly-v1',
-        expectedRequest,
-      );
-    });
-    expect(await screen.findByText('pressure.avg_1m')).toBeInTheDocument();
-    expect(screen.getByText('已保存')).toBeInTheDocument();
-  });
-
-  it('publishes the latest draft and refreshes release apply results', async () => {
-    vi.mocked(fetchReleaseList)
-      .mockResolvedValueOnce(initialReleaseList)
-      .mockResolvedValueOnce(updatedReleaseList);
-
-    render(<App />);
-
-    await openEdgeConfiguration();
-    fireEvent.click(screen.getByRole('tab', { name: '配置发布' }));
-    await waitFor(() => {
-      expect(screen.getAllByText('2026.06.26-001').length).toBeGreaterThan(0);
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: '创建发布' }));
-
-    await waitFor(() => {
-      expect(publishLatestRelease).toHaveBeenCalledWith('edge-dev');
-    });
-    await waitFor(() => {
-      expect(screen.getAllByText('2026.06.26-002').length).toBeGreaterThan(0);
-    });
-  });
-
-  it('runs validation and publish actions directly from the edge config overview', async () => {
-    render(<App />);
-
-    await openEdgeConfiguration();
-    fireEvent.click(screen.getByRole('button', { name: '校验配置' }));
-    await waitFor(() => {
-      expect(runConfigValidation).toHaveBeenCalledWith('edge-dev');
-    });
-    expect(await screen.findByText('配置校验已完成')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: '发布到 runtime' }));
-    await waitFor(() => {
-      expect(publishLatestRelease).toHaveBeenCalledWith('edge-dev');
-    });
-    expect(await screen.findByText('已发布到 runtime 待应用')).toBeInTheDocument();
   });
 
   it('renders dashboard as monitoring only without write actions', async () => {
@@ -995,251 +1250,35 @@ describe('App cloud console write actions', () => {
     expect(publishLatestRelease).not.toHaveBeenCalled();
   });
 
-  it('creates point, task, and algorithm drafts from edge configuration pages', async () => {
-    vi.mocked(fetchEdgePointMappings)
-      .mockResolvedValueOnce([basePoint])
-      .mockResolvedValueOnce([basePoint])
-      .mockResolvedValueOnce([basePoint, createdPoint]);
-    vi.mocked(fetchEdgeCollectionTasks)
-      .mockResolvedValueOnce(collectionTasks)
-      .mockResolvedValueOnce(collectionTasks)
-      .mockResolvedValueOnce([...collectionTasks, createdCollectionTask]);
-    vi.mocked(fetchEdgeAlgorithms)
-      .mockResolvedValueOnce(algorithms)
-      .mockResolvedValueOnce(algorithms)
-      .mockResolvedValueOnce([...algorithms, createdAlgorithm]);
-
-    render(<App />);
-    await openEdgeConfiguration();
-
-    fireEvent.click(screen.getByRole('tab', { name: '点位配置' }));
-    expect(await screen.findByText('holding_register:40001')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '新建点位' }));
-    const pointDialog = screen.getByRole('dialog', { name: '新建点位' });
-    fireEvent.change(within(pointDialog).getByLabelText('新建 Point ID'), {
-      target: { value: 'temperature' },
-    });
-    fireEvent.change(within(pointDialog).getByLabelText('新建设备 ID'), {
-      target: { value: 'pump-1' },
-    });
-    fireEvent.change(within(pointDialog).getByLabelText('新建语义遥测'), {
-      target: { value: 'pump.temperature' },
-    });
-    fireEvent.change(within(pointDialog).getByLabelText('新建连接实例'), {
-      target: { value: 'modbus-line-a' },
-    });
-    fireEvent.change(within(pointDialog).getByLabelText('新建地址值'), {
-      target: { value: '30001' },
-    });
-    fireEvent.click(within(pointDialog).getByRole('button', { name: '保存' }));
-    await waitFor(() => {
-      expect(createPointMappingDraft).toHaveBeenCalledWith('edge-dev', {
-        addressKind: 'holding_register',
-        addressValue: '30001',
-        connectionId: 'modbus-line-a',
-        deviceId: 'pump-1',
-        intervalMs: 1000,
-        pointId: 'temperature',
-        semanticId: 'pump.temperature',
-        unit: '-',
-        valueType: 'float32',
-      });
-    });
-    expect(await screen.findByText('point-draft-2')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('tab', { name: '采集任务' }));
-    expect(
-      await screen.findByRole('button', { name: '编辑任务 pump-main' }),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '新建任务' }));
-    const taskDialog = screen.getByRole('dialog', { name: '新建采集任务' });
-    fireEvent.change(within(taskDialog).getByLabelText('新建 Task ID'), {
-      target: { value: 'thermal-task' },
-    });
-    fireEvent.change(within(taskDialog).getByLabelText('新建任务设备 ID'), {
-      target: { value: 'pump-1' },
-    });
-    fireEvent.change(within(taskDialog).getByLabelText('新建任务采集点位'), {
-      target: { value: 'pressure' },
-    });
-    fireEvent.click(within(taskDialog).getByRole('button', { name: '保存' }));
-    await waitFor(() => {
-      expect(createCollectionTaskDraft).toHaveBeenCalledWith('edge-dev', {
-        deviceId: 'pump-1',
-        enabled: true,
-        intervalMs: 1000,
-        pointIds: ['pressure'],
-        taskId: 'thermal-task',
-      });
-    });
-    expect(await screen.findByText('task-draft-2')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('tab', { name: '数据上报' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'pump_status' }));
-    fireEvent.click(screen.getByRole('button', { name: '2. 可视化编排' }));
-    expect(screen.getAllByText('pump-anomaly-v1').length).toBeGreaterThan(0);
-  });
-
-  it('imports discovered point suggestions into selected edge point mappings', async () => {
-    const importSuggestions = [
-      {
-        pointId: 'meter_voltage_a',
-        deviceId: 'meter-1',
-        semanticId: 'electric.voltage_a',
-        protocolConnectionId: 'meter-rs485-bus-1',
-        address: 'holding_register:40001',
-        valueType: 'float32',
-        unit: 'V',
-        confidence: 0.82,
-        evidence: '旧候选连接不存在',
-      },
-      {
-        pointId: 'flow_rate',
-        deviceId: 'pump-1',
-        semanticId: 'pump.flow_rate',
-        protocolConnectionId: 'modbus-line-a',
-        address: 'holding_register:40003',
-        valueType: 'float32',
-        unit: 'm3/h',
-        confidence: 0.88,
-        evidence: '流量读数稳定',
-      },
-    ];
-    vi.mocked(fetchDiscoverySuggestions)
-      .mockResolvedValueOnce(discoverySuggestions)
-      .mockResolvedValueOnce(importSuggestions)
-      .mockResolvedValueOnce(importSuggestions);
-    vi.mocked(fetchEdgePointMappings)
-      .mockResolvedValueOnce([basePoint])
-      .mockResolvedValueOnce([basePoint])
-      .mockResolvedValueOnce([basePoint])
-      .mockResolvedValueOnce([
-        basePoint,
-        {
-          ...createdPoint,
-          pointId: 'flow_rate',
-          pointName: 'flow_rate',
-          semanticTelemetry: 'pump.flow_rate',
-        },
-      ]);
-
-    render(<App />);
-    await openEdgeConfiguration();
-
-    fireEvent.click(screen.getByRole('tab', { name: '点位配置' }));
-    expect(await screen.findByText('holding_register:40001')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '批量导入' }));
-
-    await waitFor(() => {
-      expect(fetchDiscoverySuggestions).toHaveBeenCalledWith('edge-dev');
-    });
-    await waitFor(() => {
-      expect(createPointMappingDraft).toHaveBeenCalledTimes(1);
-      expect(createPointMappingDraft).toHaveBeenCalledWith('edge-dev', {
-        addressKind: 'holding_register',
-        addressValue: '40003',
-        connectionId: 'modbus-line-a',
-        deviceId: 'pump-1',
-        pointId: 'flow_rate',
-        semanticId: 'pump.flow_rate',
-        unit: 'm3/h',
-        valueType: 'float32',
-      });
-    });
-    expect(await screen.findByText('已导入 1 个候选点位')).toBeInTheDocument();
-  });
-
-  it('runs validation and release diff actions through API clients', async () => {
-    render(<App />);
-    await openEdgeConfiguration();
-
-    fireEvent.click(screen.getByRole('tab', { name: '配置发布' }));
-    expect(
-      await screen.findByRole('heading', { name: '配置发布', level: 2 }),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '校验配置' }));
-    await waitFor(() => {
-      expect(runConfigValidation).toHaveBeenCalledWith('edge-dev');
-    });
-    fireEvent.click(screen.getByRole('button', { name: '查看差异' }));
-    await waitFor(() => {
-      expect(runReleaseDiff).toHaveBeenCalledWith('edge-dev');
-    });
-    expect(await screen.findByText('配置差异摘要已生成')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: '校验配置' }));
-    await waitFor(() => {
-      expect(runConfigValidation).toHaveBeenCalledWith('edge-dev');
-    });
-    expect(await screen.findByText('发布配置校验 已通过')).toBeInTheDocument();
-  });
-
-  it('creates device model drafts and runs agent actions through API clients', async () => {
-    vi.mocked(fetchDeviceModels)
-      .mockResolvedValueOnce(deviceModels)
-      .mockResolvedValueOnce([...deviceModels, createdDeviceModel]);
-
+  it('runs agent actions through API clients without exposing model/discovery global navigation', async () => {
     render(<App />);
 
-    fireEvent.click(screen.getByRole('button', { name: /设备模型/ }));
-    expect(
-      await screen.findByRole('button', { name: '选择设备模型 pump' }),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '新建设备模型' }));
-    const dialog = screen.getByRole('dialog', { name: '新建设备模型' });
-    expect(dialog).toBeInTheDocument();
-    fireEvent.change(within(dialog).getByLabelText('设备类型'), {
-      target: { value: 'meter' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('模型版本'), {
-      target: { value: 'v2' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('遥测 ID'), {
-      target: { value: 'voltage_a' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('数据类型'), {
-      target: { value: 'float32' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('单位'), {
-      target: { value: 'V' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('范围'), {
-      target: { value: '0-500' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('说明'), {
-      target: { value: 'A 相电压' },
-    });
-    fireEvent.click(within(dialog).getByRole('button', { name: '保存设备模型' }));
-    await waitFor(() => {
-      expect(createDeviceModelDraft).toHaveBeenCalledWith({
-        deviceType: 'meter',
-        version: 'v2',
-        telemetry: [
-          {
-            description: 'A 相电压',
-            range: '0-500',
-            telemetryId: 'voltage_a',
-            unit: 'V',
-            valueType: 'float32',
-          },
-        ],
-      });
-    });
-    expect(await screen.findByText('已创建设备模型 meter@v2')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /设备模型/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /点位探测/ })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Agent 助手/ }));
-    expect(await screen.findByText('Agent 辅助管理')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '安全策略' }));
+    expect(await screen.findByText('云边配置助手')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '安全策略检查' }));
     await waitFor(() => {
       expect(runAgentSafetyCheck).toHaveBeenCalledOnce();
     });
-    expect(await screen.findByText('安全策略检查 已通过')).toBeInTheDocument();
+    expect(await screen.findByText('安全策略结果')).toBeInTheDocument();
+    expect(screen.getByText(/安全策略检查 已通过/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '生成建议' }));
+    fireEvent.click(screen.getByRole('button', { name: '生成候选建议' }));
     await waitFor(() => {
       expect(generateAgentSuggestions).toHaveBeenCalledOnce();
     });
-    expect(await screen.findByText('Agent 建议已生成 1 条')).toBeInTheDocument();
+    expect(screen.getAllByText('候选建议').length).toBeGreaterThan(0);
+    expect(screen.getByText('已生成 1 条候选建议。建议只进入候选队列，不会自动修改配置。')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('输入 Agent 问题'), {
+      target: { value: '分析 edge-dev 状态' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(sendAgentChat).toHaveBeenCalledOnce());
+    expect(await screen.findByText('本地分析')).toBeInTheDocument();
+    expect(screen.getByText('当前边端健康，建议先校验配置差异。')).toBeInTheDocument();
   });
 
   it('loads runtime status into the runtime monitoring page', async () => {
@@ -1252,68 +1291,4 @@ describe('App cloud console write actions', () => {
     expect(screen.getByText('Modbus TCP')).toBeInTheDocument();
   });
 
-  it('loads backend management lists into formerly static pages', async () => {
-    render(<App />);
-
-    fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
-    expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /设备模型/ }));
-    expect(
-      await screen.findByRole('button', { name: '选择设备模型 pump' }),
-    ).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
-    fireEvent.click(screen.getByRole('button', { name: '配置 edge-dev' }));
-    fireEvent.click(screen.getByRole('button', { name: '配置连接' }));
-    expect(
-      await screen.findByRole('dialog', { name: '配置协议连接' }),
-    ).toBeInTheDocument();
-    expect(await screen.findByText('10.12.0.20:502')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '关闭配置协议连接' }));
-    fireEvent.click(screen.getByRole('button', { name: '打开配置总览' }));
-
-    fireEvent.click(screen.getByRole('tab', { name: '数据上报' }));
-    expect(await screen.findByRole('button', { name: 'pump_status' })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /审计日志/ }));
-    expect(await screen.findByText('create_release')).toBeInTheDocument();
-  });
-
-  it('loads edge-scoped configuration lists on first render', async () => {
-    vi.mocked(fetchProtocolConnections).mockResolvedValueOnce([
-      protocolConnections[0],
-      {
-        ...protocolConnections[0],
-        endpoint: 'opc.tcp://historical-draft:4840',
-      },
-    ]);
-    vi.mocked(fetchEdgeProtocolConnections).mockResolvedValueOnce(protocolConnections);
-
-    render(<App />);
-
-    fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
-    expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '配置 edge-dev' }));
-    fireEvent.click(screen.getByRole('button', { name: '配置连接' }));
-
-    await waitFor(() => {
-      expect(fetchEdgeProtocolConnections).toHaveBeenCalledWith('edge-dev');
-    });
-    expect(
-      await screen.findByRole('button', { name: '编辑连接 modbus-line-a' }),
-    ).toBeInTheDocument();
-    expect(screen.queryByText('opc.tcp://historical-draft:4840')).not.toBeInTheDocument();
-  });
 });
-
-async function openEdgeConfiguration() {
-  fireEvent.click(screen.getByRole('button', { name: /边端管理/ }));
-  expect(await screen.findByText('研发实验室边端')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: '配置 edge-dev' }));
-  expect(screen.getByRole('dialog', { name: '配置边端' })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: '打开配置总览' }));
-  expect(await screen.findByRole('heading', { name: '研发实验室边端' })).toBeInTheDocument();
-  expect(screen.getByRole('tab', { name: '配置总览' })).toHaveAttribute('aria-selected', 'true');
-  expect(screen.getByText('配置绑定总览')).toBeInTheDocument();
-}

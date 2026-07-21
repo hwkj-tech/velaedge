@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use edge_core::{EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot};
 use reqwest::Url;
 
-use crate::{AppliedEdgeConfig, SimulatedRuntimeMetricsCollector};
+use crate::{AppliedEdgeConfig, RocksEdgeRuntimeStore, SimulatedRuntimeMetricsCollector};
 
 #[async_trait]
 pub trait RuntimeStatusReporter {
@@ -21,6 +21,22 @@ where
     R: RuntimeStatusReporter + Send,
 {
     let snapshot = SimulatedRuntimeMetricsCollector::new(runtime_id, applied).snapshot();
+    reporter.report_metrics(snapshot.clone()).await?;
+    Ok(snapshot)
+}
+
+pub async fn report_runtime_status_with_store_once<R>(
+    runtime_id: &str,
+    applied: AppliedEdgeConfig,
+    store: &RocksEdgeRuntimeStore,
+    reporter: &mut R,
+) -> Result<EdgeRuntimeMetricsSnapshot>
+where
+    R: RuntimeStatusReporter + Send,
+{
+    let snapshot = SimulatedRuntimeMetricsCollector::new(runtime_id, applied)
+        .with_mqtt_outbox_stats(store.mqtt_outbox_stats()?)
+        .snapshot();
     reporter.report_metrics(snapshot.clone()).await?;
     Ok(snapshot)
 }

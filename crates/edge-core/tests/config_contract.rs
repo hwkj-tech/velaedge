@@ -1,10 +1,11 @@
 use edge_core::{
     AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
     AlgorithmReportPolicy, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger, CollectionTask,
-    DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish,
-    DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, NumberRange, PointAddress,
-    ProtocolConnection, ProtocolType, SerialConnectionSettings, TelemetryPointMapping,
-    TelemetryType, WindowAggregateFunction,
+    CustomSerialChecksum, CustomSerialPointSpec, CustomSerialValueEncoding, DataConfig,
+    DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish, DeviceInstance,
+    EdgeConfigPackage, MqttUplinkConfig, NumberRange, PointAddress, ProtocolConnection,
+    ProtocolType, SerialConnectionSettings, TelemetryPointMapping, TelemetryType,
+    WindowAggregateFunction,
 };
 
 #[test]
@@ -64,6 +65,52 @@ fn modbus_rtu_connection_preserves_serial_settings() {
 }
 
 #[test]
+fn iec101_connection_and_point_preserve_serial_and_address_metadata() {
+    let serial = SerialConnectionSettings::new("/dev/ttyUSB1", 9600)
+        .with_data_bits(8)
+        .with_stop_bits(1)
+        .with_parity("even");
+    let connection = ProtocolConnection::iec101_serial("substation-iec101", serial.clone());
+    let address = PointAddress::iec101(1, 2, 1001);
+
+    assert_eq!(connection.protocol, ProtocolType::Iec101);
+    assert_eq!(connection.serial.as_ref(), Some(&serial));
+    assert_eq!(address.kind, "iec101_ioa");
+    assert_eq!(address.value, "1:2:1001");
+}
+
+#[test]
+fn custom_serial_point_address_is_a_validated_structured_contract() {
+    let mut spec = CustomSerialPointSpec::new("01 03 00 10", 3, CustomSerialValueEncoding::U16Be);
+    spec.request_checksum = CustomSerialChecksum::ModbusCrc16;
+    spec.response_checksum = CustomSerialChecksum::Sum8;
+    spec.response_prefix_hex = Some("01:03".to_string());
+    spec.scale = 0.1;
+
+    edge_core::validate_custom_serial_point_spec(&spec).expect("spec is valid");
+    let address = PointAddress::custom_serial(&spec).expect("address serializes");
+    let decoded: CustomSerialPointSpec = serde_json::from_str(&address.value).unwrap();
+
+    assert_eq!(address.kind, "custom_serial_frame");
+    assert_eq!(decoded, spec);
+    assert_eq!(decoded.value_width().unwrap(), 2);
+}
+
+#[test]
+fn custom_serial_contract_rejects_unbounded_or_malformed_frames() {
+    let mut malformed = CustomSerialPointSpec::new("0A1", 0, CustomSerialValueEncoding::U16Be);
+    assert!(edge_core::validate_custom_serial_point_spec(&malformed)
+        .unwrap_err()
+        .contains("complete byte pairs"));
+
+    malformed.request_hex = "01".to_string();
+    malformed.value_offset = 4095;
+    assert!(edge_core::validate_custom_serial_point_spec(&malformed)
+        .unwrap_err()
+        .contains("4096-byte response limit"));
+}
+
+#[test]
 fn mqtt_is_modeled_as_northbound_uplink_not_device_protocol() {
     let protocol_json =
         serde_json::to_string(&ProtocolType::ModbusRtu).expect("protocol serializes");
@@ -81,10 +128,44 @@ fn mqtt_is_modeled_as_northbound_uplink_not_device_protocol() {
     assert_eq!(uplink.sink_id, "velamq-main");
     assert_eq!(uplink.broker, "mqtts://velamq.local:8883");
     assert_eq!(uplink.qos, 1);
+    assert_eq!(uplink.username, None);
+    assert_eq!(uplink.password_env, None);
+    assert_eq!(uplink.tls_ca_path, None);
     assert_eq!(
         uplink.topic_template,
         "edge/{edge_id}/device/{device_id}/telemetry"
     );
+}
+
+#[test]
+fn mqtt_security_uses_secret_references_and_keeps_legacy_json_compatible() {
+    let secured = MqttUplinkConfig::velamq(
+        "velamq-main",
+        "mqtts://velamq.local:8883",
+        "edge-dev-runtime-dev",
+    )
+    .with_credentials_env("edge-device", "EDGEOPS_MQTT_PASSWORD")
+    .with_tls_ca_path("/etc/edgeops/velamq-ca.pem");
+    let json = serde_json::to_value(&secured).unwrap();
+
+    assert_eq!(json["username"], "edge-device");
+    assert_eq!(json["password_env"], "EDGEOPS_MQTT_PASSWORD");
+    assert!(json.get("password").is_none());
+    assert_eq!(json["tls_ca_path"], "/etc/edgeops/velamq-ca.pem");
+
+    let legacy: MqttUplinkConfig = serde_json::from_value(serde_json::json!({
+        "sink_id": "legacy",
+        "broker": "mqtt://127.0.0.1:1883",
+        "client_id": "legacy-client",
+        "topic_template": "edge/{edge_id}/telemetry",
+        "qos": 1,
+        "batch_size": 100,
+        "flush_interval_ms": 1000
+    }))
+    .unwrap();
+    assert_eq!(legacy.username, None);
+    assert_eq!(legacy.password_env, None);
+    assert_eq!(legacy.tls_ca_path, None);
 }
 
 #[test]

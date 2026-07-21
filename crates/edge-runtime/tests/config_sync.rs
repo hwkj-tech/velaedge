@@ -6,9 +6,11 @@ use edge_core::{
     TelemetryPointMapping, TelemetryType,
 };
 use edge_runtime::{
-    sync_and_report_once, sync_and_report_with_mqtt_publisher_once, sync_once,
-    EdgeConfigSyncClient, EdgeDesiredConfig, RecordingMqttPublisher, RuntimeStatusReporter,
+    sync_and_report_once, sync_and_report_with_mqtt_publisher_and_store_once,
+    sync_and_report_with_mqtt_publisher_once, sync_once, EdgeConfigSyncClient, EdgeDesiredConfig,
+    RecordingMqttPublisher, RocksEdgeRuntimeStore, RuntimeStatusReporter,
 };
+use tempfile::tempdir;
 
 fn package() -> EdgeConfigPackage {
     EdgeConfigPackage::new("edge-dev", "2026.06.26-002")
@@ -205,4 +207,50 @@ async fn sync_and_report_with_mqtt_publisher_prefers_data_config_json_topics() {
     assert_eq!(payload["config_id"], "pump_status");
     assert_eq!(payload["values"]["pressure"], 1.0);
     assert_eq!(reporter.metrics.len(), 1);
+}
+
+#[tokio::test]
+async fn mqtt_sync_with_store_persists_active_config_and_drains_outbox() {
+    let mut package = package();
+    package.mqtt_uplinks.push(
+        MqttUplinkConfig::velamq("velamq-main", "mqtt://velamq.local:1883", "edge-dev")
+            .with_topic_template("velamq/{edge_id}/{device_id}/{telemetry_id}"),
+    );
+    let mut client = MemorySyncClient {
+        desired: EdgeDesiredConfig {
+            desired_version: "2026.06.26-002".to_string(),
+            package,
+        },
+        reported: Vec::new(),
+    };
+    let mut reporter = MemoryRuntimeReporter::default();
+    let mut mqtt = RecordingMqttPublisher::default();
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("runtime.rocksdb");
+    let store = RocksEdgeRuntimeStore::open(&db_path).unwrap();
+
+    let report = sync_and_report_with_mqtt_publisher_and_store_once(
+        "edge-dev",
+        "runtime-sync",
+        &mut client,
+        &mut reporter,
+        &store,
+        &mut mqtt,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(report.mqtt_messages_published, 1);
+    assert_eq!(store.mqtt_outbox_len().unwrap(), 0);
+    assert_eq!(
+        store.active_version("edge-dev").unwrap().as_deref(),
+        Some("2026.06.26-002")
+    );
+    drop(store);
+
+    let reopened = RocksEdgeRuntimeStore::open(&db_path).unwrap();
+    assert_eq!(
+        reopened.active_version("edge-dev").unwrap().as_deref(),
+        Some("2026.06.26-002")
+    );
 }

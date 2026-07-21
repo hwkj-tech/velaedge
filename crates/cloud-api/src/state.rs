@@ -1,8 +1,15 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    env,
+    sync::{Arc, Mutex},
+};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::Utc;
-use cloud_control::{CloudControlStore, EdgeNode, ReleaseRecord, ReleaseService, SqliteCloudStore};
+use cloud_control::{
+    AgentConversation, AgentProposal, AuditRecord, CloudControlStore, EdgeAccessCredential,
+    EdgeNode, KnowledgeDocument, PointSet, PointSetPoint, Product, ProductVersion,
+    ProductVersionStatus, Project, ReleaseRecord, ReleaseService, SqliteCloudStore,
+};
 use edge_core::{
     AlgorithmDsl, AlgorithmKind, AlgorithmRuntime, AlgorithmSpec, CloudSyncMetrics,
     CollectionRuntimeMetrics, CollectionTask, CommandRisk, CommandSpec, DataConfig,
@@ -13,30 +20,83 @@ use edge_core::{
     TelemetryPointMapping, TelemetryType,
 };
 
+use crate::{
+    agent_service::AgentService, auth::ApiAuthConfig, gateway::EdgeGatewayCommandRegistry,
+};
+
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<Mutex<CloudControlStore>>,
     pub sqlite_store: Option<SqliteCloudStore>,
+    pub gateway_commands: EdgeGatewayCommandRegistry,
+    pub agent_service: AgentService,
+    pub api_auth: ApiAuthConfig,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootstrapMode {
+    Demo,
+    Empty,
+}
+
+impl BootstrapMode {
+    pub fn from_env() -> Result<Self> {
+        Self::resolve(
+            env::var("EDGEOPS_BOOTSTRAP_MODE").ok().as_deref(),
+            env::var("EDGEOPS_API_AUTH_MODE").ok().as_deref(),
+        )
+    }
+
+    fn resolve(bootstrap_mode: Option<&str>, api_auth_mode: Option<&str>) -> Result<Self> {
+        match bootstrap_mode
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(value) if value.eq_ignore_ascii_case("demo") => Ok(Self::Demo),
+            Some(value) if value.eq_ignore_ascii_case("empty") => Ok(Self::Empty),
+            Some(value) => bail!("EDGEOPS_BOOTSTRAP_MODE must be 'demo' or 'empty', got '{value}'"),
+            None if api_auth_mode
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("required")) =>
+            {
+                Ok(Self::Empty)
+            }
+            None => Ok(Self::Demo),
+        }
+    }
 }
 
 impl AppState {
     pub async fn with_sqlite(database_url: &str) -> Result<Self> {
+        Self::with_sqlite_bootstrap(database_url, BootstrapMode::from_env()?).await
+    }
+
+    pub async fn with_sqlite_bootstrap(
+        database_url: &str,
+        bootstrap_mode: BootstrapMode,
+    ) -> Result<Self> {
         ensure_sqlite_parent(database_url).await?;
         let sqlite_store = SqliteCloudStore::connect(database_url).await?;
         let mut store = CloudControlStore::default();
         hydrate_from_sqlite(&sqlite_store, &mut store).await?;
 
-        if store.edge_nodes().next().is_none() {
-            store = demo_store();
-            persist_store_snapshot(&sqlite_store, &store).await?;
-        } else {
-            ensure_default_mqtt_uplinks(&sqlite_store, &mut store).await?;
-            ensure_default_data_configs(&sqlite_store, &mut store).await?;
+        if bootstrap_mode == BootstrapMode::Demo {
+            if store.edge_nodes().next().is_none() {
+                store = demo_store();
+                persist_store_snapshot(&sqlite_store, &store).await?;
+            } else {
+                ensure_default_mqtt_uplinks(&sqlite_store, &mut store).await?;
+                ensure_default_data_configs(&sqlite_store, &mut store).await?;
+                ensure_default_catalog(&sqlite_store, &mut store).await?;
+                ensure_default_edge_product_bindings(&sqlite_store, &mut store).await?;
+            }
         }
 
         Ok(Self {
             store: Arc::new(Mutex::new(store)),
             sqlite_store: Some(sqlite_store),
+            gateway_commands: EdgeGatewayCommandRegistry::default(),
+            agent_service: AgentService::from_env(),
+            api_auth: ApiAuthConfig::from_env()?,
         })
     }
 
@@ -47,9 +107,26 @@ impl AppState {
         Ok(())
     }
 
+    pub fn with_agent_service(mut self, agent_service: AgentService) -> Self {
+        self.agent_service = agent_service;
+        self
+    }
+
+    pub fn with_api_auth(mut self, api_auth: ApiAuthConfig) -> Self {
+        self.api_auth = api_auth;
+        self
+    }
+
     pub async fn persist_edge_node(&self, node: EdgeNode) -> Result<()> {
         if let Some(store) = &self.sqlite_store {
             store.upsert_edge_node(node).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn persist_edge_credential(&self, credential: EdgeAccessCredential) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.replace_edge_credential(credential).await?;
         }
         Ok(())
     }
@@ -129,6 +206,150 @@ impl AppState {
         }
         Ok(())
     }
+
+    pub async fn persist_project(&self, project: Project) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.upsert_project(project).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn delete_project(&self, project_id: &str) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.delete_project(project_id).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn persist_point_set(&self, point_set: PointSet) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.upsert_point_set(point_set).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn delete_point_set(&self, point_set_id: &str) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.delete_point_set(point_set_id).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn persist_product(&self, product: Product) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.upsert_product(product).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn delete_product(&self, product_id: &str) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.delete_product(product_id).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn persist_product_version(&self, version: ProductVersion) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.upsert_product_version(version).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn persist_product_version_transition(
+        &self,
+        product: Product,
+        versions: Vec<ProductVersion>,
+        edge_nodes: Vec<EdgeNode>,
+        packages: Vec<EdgeConfigPackage>,
+        releases: Vec<cloud_control::ReleaseRecord>,
+    ) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store
+                .transition_product_version(product, versions, edge_nodes, packages, releases)
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn delete_product_version(&self, product_id: &str, version: &str) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.delete_product_version(product_id, version).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn persist_agent_proposal_transition(
+        &self,
+        proposal: AgentProposal,
+        audit: AuditRecord,
+    ) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store
+                .upsert_agent_proposal_with_audit(proposal, audit)
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn persist_knowledge_document_transition(
+        &self,
+        document: KnowledgeDocument,
+        audit: AuditRecord,
+    ) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store
+                .upsert_knowledge_document_with_audit(document, audit)
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn delete_knowledge_document_transition(
+        &self,
+        document_id: uuid::Uuid,
+        audit: AuditRecord,
+    ) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store
+                .delete_knowledge_document_with_audit(document_id, audit)
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn persist_agent_conversation(&self, conversation: AgentConversation) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.upsert_agent_conversation(conversation).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn persist_agent_conversation_transition(
+        &self,
+        conversation: AgentConversation,
+        audit: AuditRecord,
+    ) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store
+                .upsert_agent_conversation_with_audit(conversation, audit)
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn delete_agent_conversation_transition(
+        &self,
+        conversation_id: uuid::Uuid,
+        audit: AuditRecord,
+    ) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store
+                .delete_agent_conversation_with_audit(conversation_id, audit)
+                .await?;
+        }
+        Ok(())
+    }
 }
 
 impl Default for AppState {
@@ -136,6 +357,9 @@ impl Default for AppState {
         Self {
             store: Arc::new(Mutex::new(demo_store())),
             sqlite_store: None,
+            gateway_commands: EdgeGatewayCommandRegistry::default(),
+            agent_service: AgentService::from_env(),
+            api_auth: ApiAuthConfig::disabled(),
         }
     }
 }
@@ -143,14 +367,17 @@ impl Default for AppState {
 fn demo_store() -> CloudControlStore {
     let mut store = CloudControlStore::default();
 
-    store.register_edge(
-        EdgeNode::new("edge-dev", "研发实验室边端")
-            .at_site("研发/实验室")
-            .with_capability("protocol:modbus-rtu")
-            .with_capability("transport:serial")
-            .with_capability("uplink:mqtt")
-            .with_capability("local-store:rocksdb"),
-    );
+    let mut demo_edge = EdgeNode::new("edge-dev", "研发实验室边端")
+        .at_site("研发/实验室")
+        .with_capability("protocol:modbus-rtu")
+        .with_capability("transport:serial")
+        .with_capability("uplink:mqtt")
+        .with_capability("local-store:rocksdb")
+        .with_capability("project:demo-plant")
+        .with_capability("product:pump-collection-uplink")
+        .bind_product("demo-plant", "pump-collection-uplink", "v1.4.3");
+    demo_edge.reported_product_version = Some("2026.06.26-001".to_string());
+    store.register_edge(demo_edge);
 
     let pump_model = DeviceSpec::new("pump", "v1")
         .with_telemetry(vec![
@@ -308,7 +535,198 @@ fn demo_store() -> CloudControlStore {
         },
     });
 
+    seed_default_catalog(&mut store);
+
     store
+}
+
+async fn ensure_default_catalog(
+    sqlite_store: &SqliteCloudStore,
+    store: &mut CloudControlStore,
+) -> Result<()> {
+    if store.projects().next().is_some() {
+        return Ok(());
+    }
+    seed_default_catalog(store);
+    for project in store.projects().cloned().collect::<Vec<_>>() {
+        sqlite_store.upsert_project(project).await?;
+    }
+    for point_set in store.point_sets().cloned().collect::<Vec<_>>() {
+        sqlite_store.upsert_point_set(point_set).await?;
+    }
+    for product in store.products().cloned().collect::<Vec<_>>() {
+        sqlite_store.upsert_product(product).await?;
+    }
+    for version in store.product_versions().cloned().collect::<Vec<_>>() {
+        sqlite_store.upsert_product_version(version).await?;
+    }
+    Ok(())
+}
+
+async fn ensure_default_edge_product_bindings(
+    sqlite_store: &SqliteCloudStore,
+    store: &mut CloudControlStore,
+) -> Result<()> {
+    let nodes = store.edge_nodes().cloned().collect::<Vec<_>>();
+    for mut node in nodes {
+        if node.product_id.is_some() && node.desired_product_version.is_some() {
+            continue;
+        }
+
+        let product_id = node
+            .capabilities
+            .iter()
+            .find_map(|capability| capability.strip_prefix("product:"))
+            .map(str::to_string)
+            .or_else(|| (node.edge_id == "edge-dev").then(|| "pump-collection-uplink".to_string()));
+        let Some(product_id) = product_id else {
+            continue;
+        };
+        let Some(product) = store.product(&product_id).cloned() else {
+            continue;
+        };
+        let Some(desired_version) = product.latest_version.clone() else {
+            continue;
+        };
+
+        node.project_id = Some(product.project_id);
+        node.product_id = Some(product_id);
+        node.desired_product_version = Some(desired_version);
+        store.register_edge(node.clone());
+        sqlite_store.upsert_edge_node(node).await?;
+    }
+    Ok(())
+}
+
+fn seed_default_catalog(store: &mut CloudControlStore) {
+    let mut demo_project = Project::new("demo-plant", "demo-plant");
+    demo_project.owner = "platform-team".to_string();
+    demo_project.description =
+        "研发实验室与 demo 产线共用项目，承载串口采集、边缘计算和 velaMQ 上报。".to_string();
+    store.upsert_project(demo_project);
+
+    let mut energy_project = Project::new("energy-demo", "energy-demo");
+    energy_project.owner = "energy-team".to_string();
+    energy_project.description = "能源计量场景的产品与边端隔离空间。".to_string();
+    store.upsert_project(energy_project);
+
+    let mut pump_points = PointSet::new(
+        "pump-standard-points",
+        "demo-plant",
+        "泵站标准点位",
+        ProtocolType::ModbusRtu,
+    );
+    pump_points.description = "泵出口压力和运行状态点位集合。".to_string();
+    pump_points.points = vec![
+        PointSetPoint {
+            point_id: "pump_pressure".to_string(),
+            semantic_id: "pump.pressure".to_string(),
+            address: PointAddress::modbus_holding_register(40011),
+            value_type: TelemetryType::Float,
+            unit: Some("MPa".to_string()),
+            interval_ms: 1000,
+        },
+        PointSetPoint {
+            point_id: "pump_running".to_string(),
+            semantic_id: "pump.running".to_string(),
+            address: PointAddress {
+                kind: "coil".to_string(),
+                value: "00001".to_string(),
+            },
+            value_type: TelemetryType::Boolean,
+            unit: None,
+            interval_ms: 1000,
+        },
+    ];
+    store.upsert_point_set(pump_points);
+
+    let mut meter_points = PointSet::new(
+        "meter-standard-points",
+        "demo-plant",
+        "电表标准点位",
+        ProtocolType::ModbusRtu,
+    );
+    meter_points.points = vec![
+        PointSetPoint {
+            point_id: "meter_voltage_a".to_string(),
+            semantic_id: "electric.voltage_a".to_string(),
+            address: PointAddress::modbus_holding_register(40001),
+            value_type: TelemetryType::Float,
+            unit: Some("V".to_string()),
+            interval_ms: 1000,
+        },
+        PointSetPoint {
+            point_id: "meter_current_a".to_string(),
+            semantic_id: "electric.current_a".to_string(),
+            address: PointAddress::modbus_holding_register(40003),
+            value_type: TelemetryType::Float,
+            unit: Some("A".to_string()),
+            interval_ms: 1000,
+        },
+    ];
+    store.upsert_point_set(meter_points);
+
+    let mut energy_points = PointSet::new(
+        "energy-standard-points",
+        "demo-plant",
+        "能耗标准点位",
+        ProtocolType::ModbusRtu,
+    );
+    energy_points.points = vec![PointSetPoint {
+        point_id: "energy_power".to_string(),
+        semantic_id: "energy.power".to_string(),
+        address: PointAddress::modbus_holding_register(40101),
+        value_type: TelemetryType::Float,
+        unit: Some("kW".to_string()),
+        interval_ms: 5000,
+    }];
+    store.upsert_point_set(energy_points);
+
+    let catalog = [
+        (
+            "pump-collection-uplink",
+            "泵站状态模板",
+            "pump-station",
+            "v1.4.3",
+            "pump-standard-points",
+        ),
+        (
+            "modbus-rtu-meter-basic",
+            "Modbus 电表标准模板",
+            "meter",
+            "v1.2.0",
+            "meter-standard-points",
+        ),
+        (
+            "energy-window-report",
+            "能耗聚合模板",
+            "energy",
+            "v1.1.0",
+            "energy-standard-points",
+        ),
+    ];
+    for (product_id, name, product_type, version, point_set_id) in catalog {
+        let mut product = Product::new(product_id, "demo-plant", name, product_type);
+        product.latest_version = Some(version.to_string());
+        product.description = format!("{name}的版本化边端配置");
+        store.upsert_product(product);
+
+        let mut product_version = ProductVersion::draft(product_id, version);
+        product_version.status = ProductVersionStatus::Published;
+        product_version.point_set_ids = vec![point_set_id.to_string()];
+        if product_id == "pump-collection-uplink" {
+            if let Some(package) = store.latest_config_package_for_edge("edge-dev").cloned() {
+                product_version.device_models = package.device_models;
+                product_version.devices = package.devices;
+                product_version.protocol_connections = package.protocol_connections;
+                product_version.collection_tasks = package.collection_tasks;
+                product_version.algorithms = package.algorithms;
+                product_version.data_configs = package.data_configs;
+                product_version.mqtt_uplinks = package.mqtt_uplinks;
+            }
+        }
+        store.upsert_product_version(product_version);
+    }
 }
 
 async fn ensure_default_mqtt_uplinks(
@@ -369,6 +787,45 @@ async fn ensure_default_data_configs(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod bootstrap_tests {
+    use super::BootstrapMode;
+
+    #[test]
+    fn explicit_bootstrap_mode_wins_over_auth_default() {
+        assert_eq!(
+            BootstrapMode::resolve(Some("demo"), Some("required")).unwrap(),
+            BootstrapMode::Demo
+        );
+        assert_eq!(
+            BootstrapMode::resolve(Some("empty"), Some("disabled")).unwrap(),
+            BootstrapMode::Empty
+        );
+    }
+
+    #[test]
+    fn required_auth_defaults_to_empty_and_local_defaults_to_demo() {
+        assert_eq!(
+            BootstrapMode::resolve(None, Some("required")).unwrap(),
+            BootstrapMode::Empty
+        );
+        assert_eq!(
+            BootstrapMode::resolve(None, Some("disabled")).unwrap(),
+            BootstrapMode::Demo
+        );
+        assert_eq!(
+            BootstrapMode::resolve(None, None).unwrap(),
+            BootstrapMode::Demo
+        );
+    }
+
+    #[test]
+    fn invalid_bootstrap_mode_is_rejected() {
+        let error = BootstrapMode::resolve(Some("seed"), None).unwrap_err();
+        assert!(error.to_string().contains("EDGEOPS_BOOTSTRAP_MODE"));
+    }
 }
 
 fn default_data_config_from_package(package: &EdgeConfigPackage) -> Option<DataConfig> {
@@ -473,6 +930,9 @@ async fn hydrate_from_sqlite(
     for node in sqlite_store.edge_nodes().await? {
         store.register_edge(node);
     }
+    for credential in sqlite_store.edge_credentials().await? {
+        store.upsert_edge_credential(credential);
+    }
     for model in sqlite_store.device_models().await? {
         store.upsert_device_model(model);
     }
@@ -499,6 +959,30 @@ async fn hydrate_from_sqlite(
     for (edge_id, report) in sqlite_store.discovery_report_entries().await? {
         store.insert_discovery_report(edge_id, report);
     }
+    for project in sqlite_store.projects().await? {
+        store.upsert_project(project);
+    }
+    for point_set in sqlite_store.point_sets().await? {
+        store.upsert_point_set(point_set);
+    }
+    for product in sqlite_store.products().await? {
+        store.upsert_product(product);
+    }
+    for version in sqlite_store.product_versions().await? {
+        store.upsert_product_version(version);
+    }
+    for proposal in sqlite_store.agent_proposals().await? {
+        store.upsert_agent_proposal(proposal);
+    }
+    for document in sqlite_store.knowledge_documents().await? {
+        store.upsert_knowledge_document(document);
+    }
+    for conversation in sqlite_store.agent_conversations().await? {
+        store.upsert_agent_conversation(conversation);
+    }
+    for audit in sqlite_store.audit_records().await? {
+        store.push_audit_record(audit);
+    }
     Ok(())
 }
 
@@ -508,6 +992,9 @@ async fn persist_store_snapshot(
 ) -> Result<()> {
     for node in store.edge_nodes().cloned().collect::<Vec<_>>() {
         sqlite_store.upsert_edge_node(node).await?;
+    }
+    for credential in store.edge_credentials().cloned().collect::<Vec<_>>() {
+        sqlite_store.upsert_edge_credential(credential).await?;
     }
     for package in store.config_packages().cloned().collect::<Vec<_>>() {
         sqlite_store.upsert_config_package(package).await?;
@@ -539,6 +1026,24 @@ async fn persist_store_snapshot(
                 .insert_discovery_report(edge_id, report.clone())
                 .await?;
         }
+    }
+    for project in store.projects().cloned().collect::<Vec<_>>() {
+        sqlite_store.upsert_project(project).await?;
+    }
+    for point_set in store.point_sets().cloned().collect::<Vec<_>>() {
+        sqlite_store.upsert_point_set(point_set).await?;
+    }
+    for product in store.products().cloned().collect::<Vec<_>>() {
+        sqlite_store.upsert_product(product).await?;
+    }
+    for version in store.product_versions().cloned().collect::<Vec<_>>() {
+        sqlite_store.upsert_product_version(version).await?;
+    }
+    for proposal in store.agent_proposals().cloned().collect::<Vec<_>>() {
+        sqlite_store.upsert_agent_proposal(proposal).await?;
+    }
+    for audit in store.audit_records().iter().cloned() {
+        sqlite_store.push_audit_record(audit).await?;
     }
     Ok(())
 }

@@ -1,0 +1,135 @@
+.auth-screen {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  background:
+    linear-gradient(90deg, rgb(47 111 198 / 5%) 1px, transparent 1px),
+    linear-gradient(rgb(21 122 110 / 5%) 1px, transparent 1px),
+    linear-gradient(145deg, #f8fbff 0%, #edf7f6 52%, #f7fbff 100%);
+  background-size: 40px 40px, 40px 40px, auto;
+  padding: 24px;
+}
+
+.auth-panel {
+  width: min(440px, 100%);
+  border: 1px solid rgb(130 166 184 / 34%);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 88%);
+  box-shadow: 0 28px 80px rgb(28 67 89 / 16%);
+  backdrop-filter: blur(18px);
+  overflow: hidden;
+}
+
+.auth-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-bottom: 1px solid var(--color-border);
+  padding: 22px 24px;
+}
+
+.auth-mark {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid #a9ddd2;
+  border-radius: 8px;
+  background: #eafaf5;
+  color: #157a6e;
+}
+
+.auth-kicker {
+  color: #157a6e;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.auth-header h1 {
+  margin: 4px 0 0;
+  color: var(--color-text);
+  font-size: 21px;
+  letter-spacing: 0;
+}
+
+.auth-form {
+  display: grid;
+  gap: 10px;
+  padding: 24px;
+}
+
+.auth-form label {
+  color: #42526b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.auth-token-field {
+  display: flex;
+  height: 44px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #cbd9e4;
+  border-radius: 7px;
+  background: #fbfdff;
+  color: #64748b;
+  padding: 0 12px;
+}
+
+.auth-token-field:focus-within {
+  border-color: #2f6fc6;
+  box-shadow: 0 0 0 3px rgb(47 111 198 / 12%);
+}
+
+.auth-token-field input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text);
+}
+
+.auth-error {
+  margin: 2px 0 0;
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.auth-submit {
+  display: inline-flex;
+  height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 6px;
+  border: 0;
+  border-radius: 7px;
+  background: #176c63;
+  color: white;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.auth-submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.auth-checking {
+  display: flex;
+  min-height: 108px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #42526b;
+}
+
+.auth-spinner {
+  animation: auth-spin 0.9s linear infinite;
+}
+
+@keyframes auth-spin {
+  to { transform: rotate(360deg); }
+}

@@ -92,7 +92,11 @@ pub fn append_modbus_rtu_crc(frame: &mut Vec<u8>) {
     frame.extend(crc.to_le_bytes());
 }
 
-fn build_read_holding_registers_request(slave_id: u8, register: u16, count: u16) -> Vec<u8> {
+pub(crate) fn build_read_holding_registers_request(
+    slave_id: u8,
+    register: u16,
+    count: u16,
+) -> Vec<u8> {
     let mut frame = vec![slave_id, READ_HOLDING_REGISTERS];
     frame.extend(register.to_be_bytes());
     frame.extend(count.to_be_bytes());
@@ -100,7 +104,7 @@ fn build_read_holding_registers_request(slave_id: u8, register: u16, count: u16)
     frame
 }
 
-fn parse_read_holding_registers_response(
+pub(crate) fn parse_read_holding_registers_response(
     response: &[u8],
     expected_slave_id: u8,
     expected_registers: u16,

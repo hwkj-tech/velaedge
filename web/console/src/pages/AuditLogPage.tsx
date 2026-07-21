@@ -21,9 +21,7 @@ export function AuditLogPage({
       <section className="page-intro">
         <div>
           <h2>审计日志</h2>
-          <p>
-            记录配置版本、Agent 建议、人工审批、发布动作和边端回执，保证每次变更可追溯。
-          </p>
+          <p>配置、审批、发布与回执追踪。</p>
         </div>
       </section>
 

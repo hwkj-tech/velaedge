@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Save } from 'lucide-react';
 
 import type { MqttUplinkResponse } from '../api/types';
+import { displayError } from '../utils/errors';
 
 const fallbackUplink: MqttUplinkResponse = {
   sinkId: 'velamq-main',
@@ -29,6 +30,7 @@ export function MqttUplinkPage({
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>(
     'idle',
   );
+  const [saveMessage, setSaveMessage] = useState('');
 
   useEffect(() => {
     setForm(uplink);
@@ -36,14 +38,16 @@ export function MqttUplinkPage({
 
   const handleSave = async () => {
     setSaveState('saving');
+    setSaveMessage('');
     try {
       const saved = await onSave?.(selectedEdgeId, form);
       if (saved) {
         setForm(saved);
       }
       setSaveState('saved');
-    } catch {
+    } catch (error) {
       setSaveState('error');
+      setSaveMessage(displayError(error));
     }
   };
 
@@ -52,13 +56,13 @@ export function MqttUplinkPage({
       <section className="page-intro">
         <div>
           <h2>MQTT 上报到 velaMQ</h2>
-          <p>
-            MQTT 是北向数据通道，runtime 将串口采集后的遥测写入本地 outbox 后发布到 velaMQ。
-          </p>
+          <p>串口采集数据经 outbox 发布到 velaMQ。</p>
         </div>
         <div className="toolbar">
           <span className={`release-status ${saveState}`} role="status">
-            {saveStateText(saveState)}
+            {saveState === 'error' && saveMessage
+              ? `保存失败：${saveMessage}`
+              : saveStateText(saveState)}
           </span>
           <button
             className="primary-button"
@@ -102,6 +106,38 @@ export function MqttUplinkPage({
               aria-label="Client ID"
               value={form.clientId}
               onChange={(event) => setForm({ ...form, clientId: event.target.value })}
+            />
+          </label>
+          <label className="editor-control">
+            <span>用户名（可选）</span>
+            <input
+              aria-label="MQTT 用户名"
+              autoComplete="off"
+              value={form.username ?? ''}
+              onChange={(event) => setForm({ ...form, username: event.target.value })}
+            />
+          </label>
+          <label className="editor-control">
+            <span>密码环境变量</span>
+            <input
+              aria-label="密码环境变量"
+              autoComplete="off"
+              placeholder="EDGEOPS_MQTT_PASSWORD"
+              value={form.passwordEnv ?? ''}
+              onChange={(event) =>
+                setForm({ ...form, passwordEnv: event.target.value })
+              }
+            />
+          </label>
+          <label className="editor-control">
+            <span>私有 CA 路径</span>
+            <input
+              aria-label="私有 CA 路径"
+              placeholder="/etc/edgeops/velamq-ca.pem"
+              value={form.tlsCaPath ?? ''}
+              onChange={(event) =>
+                setForm({ ...form, tlsCaPath: event.target.value })
+              }
             />
           </label>
           <label className="editor-control">

@@ -9,11 +9,14 @@ pub mod policy;
 pub mod shadow;
 
 pub use config::{
-    CollectionTask, DataConfig, DataConfigCollection, DataConfigGraphEdge, DataConfigGraphNode,
+    decode_custom_serial_hex, validate_custom_serial_point_spec, validate_data_config_visual_graph,
+    CollectionTask, CustomSerialChecksum, CustomSerialPointSpec, CustomSerialValueEncoding,
+    DataConfig, DataConfigCollection, DataConfigGraphEdge, DataConfigGraphNode,
     DataConfigGraphNodeKind, DataConfigPayload, DataConfigPayloadMode, DataConfigPoint,
-    DataConfigPublish, DataConfigVisualGraph, DeviceInstance, DiscoveredPoint, DiscoveryReport,
-    EdgeConfigPackage, MqttUplinkConfig, PointAddress, PointMappingSuggestion, ProtocolConnection,
-    ProtocolType, SerialConnectionSettings, TelemetryPointMapping,
+    DataConfigPublish, DataConfigVisualGraph, DeviceInstance, DiscoveredPoint,
+    DiscoveryAddressKind, DiscoveryReport, DiscoveryRequest, EdgeConfigPackage, MqttUplinkConfig,
+    PointAddress, PointMappingSuggestion, ProtocolConnection, ProtocolType,
+    SerialConnectionSettings, TelemetryPointMapping, MAX_DISCOVERY_POINTS,
 };
 pub use edgelink::{
     decode_edgelink_frame, encode_edgelink_frame, EdgeLinkAck, EdgeLinkCommandResult,

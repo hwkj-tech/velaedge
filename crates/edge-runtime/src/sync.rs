@@ -5,9 +5,9 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    report_runtime_status_once, AppliedEdgeConfig, ConfiguredEdgeRuntime,
-    ConfiguredSimulatedRuntime, MqttPublisher, RumqttcMqttPublisher, RuntimeStatusReporter,
-    TokioSerialBusFactory,
+    report_runtime_status_once, report_runtime_status_with_store_once, AppliedEdgeConfig,
+    ConfiguredEdgeRuntime, ConfiguredSimulatedRuntime, MqttPublisher, MultiBrokerMqttPublisher,
+    RocksEdgeRuntimeStore, RuntimeStatusReporter, TokioSerialBusFactory,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -168,8 +168,9 @@ where
     let desired = client.fetch_desired_config(edge_id).await?;
     let applied = apply_desired_config(edge_id, desired)?;
     let mut runtime = ConfiguredEdgeRuntime::new(applied.package().clone(), TokioSerialBusFactory)?;
-    let collection = if let Some(uplink) = applied.package().mqtt_uplinks.first() {
-        let mut publisher = RumqttcMqttPublisher::connect_from_uplink(uplink)?;
+    let collection = if !applied.package().mqtt_uplinks.is_empty() {
+        let mut publisher =
+            MultiBrokerMqttPublisher::connect_from_uplinks(&applied.package().mqtt_uplinks)?;
         if applied.package().data_configs.is_empty() {
             runtime
                 .collect_once_and_publish_mqtt(&mut publisher)
@@ -192,6 +193,96 @@ where
         .report_applied_version(edge_id, &applied_version)
         .await?;
     report_runtime_status_once(runtime_id, applied, reporter).await?;
+
+    Ok(EdgeConfigMqttSyncReport {
+        applied_version,
+        samples_collected: collection.collection.samples_collected,
+        mqtt_messages_published: collection.mqtt_messages_published,
+    })
+}
+
+pub async fn sync_and_report_mqtt_uplink_with_store_once<C, R>(
+    edge_id: &str,
+    runtime_id: &str,
+    client: &mut C,
+    reporter: &mut R,
+    store: &RocksEdgeRuntimeStore,
+) -> Result<EdgeConfigMqttSyncReport>
+where
+    C: EdgeConfigSyncClient + Send,
+    R: RuntimeStatusReporter + Send,
+{
+    let desired = client.fetch_desired_config(edge_id).await?;
+    store.put_desired_config(&desired.package)?;
+    let applied = apply_desired_config(edge_id, desired)?;
+    let mut runtime = ConfiguredEdgeRuntime::new(applied.package().clone(), TokioSerialBusFactory)?;
+    let collection = if !applied.package().mqtt_uplinks.is_empty() {
+        let mut publisher =
+            MultiBrokerMqttPublisher::connect_from_uplinks(&applied.package().mqtt_uplinks)?;
+        if applied.package().data_configs.is_empty() {
+            runtime
+                .collect_once_and_publish_mqtt_with_outbox(store, &mut publisher)
+                .await?
+        } else {
+            runtime
+                .collect_data_configs_once_and_publish_mqtt_with_outbox(store, &mut publisher)
+                .await?
+        }
+    } else {
+        let collection = runtime.collect_once().await?;
+        crate::ConfiguredMqttCollectionReport {
+            collection,
+            mqtt_messages_published: 0,
+        }
+    };
+    let applied_version = runtime.reported_version().to_string();
+    store.promote_active_config(edge_id, &applied_version)?;
+
+    client
+        .report_applied_version(edge_id, &applied_version)
+        .await?;
+    report_runtime_status_with_store_once(runtime_id, applied, store, reporter).await?;
+
+    Ok(EdgeConfigMqttSyncReport {
+        applied_version,
+        samples_collected: collection.collection.samples_collected,
+        mqtt_messages_published: collection.mqtt_messages_published,
+    })
+}
+
+pub async fn sync_and_report_with_mqtt_publisher_and_store_once<C, R, P>(
+    edge_id: &str,
+    runtime_id: &str,
+    client: &mut C,
+    reporter: &mut R,
+    store: &RocksEdgeRuntimeStore,
+    publisher: &mut P,
+) -> Result<EdgeConfigMqttSyncReport>
+where
+    C: EdgeConfigSyncClient + Send,
+    R: RuntimeStatusReporter + Send,
+    P: MqttPublisher + Send,
+{
+    let desired = client.fetch_desired_config(edge_id).await?;
+    store.put_desired_config(&desired.package)?;
+    let applied = apply_desired_config(edge_id, desired)?;
+    let mut runtime = ConfiguredSimulatedRuntime::new(applied.clone());
+    let collection = if applied.package().data_configs.is_empty() {
+        runtime
+            .collect_once_and_publish_mqtt_with_outbox(store, publisher)
+            .await?
+    } else {
+        runtime
+            .collect_data_configs_once_and_publish_mqtt_with_outbox(store, publisher)
+            .await?
+    };
+    let applied_version = runtime.reported_version().to_string();
+    store.promote_active_config(edge_id, &applied_version)?;
+
+    client
+        .report_applied_version(edge_id, &applied_version)
+        .await?;
+    report_runtime_status_with_store_once(runtime_id, applied, store, reporter).await?;
 
     Ok(EdgeConfigMqttSyncReport {
         applied_version,

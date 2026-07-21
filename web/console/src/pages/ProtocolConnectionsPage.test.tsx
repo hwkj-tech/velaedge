@@ -132,7 +132,9 @@ describe('ProtocolConnectionsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '新建连接' }));
     expect(screen.getByRole('dialog', { name: '新建协议连接' })).toBeInTheDocument();
     expect(screen.getByLabelText('新建协议类型')).toBeInTheDocument();
-    expect(screen.getByLabelText('新建端点')).toBeInTheDocument();
+    expect(screen.getByLabelText('新建串口设备')).toBeInTheDocument();
+    expect(screen.getByLabelText('新建波特率')).toHaveValue(9600);
+    expect(screen.getByLabelText('新建校验位')).toHaveValue('none');
   });
 
   it('creates and selects a new protocol connection from dialog fields', async () => {
@@ -177,8 +179,11 @@ describe('ProtocolConnectionsPage', () => {
     fireEvent.change(screen.getByLabelText('新建协议类型'), {
       target: { value: 'ModbusRtu' },
     });
-    fireEvent.change(screen.getByLabelText('新建端点'), {
+    fireEvent.change(screen.getByLabelText('新建串口设备'), {
       target: { value: '/dev/ttyUSB1' },
+    });
+    fireEvent.change(screen.getByLabelText('新建波特率'), {
+      target: { value: '19200' },
     });
     fireEvent.click(
       within(screen.getByRole('dialog', { name: '新建协议连接' })).getByRole(
@@ -191,10 +196,31 @@ describe('ProtocolConnectionsPage', () => {
       expect(onCreateConnection).toHaveBeenCalledWith('edge-dev', {
         endpoint: '/dev/ttyUSB1',
         protocolType: 'ModbusRtu',
+        serial: {
+          baudRate: 19200,
+          dataBits: 8,
+          parity: 'none',
+          port: '/dev/ttyUSB1',
+          stopBits: 1,
+        },
       });
     });
     expect(screen.getByText('已创建连接 connection-draft-2')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '编辑连接 connection-draft-2' }));
     expect(screen.getByText('编辑连接 connection-draft-2')).toBeInTheDocument();
+  });
+
+  it('uses IEC 101 serial defaults and exposes all transport settings', () => {
+    render(<ProtocolConnectionsPage selectedEdgeId="edge-dev" />);
+
+    fireEvent.click(screen.getByRole('button', { name: '新建连接' }));
+    fireEvent.change(screen.getByLabelText('新建协议类型'), {
+      target: { value: 'Iec101' },
+    });
+
+    expect(screen.getByLabelText('新建波特率')).toHaveValue(9600);
+    expect(screen.getByLabelText('新建数据位')).toHaveValue('8');
+    expect(screen.getByLabelText('新建停止位')).toHaveValue('1');
+    expect(screen.getByLabelText('新建校验位')).toHaveValue('even');
   });
 });

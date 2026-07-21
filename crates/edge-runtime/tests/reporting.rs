@@ -9,8 +9,10 @@ use edge_core::{
     RuntimeEventSeverity, TelemetryPointMapping, TelemetryType,
 };
 use edge_runtime::{
-    report_runtime_status_once, AppliedEdgeConfig, HttpRuntimeStatusReporter, RuntimeStatusReporter,
+    report_runtime_status_once, report_runtime_status_with_store_once, AppliedEdgeConfig,
+    HttpRuntimeStatusReporter, MqttPublishMessage, RocksEdgeRuntimeStore, RuntimeStatusReporter,
 };
+use tempfile::tempdir;
 
 fn package() -> EdgeConfigPackage {
     EdgeConfigPackage::new("edge-dev", "2026.06.26-003")
@@ -64,6 +66,34 @@ async fn report_runtime_status_once_generates_and_uploads_snapshot_from_applied_
     assert_eq!(snapshot.runtime_id, "runtime-a");
     assert_eq!(snapshot.config_version, "2026.06.26-003");
     assert_eq!(snapshot.collection.active_task_count, 1);
+    assert_eq!(reporter.metrics, vec![snapshot]);
+}
+
+#[tokio::test]
+async fn report_runtime_status_with_store_includes_pending_mqtt_outbox() {
+    let applied = AppliedEdgeConfig::apply(package()).unwrap();
+    let dir = tempdir().unwrap();
+    let store = RocksEdgeRuntimeStore::open(dir.path().join("runtime.rocksdb")).unwrap();
+    store
+        .enqueue_mqtt_message(MqttPublishMessage {
+            sink_id: "velamq-main".to_string(),
+            broker: "mqtt://127.0.0.1:1883".to_string(),
+            client_id: "edge-dev".to_string(),
+            topic: "factory/edge-dev/status".to_string(),
+            qos: 1,
+            payload: b"{}".to_vec(),
+        })
+        .unwrap();
+    let mut reporter = RecordingReporter::default();
+
+    let snapshot =
+        report_runtime_status_with_store_once("runtime-a", applied, &store, &mut reporter)
+            .await
+            .unwrap();
+
+    assert_eq!(snapshot.local_store.buffered_records, 1);
+    assert_eq!(snapshot.cloud_sync.pending_uploads, 1);
+    assert_eq!(snapshot.health, edge_core::EdgeHealth::Degraded);
     assert_eq!(reporter.metrics, vec![snapshot]);
 }
 

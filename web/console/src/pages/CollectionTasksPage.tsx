@@ -9,7 +9,9 @@ import type {
   SaveCollectionTaskRequest,
 } from '../api/types';
 import { Drawer } from '../components/Drawer';
+import { Modal } from '../components/Modal';
 import { PaginationBar } from '../components/PaginationBar';
+import { displayError } from '../utils/errors';
 import './PointMappingsPage.css';
 
 const fallbackTasks: CollectionTaskResponse[] = [
@@ -124,8 +126,9 @@ export function CollectionTasksPage({
     try {
       await onSaveTask?.(selectedEdgeId, selectedTask.taskId, request);
       setSaveState('saved');
-    } catch {
+    } catch (error) {
       setSaveState('error');
+      setToolbarMessage(`保存任务失败：${displayError(error)}`);
     }
   };
 
@@ -136,8 +139,8 @@ export function CollectionTasksPage({
     try {
       const result = await onGenerateSchedule?.(selectedEdgeId);
       setToolbarMessage(result?.message ?? '调度策略已生成');
-    } catch {
-      setToolbarMessage('调度策略生成失败');
+    } catch (error) {
+      setToolbarMessage(`调度策略生成失败：${displayError(error)}`);
     } finally {
       setActionState('idle');
     }
@@ -159,8 +162,8 @@ export function CollectionTasksPage({
         created ? `已创建任务 ${created.taskId}` : '已创建任务',
       );
       setCreateDialogOpen(false);
-    } catch {
-      setToolbarMessage('创建任务失败');
+    } catch (error) {
+      setToolbarMessage(`创建任务失败：${displayError(error)}`);
     } finally {
       setActionState('idle');
     }
@@ -173,8 +176,8 @@ export function CollectionTasksPage({
       await onDeleteTask?.(selectedEdgeId, taskId);
       setToolbarMessage(`已删除任务 ${taskId}`);
       setEditDialogOpen(false);
-    } catch {
-      setToolbarMessage('删除任务失败');
+    } catch (error) {
+      setToolbarMessage(`删除任务失败：${displayError(error)}`);
     }
   };
 
@@ -183,9 +186,7 @@ export function CollectionTasksPage({
       <section className="page-intro">
         <div>
           <h2>采集任务编排</h2>
-          <p>
-            将点位组织成边端可执行的采集任务，统一配置周期、超时、重试、死区和缓存策略。
-          </p>
+          <p>周期、批次、超时、重试与缓存策略。</p>
         </div>
         <div className="toolbar">
           {toolbarMessage ? (
@@ -221,7 +222,7 @@ export function CollectionTasksPage({
       </section>
 
       {createDialogOpen ? (
-        <div className="modal-backdrop">
+        <Modal onClose={() => setCreateDialogOpen(false)}>
           <form
             aria-labelledby="task-create-dialog-title"
             className="modal-panel"
@@ -333,7 +334,7 @@ export function CollectionTasksPage({
               </button>
             </div>
           </form>
-        </div>
+        </Modal>
       ) : null}
 
       <div className={isConfigureMode ? 'point-config-layout' : 'point-config-layout list-only'}>

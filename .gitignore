@@ -1,5 +1,6 @@
 /target/
 /data/
+crates/edge-runtime/data/
 /.worktrees/
 node_modules/
 .DS_Store

@@ -18,27 +18,34 @@ pub enum ReleaseStatus {
     Pending,
     Applied,
     Failed,
+    Superseded,
 }
 
 pub struct ReleaseService;
 
 impl ReleaseService {
-    pub fn create_release(
-        store: &mut CloudControlStore,
-        package: EdgeConfigPackage,
+    pub fn prepare_release(
+        package: &EdgeConfigPackage,
     ) -> Result<ReleaseRecord, Vec<ValidationError>> {
-        let errors = ConfigValidator::validate_package(&package);
+        let errors = ConfigValidator::validate_package(package);
         if !errors.is_empty() {
             return Err(errors);
         }
 
-        let release = ReleaseRecord {
+        Ok(ReleaseRecord {
             release_id: Uuid::new_v4(),
             edge_id: package.edge_id.clone(),
             desired_version: package.version.clone(),
             reported_version: None,
             status: ReleaseStatus::Pending,
-        };
+        })
+    }
+
+    pub fn create_release(
+        store: &mut CloudControlStore,
+        package: EdgeConfigPackage,
+    ) -> Result<ReleaseRecord, Vec<ValidationError>> {
+        let release = Self::prepare_release(&package)?;
 
         store.upsert_config_package(package);
         store.insert_release(release.clone());

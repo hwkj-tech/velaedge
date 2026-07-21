@@ -6,11 +6,15 @@ use edge_core::{
 };
 use uuid::Uuid;
 
-use crate::{AuditAction, AuditRecord, EdgeNode, ReleaseRecord};
+use crate::{
+    AgentConversation, AgentProposal, AuditAction, AuditRecord, EdgeAccessCredential, EdgeNode,
+    KnowledgeDocument, PointSet, Product, ProductVersion, Project, ReleaseRecord,
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct CloudControlStore {
     edge_nodes: BTreeMap<String, EdgeNode>,
+    edge_credentials: BTreeMap<Uuid, EdgeAccessCredential>,
     device_models: BTreeMap<String, DeviceSpec>,
     config_packages: BTreeMap<(String, String), EdgeConfigPackage>,
     releases: BTreeMap<Uuid, ReleaseRecord>,
@@ -19,6 +23,13 @@ pub struct CloudControlStore {
     runtime_events: Vec<EdgeRuntimeEvent>,
     mqtt_uplinks: BTreeMap<String, MqttUplinkConfig>,
     discovery_reports: BTreeMap<String, Vec<DiscoveryReport>>,
+    projects: BTreeMap<String, Project>,
+    point_sets: BTreeMap<String, PointSet>,
+    products: BTreeMap<String, Product>,
+    product_versions: BTreeMap<(String, String), ProductVersion>,
+    agent_proposals: BTreeMap<Uuid, AgentProposal>,
+    knowledge_documents: BTreeMap<Uuid, KnowledgeDocument>,
+    agent_conversations: BTreeMap<Uuid, AgentConversation>,
 }
 
 impl CloudControlStore {
@@ -40,7 +51,36 @@ impl CloudControlStore {
         self.runtime_events.retain(|event| event.edge_id != edge_id);
         self.mqtt_uplinks.remove(edge_id);
         self.discovery_reports.remove(edge_id);
+        self.edge_credentials
+            .retain(|_, credential| credential.edge_id != edge_id);
         Some(removed)
+    }
+
+    pub fn replace_edge_credential(&mut self, credential: EdgeAccessCredential) {
+        for existing in self
+            .edge_credentials
+            .values_mut()
+            .filter(|existing| existing.edge_id == credential.edge_id)
+        {
+            existing.active = false;
+        }
+        self.upsert_edge_credential(credential);
+    }
+
+    pub fn upsert_edge_credential(&mut self, credential: EdgeAccessCredential) {
+        self.edge_credentials
+            .insert(credential.credential_id, credential);
+    }
+
+    pub fn edge_credentials(&self) -> impl Iterator<Item = &EdgeAccessCredential> {
+        self.edge_credentials.values()
+    }
+
+    pub fn active_edge_credential(&self, edge_id: &str) -> Option<&EdgeAccessCredential> {
+        self.edge_credentials
+            .values()
+            .filter(|credential| credential.edge_id == edge_id && credential.active)
+            .max_by_key(|credential| credential.created_at)
     }
 
     pub fn upsert_device_model(&mut self, model: DeviceSpec) {
@@ -97,6 +137,10 @@ impl CloudControlStore {
 
     pub fn push_audit(&mut self, action: AuditAction, target: impl Into<String>) {
         self.audit_records.push(AuditRecord::system(action, target));
+    }
+
+    pub fn push_audit_record(&mut self, record: AuditRecord) {
+        self.audit_records.push(record);
     }
 
     pub fn audit_records(&self) -> &[AuditRecord] {
@@ -161,5 +205,148 @@ impl CloudControlStore {
             .iter()
             .flat_map(|report| report.suggestions.clone())
             .collect()
+    }
+
+    pub fn upsert_project(&mut self, project: Project) {
+        self.projects.insert(project.project_id.clone(), project);
+    }
+
+    pub fn project(&self, project_id: &str) -> Option<&Project> {
+        self.projects.get(project_id)
+    }
+
+    pub fn projects(&self) -> impl Iterator<Item = &Project> {
+        self.projects.values()
+    }
+
+    pub fn remove_project(&mut self, project_id: &str) -> Option<Project> {
+        let removed = self.projects.remove(project_id)?;
+        let product_ids = self
+            .products
+            .values()
+            .filter(|product| product.project_id == project_id)
+            .map(|product| product.product_id.clone())
+            .collect::<Vec<_>>();
+        self.point_sets
+            .retain(|_, point_set| point_set.project_id != project_id);
+        self.knowledge_documents
+            .retain(|_, document| document.project_id.as_deref() != Some(project_id));
+        self.agent_conversations
+            .retain(|_, conversation| conversation.project_id.as_deref() != Some(project_id));
+        self.products
+            .retain(|_, product| product.project_id != project_id);
+        self.product_versions
+            .retain(|(product_id, _), _| !product_ids.contains(product_id));
+        Some(removed)
+    }
+
+    pub fn upsert_point_set(&mut self, point_set: PointSet) {
+        self.point_sets
+            .insert(point_set.point_set_id.clone(), point_set);
+    }
+
+    pub fn point_set(&self, point_set_id: &str) -> Option<&PointSet> {
+        self.point_sets.get(point_set_id)
+    }
+
+    pub fn point_sets(&self) -> impl Iterator<Item = &PointSet> {
+        self.point_sets.values()
+    }
+
+    pub fn remove_point_set(&mut self, point_set_id: &str) -> Option<PointSet> {
+        self.point_sets.remove(point_set_id)
+    }
+
+    pub fn upsert_product(&mut self, product: Product) {
+        self.products.insert(product.product_id.clone(), product);
+    }
+
+    pub fn product(&self, product_id: &str) -> Option<&Product> {
+        self.products.get(product_id)
+    }
+
+    pub fn products(&self) -> impl Iterator<Item = &Product> {
+        self.products.values()
+    }
+
+    pub fn remove_product(&mut self, product_id: &str) -> Option<Product> {
+        let removed = self.products.remove(product_id)?;
+        self.product_versions
+            .retain(|(candidate_id, _), _| candidate_id != product_id);
+        Some(removed)
+    }
+
+    pub fn upsert_product_version(&mut self, version: ProductVersion) {
+        self.product_versions.insert(
+            (version.product_id.clone(), version.version.clone()),
+            version,
+        );
+    }
+
+    pub fn product_version(&self, product_id: &str, version: &str) -> Option<&ProductVersion> {
+        self.product_versions
+            .get(&(product_id.to_string(), version.to_string()))
+    }
+
+    pub fn product_versions(&self) -> impl Iterator<Item = &ProductVersion> {
+        self.product_versions.values()
+    }
+
+    pub fn remove_product_version(
+        &mut self,
+        product_id: &str,
+        version: &str,
+    ) -> Option<ProductVersion> {
+        self.product_versions
+            .remove(&(product_id.to_string(), version.to_string()))
+    }
+
+    pub fn upsert_agent_proposal(&mut self, proposal: AgentProposal) {
+        self.agent_proposals.insert(proposal.proposal_id, proposal);
+    }
+
+    pub fn agent_proposal(&self, proposal_id: Uuid) -> Option<&AgentProposal> {
+        self.agent_proposals.get(&proposal_id)
+    }
+
+    pub fn agent_proposals(&self) -> impl Iterator<Item = &AgentProposal> {
+        self.agent_proposals.values()
+    }
+
+    pub fn upsert_knowledge_document(&mut self, document: KnowledgeDocument) {
+        self.knowledge_documents
+            .insert(document.document_id, document);
+    }
+
+    pub fn knowledge_document(&self, document_id: Uuid) -> Option<&KnowledgeDocument> {
+        self.knowledge_documents.get(&document_id)
+    }
+
+    pub fn knowledge_documents(&self) -> impl Iterator<Item = &KnowledgeDocument> {
+        self.knowledge_documents.values()
+    }
+
+    pub fn remove_knowledge_document(&mut self, document_id: Uuid) -> Option<KnowledgeDocument> {
+        self.knowledge_documents.remove(&document_id)
+    }
+
+    pub fn upsert_agent_conversation(&mut self, conversation: AgentConversation) {
+        self.agent_conversations
+            .insert(conversation.conversation_id, conversation);
+    }
+
+    pub fn agent_conversation(&self, conversation_id: Uuid) -> Option<&AgentConversation> {
+        self.agent_conversations.get(&conversation_id)
+    }
+
+    pub fn agent_conversations(&self) -> impl Iterator<Item = &AgentConversation> {
+        self.agent_conversations.values()
+    }
+
+    pub fn remove_agent_conversation(
+        &mut self,
+        conversation_id: Uuid,
+    ) -> Option<AgentConversation> {
+        self.agent_conversations.remove(&conversation_id)
     }
 }

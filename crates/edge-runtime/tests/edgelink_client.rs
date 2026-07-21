@@ -2,20 +2,23 @@ use chrono::Utc;
 use edge_core::{
     decode_edgelink_frame, encode_edgelink_frame, CloudSyncMetrics, CollectionRuntimeMetrics,
     DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish,
-    DeviceInstance, EdgeConfigPackage, EdgeHealth, EdgeLinkMessage, EdgeLinkMessageKind,
-    EdgeLinkPayload, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, LocalStoreMetrics,
-    MqttUplinkConfig, PointAddress, ProtocolConnection, ProtocolRuntimeMetrics,
-    RuntimeEventCategory, RuntimeEventSeverity, SystemRuntimeMetrics, TelemetryPointMapping,
-    TelemetryType,
+    DeviceInstance, DiscoveryRequest, EdgeConfigPackage, EdgeHealth, EdgeLinkMessage,
+    EdgeLinkMessageKind, EdgeLinkPayload, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot,
+    LocalStoreMetrics, MqttUplinkConfig, PointAddress, ProtocolConnection, ProtocolRuntimeMetrics,
+    RuntimeEventCategory, RuntimeEventSeverity, SerialConnectionSettings, SystemRuntimeMetrics,
+    TelemetryPointMapping, TelemetryType,
 };
 use edge_runtime::{
-    connect_edgelink_once, connect_edgelink_once_with_capabilities,
-    publish_edgelink_runtime_status_once, publish_edgelink_runtime_status_with_mqtt_publisher_once,
+    append_modbus_rtu_crc, connect_edgelink_once, connect_edgelink_once_with_capabilities,
+    handle_edgelink_discovery_requests_with_factory, publish_edgelink_runtime_status_once,
+    publish_edgelink_runtime_status_with_mqtt_publisher_once,
     publish_edgelink_runtime_status_with_store_once, RecordingMqttPublisher, RocksEdgeRuntimeStore,
+    ScriptedSerialBus, ScriptedSerialBusFactory,
 };
 use tempfile::tempdir;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tokio::time::Duration;
 
 #[tokio::test]
 async fn runtime_client_sends_hello_and_accepts_cloud_ack() {
@@ -159,6 +162,7 @@ async fn runtime_client_publishes_metrics_and_events_after_hello() {
     assert_eq!(report.edge_id, "edge-dev");
     assert_eq!(report.runtime_id, "runtime-dev");
     assert_eq!(report.acked_message_count, 2);
+    assert_eq!(report.samples_collected, 0);
 
     let observed = gateway.await.expect("gateway task should finish");
     assert_eq!(observed[0].kind, EdgeLinkMessageKind::Hello);
@@ -238,6 +242,12 @@ async fn runtime_client_applies_config_deploy_before_publishing_metrics() {
     );
     assert!(config_report.accepted);
     assert_eq!(observed[2].kind, EdgeLinkMessageKind::RuntimeMetrics);
+    let EdgeLinkPayload::RuntimeMetrics(metrics) = &observed[2].payload else {
+        panic!("expected runtime metrics payload");
+    };
+    assert_eq!(metrics.config_version, "2026.06.27-010");
+    assert_eq!(metrics.cloud_sync.desired_version, "2026.06.27-010");
+    assert_eq!(metrics.cloud_sync.reported_version, "2026.06.27-010");
 }
 
 #[tokio::test]
@@ -350,6 +360,7 @@ async fn runtime_client_publishes_mqtt_after_edgelink_config_deploy() {
         report.applied_config_version.as_deref(),
         Some("2026.06.27-040")
     );
+    assert_eq!(report.samples_collected, 1);
     assert_eq!(report.mqtt_messages_published, 1);
     assert_eq!(mqtt.messages().len(), 1);
     assert_eq!(mqtt.messages()[0].topic, "velamq/edge-dev/pump-1/pressure");
@@ -405,6 +416,7 @@ async fn runtime_client_publishes_data_config_json_after_edgelink_config_deploy(
         report.applied_config_version.as_deref(),
         Some("2026.06.27-041")
     );
+    assert_eq!(report.samples_collected, 1);
     assert_eq!(report.mqtt_messages_published, 1);
     assert_eq!(mqtt.messages().len(), 1);
     assert_eq!(mqtt.messages()[0].topic, "factory/edge-dev/pump-1/status");
@@ -414,7 +426,71 @@ async fn runtime_client_publishes_data_config_json_after_edgelink_config_deploy(
     gateway.await.expect("gateway task should finish");
 }
 
-async fn read_one_message(stream: &mut TcpStream) -> EdgeLinkMessage {
+#[tokio::test]
+async fn runtime_executes_discovery_request_from_active_config_and_reports_result() {
+    let directory = tempdir().expect("temp directory should be created");
+    let store = RocksEdgeRuntimeStore::open(directory.path()).expect("store should open");
+    let package = EdgeConfigPackage::new("edge-dev", "2026.07.16-discovery")
+        .with_protocol_connection(ProtocolConnection::modbus_rtu_serial(
+            "meter-rs485-bus-1",
+            SerialConnectionSettings::new("/dev/ttyUSB-test", 9600),
+        ));
+    store
+        .put_desired_config(&package)
+        .expect("desired config should persist");
+    store
+        .promote_active_config("edge-dev", &package.version)
+        .expect("config should become active");
+
+    let bus = ScriptedSerialBus::new(vec![modbus_response(1, 231)]);
+    let observed_bus = bus.clone();
+    let mut factory = ScriptedSerialBusFactory::new(vec![("meter-rs485-bus-1".to_string(), bus)]);
+    let (mut runtime, mut gateway) = tokio::io::duplex(16 * 1024);
+
+    let gateway_flow = async {
+        let request = EdgeLinkMessage::discovery_request(
+            "edge-dev",
+            "runtime-dev",
+            10_000,
+            DiscoveryRequest::modbus_holding_registers(
+                "job-runtime-1",
+                "meter-rs485-bus-1",
+                40001,
+                40001,
+            ),
+        );
+        let frame = encode_edgelink_frame(&request).expect("request should encode");
+        gateway
+            .write_all(&frame)
+            .await
+            .expect("request should be written");
+        let report = read_one_message(&mut gateway).await;
+        write_ack_for(&mut gateway, &report).await;
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        report
+    };
+    let runtime_flow = handle_edgelink_discovery_requests_with_factory(
+        &mut runtime,
+        "edge-dev",
+        "runtime-dev",
+        Some(&store),
+        &mut factory,
+        Duration::from_millis(25),
+    );
+    let (report, published) = tokio::join!(gateway_flow, runtime_flow);
+    assert_eq!(published.expect("discovery command should execute"), 1);
+    let EdgeLinkPayload::DiscoveryReport(report) = report.payload else {
+        panic!("expected discovery report");
+    };
+    assert_eq!(report.job_id, "job-runtime-1");
+    assert_eq!(report.discovered_points[0].sample_values, vec!["231"]);
+    assert_eq!(&observed_bus.requests()[0][..6], &[1, 0x03, 0, 0, 0, 1]);
+}
+
+async fn read_one_message<S>(stream: &mut S) -> EdgeLinkMessage
+where
+    S: AsyncRead + Unpin,
+{
     let mut header = [0_u8; 4];
     stream
         .read_exact(&mut header)
@@ -430,7 +506,10 @@ async fn read_one_message(stream: &mut TcpStream) -> EdgeLinkMessage {
     decode_edgelink_frame(&frame).expect("message should decode")
 }
 
-async fn write_ack_for(stream: &mut TcpStream, message: &EdgeLinkMessage) {
+async fn write_ack_for<S>(stream: &mut S, message: &EdgeLinkMessage)
+where
+    S: AsyncWrite + Unpin,
+{
     let ack = EdgeLinkMessage::ack(
         message.edge_id.clone(),
         message
@@ -445,6 +524,13 @@ async fn write_ack_for(stream: &mut TcpStream, message: &EdgeLinkMessage) {
         .write_all(&ack_frame)
         .await
         .expect("ack should be written");
+}
+
+fn modbus_response(slave_id: u8, register: u16) -> Vec<u8> {
+    let mut frame = vec![slave_id, 0x03, 2];
+    frame.extend(register.to_be_bytes());
+    append_modbus_rtu_crc(&mut frame);
+    frame
 }
 
 fn runtime_metrics(edge_id: &str, runtime_id: &str) -> EdgeRuntimeMetricsSnapshot {

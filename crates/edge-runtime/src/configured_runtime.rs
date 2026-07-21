@@ -8,9 +8,11 @@ use edge_core::{
 };
 
 use crate::{
-    config::validate_config_references, publish_data_config_mqtt_samples, publish_mqtt_samples,
-    AlgorithmEngine, CollectionReport, ConfiguredMqttCollectionReport, ModbusRtuAdapter,
-    MqttPublisher, ProtocolAdapter, SerialBusFactory,
+    config::validate_config_references, publish_data_config_mqtt_samples,
+    publish_data_config_mqtt_samples_with_outbox, publish_mqtt_samples,
+    publish_mqtt_samples_with_outbox, AlgorithmEngine, CollectionReport,
+    ConfiguredMqttCollectionReport, CustomSerialAdapter, Dlt645Adapter, Iec101Adapter,
+    ModbusRtuAdapter, MqttPublisher, ProtocolAdapter, RocksEdgeRuntimeStore, SerialBusFactory,
 };
 use crate::{CollectionSchedule, DataConfigSchedule};
 
@@ -248,6 +250,45 @@ where
         })
     }
 
+    pub async fn collect_once_and_publish_mqtt_with_outbox<P>(
+        &mut self,
+        store: &RocksEdgeRuntimeStore,
+        publisher: &mut P,
+    ) -> Result<ConfiguredMqttCollectionReport>
+    where
+        P: MqttPublisher + ?Sized,
+    {
+        let samples = self.collect_samples_once().await?;
+        let mqtt_messages_published =
+            publish_mqtt_samples_with_outbox(&self.package, &samples, store, publisher).await?;
+        Ok(ConfiguredMqttCollectionReport {
+            collection: CollectionReport {
+                samples_collected: samples.len(),
+            },
+            mqtt_messages_published,
+        })
+    }
+
+    pub async fn collect_data_configs_once_and_publish_mqtt_with_outbox<P>(
+        &mut self,
+        store: &RocksEdgeRuntimeStore,
+        publisher: &mut P,
+    ) -> Result<ConfiguredMqttCollectionReport>
+    where
+        P: MqttPublisher + ?Sized,
+    {
+        let samples = self.collect_data_config_samples_once().await?;
+        let mqtt_messages_published =
+            publish_data_config_mqtt_samples_with_outbox(&self.package, &samples, store, publisher)
+                .await?;
+        Ok(ConfiguredMqttCollectionReport {
+            collection: CollectionReport {
+                samples_collected: samples.len(),
+            },
+            mqtt_messages_published,
+        })
+    }
+
     pub async fn collect_due_data_configs_once_and_publish_mqtt<P>(
         &mut self,
         schedule: &mut DataConfigSchedule,
@@ -306,6 +347,64 @@ where
                     samples_collected += samples.len();
                     match self
                         .publish_data_config_samples(config_id, &samples, publisher)
+                        .await
+                    {
+                        Ok(published) => {
+                            data_configs_succeeded += 1;
+                            mqtt_messages_published += published;
+                        }
+                        Err(error) => failures.push(ScheduledDataConfigFailure {
+                            config_id: config_id.clone(),
+                            reason: error.to_string(),
+                        }),
+                    }
+                }
+                Err(error) => failures.push(ScheduledDataConfigFailure {
+                    config_id: config_id.clone(),
+                    reason: error.to_string(),
+                }),
+            }
+            schedule.mark_ran(config_id, now_ms)?;
+        }
+
+        Ok(ResilientScheduledDataConfigPublishReport {
+            data_configs_run: due_config_ids.len(),
+            data_configs_succeeded,
+            data_configs_failed: failures.len(),
+            samples_collected,
+            mqtt_messages_published,
+            failures,
+        })
+    }
+
+    pub async fn collect_due_data_configs_resilient_once_with_outbox<P>(
+        &mut self,
+        schedule: &mut DataConfigSchedule,
+        now_ms: u64,
+        store: &RocksEdgeRuntimeStore,
+        publisher: &mut P,
+    ) -> Result<ResilientScheduledDataConfigPublishReport>
+    where
+        P: MqttPublisher + ?Sized,
+    {
+        let due_config_ids = schedule
+            .due_config_ids(now_ms)
+            .into_iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let mut data_configs_succeeded = 0;
+        let mut samples_collected = 0;
+        let mut mqtt_messages_published = 0;
+        let mut failures = Vec::new();
+
+        for config_id in &due_config_ids {
+            match self.collect_data_config_samples(config_id).await {
+                Ok(samples) => {
+                    samples_collected += samples.len();
+                    match self
+                        .publish_data_config_samples_with_outbox(
+                            config_id, &samples, store, publisher,
+                        )
                         .await
                     {
                         Ok(published) => {
@@ -438,6 +537,23 @@ where
         publish_data_config_mqtt_samples(&package, samples, publisher).await
     }
 
+    async fn publish_data_config_samples_with_outbox<P>(
+        &self,
+        config_id: &str,
+        samples: &[TelemetrySample],
+        store: &RocksEdgeRuntimeStore,
+        publisher: &mut P,
+    ) -> Result<usize>
+    where
+        P: MqttPublisher + ?Sized,
+    {
+        let mut package = self.package.clone();
+        package
+            .data_configs
+            .retain(|data_config| data_config.config_id == config_id);
+        publish_data_config_mqtt_samples_with_outbox(&package, samples, store, publisher).await
+    }
+
     async fn collect_mappings(
         &mut self,
         selected_mappings: Vec<TelemetryPointMapping>,
@@ -455,6 +571,21 @@ where
                 ProtocolType::ModbusRtu => {
                     let bus = self.serial_bus_factory.open(&connection)?;
                     let mut adapter = ModbusRtuAdapter::new(connection, mappings, bus);
+                    adapter.read_telemetry().await?
+                }
+                ProtocolType::Dlt645 => {
+                    let bus = self.serial_bus_factory.open(&connection)?;
+                    let mut adapter = Dlt645Adapter::new(connection, mappings, bus);
+                    adapter.read_telemetry().await?
+                }
+                ProtocolType::Iec101 => {
+                    let bus = self.serial_bus_factory.open(&connection)?;
+                    let mut adapter = Iec101Adapter::new(connection, mappings, bus);
+                    adapter.read_telemetry().await?
+                }
+                ProtocolType::CustomSerial => {
+                    let bus = self.serial_bus_factory.open(&connection)?;
+                    let mut adapter = CustomSerialAdapter::new(connection, mappings, bus);
                     adapter.read_telemetry().await?
                 }
                 unsupported => bail!("unsupported runtime protocol: {unsupported:?}"),

@@ -5,10 +5,21 @@ use edge_core::{
     TelemetryValue,
 };
 use edge_runtime::{
-    append_modbus_rtu_crc, CollectionRunStats, CollectionSchedule, ConfiguredEdgeRuntime,
-    DataConfigSchedule, RecordingMqttPublisher, ScheduledCollectionFailure, ScriptedSerialBus,
+    append_modbus_rtu_crc, flush_mqtt_outbox, CollectionRunStats, CollectionSchedule,
+    ConfiguredEdgeRuntime, DataConfigSchedule, MqttPublishMessage, MqttPublisher,
+    RecordingMqttPublisher, RocksEdgeRuntimeStore, ScheduledCollectionFailure, ScriptedSerialBus,
     ScriptedSerialBusFactory,
 };
+use tempfile::tempdir;
+
+struct UnavailablePublisher;
+
+#[async_trait]
+impl MqttPublisher for UnavailablePublisher {
+    async fn publish(&mut self, _message: MqttPublishMessage) -> Result<()> {
+        bail!("mqtt broker unavailable")
+    }
+}
 
 fn package() -> EdgeConfigPackage {
     EdgeConfigPackage::new("edge-dev", "2026.06.28-scheduler")
@@ -265,6 +276,48 @@ async fn configured_runtime_publishes_due_data_configs_by_period() {
 }
 
 #[tokio::test]
+async fn scheduled_data_configs_buffer_failed_topics_and_replay_them_in_order() {
+    let bus = ScriptedSerialBus::new(vec![response(1, &[220]), response(1, &[7])]);
+    let factory = ScriptedSerialBusFactory::new(vec![("meter-rs485-bus-1".to_string(), bus)]);
+    let package = data_config_package();
+    let mut schedule = DataConfigSchedule::from_package(&package).unwrap();
+    let mut runtime = ConfiguredEdgeRuntime::new(package, factory).unwrap();
+    let dir = tempdir().unwrap();
+    let store = RocksEdgeRuntimeStore::open(dir.path().join("runtime.rocksdb")).unwrap();
+    let mut unavailable = UnavailablePublisher;
+
+    let report = runtime
+        .collect_due_data_configs_resilient_once_with_outbox(
+            &mut schedule,
+            0,
+            &store,
+            &mut unavailable,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(report.data_configs_run, 2);
+    assert_eq!(report.data_configs_succeeded, 0);
+    assert_eq!(report.data_configs_failed, 2);
+    assert_eq!(store.mqtt_outbox_len().unwrap(), 2);
+
+    let mut recovered = RecordingMqttPublisher::default();
+    assert_eq!(flush_mqtt_outbox(&store, &mut recovered).await.unwrap(), 2);
+    assert_eq!(
+        recovered
+            .messages()
+            .iter()
+            .map(|message| message.topic.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "factory/edge-dev/meter-1/status",
+            "factory/edge-dev/meter-1/current"
+        ]
+    );
+    assert_eq!(store.mqtt_outbox_len().unwrap(), 0);
+}
+
+#[tokio::test]
 async fn configured_runtime_runs_due_tasks_and_advances_schedule() {
     let bus = ScriptedSerialBus::new(vec![
         response(1, &[220]),
@@ -360,3 +413,5 @@ fn response(slave_id: u8, registers: &[u16]) -> Vec<u8> {
     append_modbus_rtu_crc(&mut frame);
     frame
 }
+use anyhow::{bail, Result};
+use async_trait::async_trait;

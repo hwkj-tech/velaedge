@@ -84,6 +84,24 @@ fn validator_rejects_data_config_with_missing_mqtt_sink() {
 }
 
 #[test]
+fn validator_rejects_incomplete_mqtt_security_configuration() {
+    let mut uplink =
+        edge_core::MqttUplinkConfig::velamq("velamq-main", "mqtt://velamq.local:1883", "edge-dev");
+    uplink.username = Some("edge-device".to_string());
+    uplink.tls_ca_path = Some("/etc/edgeops/velamq-ca.pem".to_string());
+    let package = valid_package().with_mqtt_uplink(uplink);
+
+    let errors = ConfigValidator::validate_package(&package);
+
+    assert!(errors.iter().any(|error| error
+        .message
+        .contains("password environment reference must be configured together")));
+    assert!(errors
+        .iter()
+        .any(|error| error.message.contains("requires an mqtts:// broker")));
+}
+
+#[test]
 fn validator_rejects_data_config_with_missing_point_and_duplicate_json_field() {
     let package = valid_package()
         .with_mqtt_uplink(edge_core::MqttUplinkConfig::velamq(

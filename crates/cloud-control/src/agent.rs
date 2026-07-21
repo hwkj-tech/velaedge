@@ -1,7 +1,114 @@
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
 use edge_core::{CommandCandidate, TelemetryValue};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use uuid::Uuid;
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProposalKind {
+    ConfigSuggestion,
+    PointMapping,
+    RolloutPlan,
+    CommandCandidate,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProposalRisk {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProposalStatus {
+    PendingReview,
+    Approved,
+    Rejected,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProposal {
+    pub proposal_id: Uuid,
+    pub agent_id: String,
+    pub kind: AgentProposalKind,
+    pub project_id: Option<String>,
+    pub edge_id: Option<String>,
+    pub title: String,
+    pub summary: String,
+    pub payload: serde_json::Value,
+    pub risk: AgentProposalRisk,
+    pub status: AgentProposalStatus,
+    pub created_by: String,
+    pub created_at: DateTime<Utc>,
+    pub reviewed_by: Option<String>,
+    pub reviewed_at: Option<DateTime<Utc>>,
+    pub review_note: Option<String>,
+}
+
+impl AgentProposal {
+    pub fn new(
+        agent_id: impl Into<String>,
+        kind: AgentProposalKind,
+        title: impl Into<String>,
+        summary: impl Into<String>,
+        created_by: impl Into<String>,
+    ) -> Self {
+        Self {
+            proposal_id: Uuid::new_v4(),
+            agent_id: agent_id.into(),
+            kind,
+            project_id: None,
+            edge_id: None,
+            title: title.into(),
+            summary: summary.into(),
+            payload: serde_json::json!({}),
+            risk: AgentProposalRisk::Low,
+            status: AgentProposalStatus::PendingReview,
+            created_by: created_by.into(),
+            created_at: Utc::now(),
+            reviewed_by: None,
+            reviewed_at: None,
+            review_note: None,
+        }
+    }
+
+    pub fn review(
+        &mut self,
+        decision: AgentProposalStatus,
+        reviewer: impl Into<String>,
+        note: Option<String>,
+    ) -> Result<(), AgentProposalReviewError> {
+        if self.status != AgentProposalStatus::PendingReview {
+            return Err(AgentProposalReviewError::AlreadyReviewed);
+        }
+        if !matches!(
+            decision,
+            AgentProposalStatus::Approved | AgentProposalStatus::Rejected
+        ) {
+            return Err(AgentProposalReviewError::InvalidDecision);
+        }
+
+        self.status = decision;
+        self.reviewed_by = Some(reviewer.into());
+        self.reviewed_at = Some(Utc::now());
+        self.review_note = note;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum AgentProposalReviewError {
+    #[error("agent proposal has already been reviewed")]
+    AlreadyReviewed,
+    #[error("agent proposal review decision must approve or reject")]
+    InvalidDecision,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AgentCommandDraft {

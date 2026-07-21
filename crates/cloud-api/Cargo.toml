@@ -11,8 +11,10 @@ axum.workspace = true
 chrono.workspace = true
 cloud-control = { path = "../cloud-control" }
 edge-core = { path = "../edge-core" }
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true
 rustls-pemfile.workspace = true
@@ -22,5 +24,6 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+edge-runtime = { path = "../edge-runtime" }
 tempfile.workspace = true
 tower.workspace = true
