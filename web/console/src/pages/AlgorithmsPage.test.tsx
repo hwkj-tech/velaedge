@@ -3,9 +3,22 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { AlgorithmsPage } from './AlgorithmsPage';
 
+const algorithmFixture = {
+  edgeId: 'edge-dev', algorithmId: 'pressure-change-report', version: '1.0.0',
+  algorithmKind: 'ChangeReport', runtime: 'Rule', kind: '变化上报',
+  inputIds: ['pressure'], outputIds: ['pressure.reported'], inputs: 'pressure',
+  outputs: 'pressure.reported', execution: '边端本地执行', validation: '已通过',
+  dsl: {
+    inputs: [{ alias: 'p', pointId: 'pressure' }], trigger: { type: 'onSample' },
+    steps: [{ type: 'changeFilter', source: 'p', threshold: 0.2 }],
+    outputs: [{ name: 'p', pointId: 'pressure.reported' }],
+    report: { mode: 'OnChange', sink: 'velamq-main' },
+  },
+} as any;
+
 describe('AlgorithmsPage', () => {
   it('shows algorithm table and editor fields', () => {
-    render(<AlgorithmsPage selectedEdgeId="edge-dev" />);
+    render(<AlgorithmsPage algorithms={[algorithmFixture]} selectedEdgeId="edge-dev" />);
 
     expect(screen.getByRole('heading', { name: '算法模板', level: 3 })).toBeInTheDocument();
     expect(
@@ -18,7 +31,7 @@ describe('AlgorithmsPage', () => {
   });
 
   it('shows an explicit row action for editing algorithms', () => {
-    render(<AlgorithmsPage selectedEdgeId="edge-dev" />);
+    render(<AlgorithmsPage algorithms={[algorithmFixture]} selectedEdgeId="edge-dev" />);
 
     expect(screen.getByRole('columnheader', { name: '操作' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '修改算法 pressure-change-report' }));
@@ -31,7 +44,7 @@ describe('AlgorithmsPage', () => {
     const onSaveAlgorithm = vi.fn().mockResolvedValue(undefined);
 
     render(
-      <AlgorithmsPage selectedEdgeId="edge-dev" onSaveAlgorithm={onSaveAlgorithm} />,
+      <AlgorithmsPage algorithms={[algorithmFixture]} selectedEdgeId="edge-dev" onSaveAlgorithm={onSaveAlgorithm} />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: '选择算法 pressure-change-report' }));

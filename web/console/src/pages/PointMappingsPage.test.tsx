@@ -3,9 +3,26 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { PointMappingsPage } from './PointMappingsPage';
 
+const pointFixtures = [
+  {
+    edgeId: 'edge-dev', pointId: 'pressure', pointName: '泵出口压力', deviceId: 'pump-1',
+    deviceModel: 'pump@v1', semanticTelemetry: 'pump.pressure', protocol: 'Modbus TCP',
+    connection: 'modbus-line-a', address: 'holding_register:40001', valueType: 'float32',
+    readWrite: 'read', unit: 'MPa', scale: '0.1', interval: '1000ms', range: '0-20',
+    qualityRule: 'timeout->bad', status: '启用',
+  },
+  {
+    edgeId: 'edge-dev', pointId: 'running', pointName: '运行状态', deviceId: 'pump-1',
+    deviceModel: 'pump@v1', semanticTelemetry: 'pump.running', protocol: 'Modbus TCP',
+    connection: 'modbus-line-a', address: 'coil:00001', valueType: 'bool',
+    readWrite: 'read', unit: '-', scale: '1', interval: '1000ms', range: '-',
+    qualityRule: 'stale->bad', status: '启用',
+  },
+] as any;
+
 describe('PointMappingsPage', () => {
   it('shows point sets as the primary management unit', () => {
-    render(<PointMappingsPage />);
+    render(<PointMappingsPage points={pointFixtures} />);
 
     expect(screen.getByRole('heading', { name: '点位集管理' })).toBeInTheDocument();
     expect(screen.getByText('点位集列表')).toBeInTheDocument();
@@ -16,7 +33,7 @@ describe('PointMappingsPage', () => {
 
   it('opens a point set detail drawer and edits a point inside the set', async () => {
     const onSavePoint = vi.fn().mockResolvedValue(undefined);
-    render(<PointMappingsPage selectedEdgeId="edge-dev" onSavePoint={onSavePoint} />);
+    render(<PointMappingsPage points={pointFixtures} selectedEdgeId="edge-dev" onSavePoint={onSavePoint} />);
 
     fireEvent.click(screen.getByRole('button', { name: '修改点位集 pump-1 / modbus-line-a' }));
 
@@ -44,7 +61,7 @@ describe('PointMappingsPage', () => {
   });
 
   it('closes point set dialogs with Escape', () => {
-    render(<PointMappingsPage selectedEdgeId="edge-dev" />);
+    render(<PointMappingsPage points={pointFixtures} selectedEdgeId="edge-dev" />);
 
     fireEvent.click(screen.getByRole('button', { name: '新建点位集' }));
     expect(screen.getByRole('dialog', { name: '新建点位集' })).toBeInTheDocument();
@@ -59,7 +76,7 @@ describe('PointMappingsPage', () => {
 
   it('switches selected point inside a point set before saving', async () => {
     const onSavePoint = vi.fn().mockResolvedValue(undefined);
-    render(<PointMappingsPage selectedEdgeId="edge-dev" onSavePoint={onSavePoint} />);
+    render(<PointMappingsPage points={pointFixtures} selectedEdgeId="edge-dev" onSavePoint={onSavePoint} />);
 
     fireEvent.click(screen.getByRole('button', { name: '修改点位集 pump-1 / modbus-line-a' }));
     const dialog = screen.getByRole('dialog', { name: '点位集 pump-1 / modbus-line-a' });

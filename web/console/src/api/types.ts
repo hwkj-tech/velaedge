@@ -445,6 +445,7 @@ export interface DataConfigGraphNode {
   kind: DataConfigGraphNodeKind;
   label: string;
   refId?: string | null;
+  params?: Record<string, boolean | number | string | string[]>;
   x: number;
   y: number;
 }
@@ -545,9 +546,21 @@ export type AlgorithmStep =
   | {
       type: 'windowAggregate';
       source: string;
-      functions: Array<{ function: 'avg' | 'min' | 'max' | 'sum' | 'count'; output: string }>;
+      functions: Array<{ function: 'avg' | 'min' | 'max' | 'sum' | 'count' | 'first' | 'last'; output: string }>;
     }
   | { type: 'expression'; output: string; expr: string }
+  | { type: 'scale'; source: string; output: string; factor: number; offset: number }
+  | { type: 'clamp'; source: string; output: string; min: number; max: number }
+  | { type: 'rateOfChange'; source: string; output: string; perMs: number }
+  | { type: 'debounce'; source: string; stableMs: number }
+  | {
+      type: 'conditionalRoute';
+      source: string;
+      operator: 'Gt' | 'Gte' | 'Lt' | 'Lte' | 'Eq' | 'Ne';
+      threshold: number;
+      matchedOutput: string;
+      unmatchedOutput: string;
+    }
   | {
       type: 'thresholdRule';
       source: string;

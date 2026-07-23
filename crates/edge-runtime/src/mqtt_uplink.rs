@@ -51,6 +51,15 @@ pub struct RumqttcMqttPublisher {
     _eventloop_task: JoinHandle<()>,
 }
 
+impl Drop for RumqttcMqttPublisher {
+    fn drop(&mut self) {
+        // A dropped JoinHandle detaches the task. Abort explicitly so a publisher
+        // created for a short collection session cannot leave an MQTT socket and
+        // reconnect loop alive behind it.
+        self._eventloop_task.abort();
+    }
+}
+
 #[derive(Debug)]
 enum MqttBrokerEvent {
     PublishSent(u16),
@@ -324,11 +333,12 @@ fn data_config_selected_samples<'a>(
     synthetic_points: &'a [DataConfigPoint],
     graph_scope: &DataConfigGraphScope,
 ) -> Vec<(&'a DataConfigPoint, &'a TelemetrySample)> {
-    data_config
+    let configured_points = data_config
         .points
         .iter()
+        .filter(|point| graph_scope.allows_point(&point.point_id));
+    configured_points
         .chain(synthetic_points.iter())
-        .filter(|point| graph_scope.allows_point(&point.point_id))
         .filter_map(|point| {
             samples
                 .iter()
@@ -361,7 +371,7 @@ fn algorithm_output_points(
                 && data_config.algorithm_ids.contains(&algorithm.id)
         })
         .flat_map(|algorithm| {
-            algorithm_outputs_for_samples(algorithm, samples, &configured_point_ids)
+            algorithm_outputs_for_samples(algorithm, samples, &configured_point_ids, graph_scope)
         })
         .collect()
 }
@@ -370,6 +380,7 @@ fn algorithm_output_points(
 struct DataConfigGraphScope {
     active: bool,
     algorithm_ids: BTreeSet<String>,
+    algorithm_output_names: BTreeMap<String, BTreeSet<String>>,
     point_ids: BTreeSet<String>,
 }
 
@@ -418,39 +429,32 @@ impl DataConfigGraphOutput {
 
 impl DataConfigGraphScope {
     fn from_output(data_config: &DataConfig, output_node_id: &str) -> Self {
+        let mut scope = Self {
+            active: true,
+            ..Self::default()
+        };
+        let nodes = data_config
+            .visual_graph
+            .nodes
+            .iter()
+            .map(|node| (node.node_id.as_str(), node))
+            .collect::<BTreeMap<_, _>>();
         let mut stack = data_config
             .visual_graph
             .edges
             .iter()
             .filter(|edge| edge.to == output_node_id)
-            .map(|edge| edge.from.as_str())
+            .map(|edge| (edge.from.as_str(), edge.from_port.as_deref()))
             .collect::<Vec<_>>();
         let mut visited = BTreeSet::new();
 
-        while let Some(node_id) = stack.pop() {
-            if !visited.insert(node_id.to_string()) {
+        while let Some((node_id, output_port)) = stack.pop() {
+            if !visited.insert((node_id.to_string(), output_port.map(str::to_string))) {
                 continue;
             }
-            for edge in data_config
-                .visual_graph
-                .edges
-                .iter()
-                .filter(|edge| edge.to == node_id)
-            {
-                stack.push(edge.from.as_str());
-            }
-        }
-
-        let mut scope = Self {
-            active: true,
-            ..Self::default()
-        };
-        for node in data_config
-            .visual_graph
-            .nodes
-            .iter()
-            .filter(|node| visited.contains(&node.node_id))
-        {
+            let Some(node) = nodes.get(node_id) else {
+                continue;
+            };
             match node.kind {
                 DataConfigGraphNodeKind::Point => {
                     if let Some(point_id) = node.ref_id.as_deref() {
@@ -459,10 +463,28 @@ impl DataConfigGraphScope {
                 }
                 DataConfigGraphNodeKind::Algorithm | DataConfigGraphNodeKind::Json => {
                     if let Some(algorithm_id) = node.ref_id.as_deref() {
-                        scope.algorithm_ids.insert(algorithm_id.to_string());
+                        if algorithm_id != "merge_points" {
+                            scope.algorithm_ids.insert(algorithm_id.to_string());
+                            if let Some(output_port) = output_port {
+                                scope
+                                    .algorithm_output_names
+                                    .entry(algorithm_id.to_string())
+                                    .or_default()
+                                    .insert(output_port.to_string());
+                            }
+                            continue;
+                        }
                     }
                 }
                 DataConfigGraphNodeKind::Mqtt => {}
+            }
+            for edge in data_config
+                .visual_graph
+                .edges
+                .iter()
+                .filter(|edge| edge.to == node_id)
+            {
+                stack.push((edge.from.as_str(), edge.from_port.as_deref()));
             }
         }
         scope
@@ -475,17 +497,29 @@ impl DataConfigGraphScope {
     fn allows_algorithm(&self, algorithm_id: &str) -> bool {
         !self.active || self.algorithm_ids.contains(algorithm_id)
     }
+
+    fn allows_algorithm_output(&self, algorithm_id: &str, output_name: &str) -> bool {
+        if !self.active {
+            return true;
+        }
+        self.algorithm_output_names
+            .get(algorithm_id)
+            .map(|ports| ports.contains("output") || ports.contains(output_name))
+            .unwrap_or(true)
+    }
 }
 
 fn algorithm_outputs_for_samples(
     algorithm: &AlgorithmSpec,
     samples: &[TelemetrySample],
     configured_point_ids: &std::collections::BTreeSet<&str>,
+    graph_scope: &DataConfigGraphScope,
 ) -> Vec<DataConfigPoint> {
     algorithm
         .dsl
         .outputs
         .iter()
+        .filter(|output| graph_scope.allows_algorithm_output(&algorithm.id, &output.name))
         .filter(|output| !configured_point_ids.contains(output.point_id.as_str()))
         .filter_map(|output| {
             samples

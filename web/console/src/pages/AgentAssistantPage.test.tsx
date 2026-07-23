@@ -105,6 +105,13 @@ describe('AgentAssistantPage', () => {
       title: '点位补全',
     };
     const onCreateProposal = vi.fn().mockResolvedValue(pendingProposal);
+    const onGenerateSuggestions = vi.fn().mockResolvedValue({
+      suggestions: [{
+        detail: '根据 pump@v1 模型发现缺少 flow_rate 映射',
+        state: '生成候选配置',
+        title: '点位补全',
+      }],
+    });
     const onListProposals = vi.fn().mockResolvedValue([]);
     const onReviewProposal = vi.fn().mockResolvedValue({
       ...pendingProposal,
@@ -117,11 +124,14 @@ describe('AgentAssistantPage', () => {
     render(
       <AgentAssistantPage
         onCreateProposal={onCreateProposal}
+        onGenerateSuggestions={onGenerateSuggestions}
         onListProposals={onListProposals}
         onReviewProposal={onReviewProposal}
       />,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: '生成候选建议' }));
+    await waitFor(() => expect(onGenerateSuggestions).toHaveBeenCalledOnce());
     fireEvent.click(
       screen.getByRole('button', { name: '保存 点位补全 为审核草案' }),
     );
@@ -133,6 +143,40 @@ describe('AgentAssistantPage', () => {
     await waitFor(() => expect(onReviewProposal).toHaveBeenCalledOnce());
     expect(screen.getByText('已通过')).toBeInTheDocument();
     expect(screen.getByText('console-reviewer')).toBeInTheDocument();
+  });
+
+  it('keeps proposal review controls hidden from non-admin principals', async () => {
+    const onReviewProposal = vi.fn();
+    render(
+      <AgentAssistantPage
+        canReviewProposals={false}
+        onListProposals={vi.fn().mockResolvedValue([
+          {
+            agentId: 'edgeops-agent',
+            createdAt: '2026-07-16T04:00:00Z',
+            createdBy: 'config-operator',
+            edgeId: null,
+            kind: 'config_suggestion',
+            payload: {},
+            projectId: null,
+            proposalId: 'proposal-operator-review',
+            reviewNote: null,
+            reviewedAt: null,
+            reviewedBy: null,
+            risk: 'medium',
+            status: 'pending_review',
+            summary: '建议调整压力点采集周期',
+            title: '调整采集周期',
+          },
+        ])}
+        onReviewProposal={onReviewProposal}
+      />,
+    );
+
+    expect(await screen.findByText('需要管理员审核')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '通过 调整采集周期' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '驳回 调整采集周期' })).not.toBeInTheDocument();
+    expect(onReviewProposal).not.toHaveBeenCalled();
   });
 
   it('creates and deletes project-scoped governed knowledge', async () => {

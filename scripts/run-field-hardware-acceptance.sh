@@ -22,8 +22,14 @@ ALLOW_TEST_SERIAL="${EDGEOPS_FIELD_ALLOW_TEST_SERIAL:-0}"
 MIN_CERT_DAYS="${EDGEOPS_FIELD_MIN_CERT_DAYS:-30}"
 SITE_ID="${EDGEOPS_FIELD_SITE_ID:-}"
 OPERATOR="${EDGEOPS_FIELD_OPERATOR:-}"
+DEVICE_MODEL="${EDGEOPS_FIELD_DEVICE_MODEL:-}"
+DEVICE_SERIAL="${EDGEOPS_FIELD_DEVICE_SERIAL:-}"
+PHYSICAL_DEVICE_CONFIRMED="${EDGEOPS_FIELD_PHYSICAL_DEVICE_CONFIRMED:-0}"
+BROKER_RECEIPT_SOURCE="${EDGEOPS_FIELD_BROKER_RECEIPT:-}"
 CLOUD_BIN="${EDGEOPS_FIELD_CLOUD_BIN:-${ROOT_DIR}/target/release/cloud-api}"
 RUNTIME_BIN="${EDGEOPS_FIELD_RUNTIME_BIN:-${ROOT_DIR}/target/release/edge-runtime}"
+MQTT_ACK_BIN="${EDGEOPS_FIELD_MQTT_ACK_BIN:-${ROOT_DIR}/target/release/mqtt-ack-evidence}"
+MIN_MQTT_ROUTES="${EDGEOPS_FIELD_MIN_MQTT_ROUTES:-1}"
 ADMIN_TOKEN="${EDGEOPS_FIELD_ADMIN_TOKEN:-edgeops-field-admin-token-00000001}"
 TOKEN_ENV_NAME="EDGEOPS_FIELD_RUNTIME_ACCESS_TOKEN"
 CLOUD_PID=""
@@ -43,6 +49,10 @@ Required environment:
   EDGEOPS_FIELD_RUNTIME_KEY    Runtime client private key
   EDGEOPS_FIELD_SITE_ID        Site/work-order identifier (full run only)
   EDGEOPS_FIELD_OPERATOR       Acceptance operator (full run only)
+  EDGEOPS_FIELD_DEVICE_MODEL   Physical device manufacturer/model (full run only)
+  EDGEOPS_FIELD_DEVICE_SERIAL  Physical device asset/serial number (full run only)
+  EDGEOPS_FIELD_PHYSICAL_DEVICE_CONFIRMED=1  Operator attestation (full run only)
+  EDGEOPS_FIELD_BROKER_RECEIPT Broker-side consumer/audit receipt file (full run only)
 
 Optional:
   EDGEOPS_FIELD_SERVER_CA      CA that issued the server certificate (defaults to Runtime CA)
@@ -50,6 +60,7 @@ Optional:
   EDGEOPS_FIELD_PREFLIGHT_ONLY Validate inputs and write evidence without starting processes
   EDGEOPS_FIELD_ALLOW_INSECURE_MQTT=1  Permit mqtt:// only for controlled lab runs
   EDGEOPS_FIELD_ALLOW_TEST_SERIAL=1    Permit /dev/null or /dev/zero in preflight only
+  EDGEOPS_FIELD_MIN_MQTT_ROUTES         Minimum distinct acknowledged sink/topic routes (default: 1)
 
 MQTT password values remain in environment variables named by mqtt_uplinks[].password_env.
 EOF
@@ -65,6 +76,48 @@ require_file() {
   local path="$2"
   [[ -n "$path" ]] || fail "$label is required"
   [[ -f "$path" ]] || fail "$label does not exist: $path"
+}
+
+file_size() {
+  stat -f '%z' "$1" 2>/dev/null || stat -c '%s' "$1"
+}
+
+sha256_file() {
+  shasum -a 256 "$1" | awk '{print $1}'
+}
+
+write_evidence_manifest() {
+  local mode="$1"
+  shift
+  local entries='[]'
+  local evidence_path file relative digest bytes
+  local -a files=()
+
+  for evidence_path in "$@"; do
+    if [[ -d "$evidence_path" ]]; then
+      while IFS= read -r file; do
+        files+=("$file")
+      done < <(find "$evidence_path" -type f | LC_ALL=C sort)
+    else
+      files+=("$evidence_path")
+    fi
+  done
+
+  for file in "${files[@]}"; do
+    [[ -f "$file" ]] || fail "evidence file is missing: $file"
+    [[ "$file" == "${WORK_DIR}/"* ]] || fail "evidence must be retained inside $WORK_DIR: $file"
+    relative="${file#${WORK_DIR}/}"
+    digest="$(sha256_file "$file")"
+    bytes="$(file_size "$file")"
+    entries="$(printf '%s' "$entries" | jq \
+      --arg path "$relative" --arg sha256 "$digest" --argjson bytes "$bytes" \
+      '. + [{path:$path,sha256:$sha256,bytes:$bytes}]')"
+  done
+
+  jq -n --arg mode "$mode" --arg createdAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    --argjson files "$entries" \
+    '{schemaVersion:1,mode:$mode,createdAt:$createdAt,files:$files}' \
+    >"${WORK_DIR}/evidence-manifest.json"
 }
 
 cleanup() {
@@ -93,6 +146,7 @@ done
 
 [[ -n "$CONFIG_PATH" ]] || { usage >&2; fail "EDGEOPS_FIELD_CONFIG is required"; }
 [[ -n "$SERIAL_PORT" ]] || fail "EDGEOPS_FIELD_SERIAL_PORT is required"
+[[ "$MIN_MQTT_ROUTES" =~ ^[1-9][0-9]*$ ]] || fail "EDGEOPS_FIELD_MIN_MQTT_ROUTES must be a positive integer"
 require_file "configuration package" "$CONFIG_PATH"
 require_file "EdgeLink server certificate" "$SERVER_CERT"
 require_file "EdgeLink server key" "$SERVER_KEY"
@@ -151,6 +205,11 @@ while IFS= read -r password_env; do
 done < <(jq -r '.mqtt_uplinks[].password_env // empty' "$CONFIG_PATH")
 
 mkdir -p "$WORK_DIR" "$(dirname "$REPORT_PATH")"
+WORK_DIR="$(cd "$WORK_DIR" && pwd)"
+REPORT_DIR="$(cd "$(dirname "$REPORT_PATH")" && pwd)"
+[[ "$REPORT_DIR" == "$WORK_DIR" ]] || fail "EDGEOPS_FIELD_REPORT must be located inside EDGEOPS_FIELD_WORK_DIR"
+REPORT_PATH="${REPORT_DIR}/$(basename "$REPORT_PATH")"
+cp "$CONFIG_PATH" "${WORK_DIR}/configuration-package.json"
 "${ROOT_DIR}/scripts/edgelink-certificates.sh" check \
   "$SERVER_CERT" "$SERVER_KEY" "$SERVER_CA" "$MIN_CERT_DAYS" >"${WORK_DIR}/server-certificate.json"
 "${ROOT_DIR}/scripts/edgelink-certificates.sh" check \
@@ -160,8 +219,13 @@ PACKAGE_SHA256="$(shasum -a 256 "$CONFIG_PATH" | awk '{print $1}')"
 SERIAL_EVIDENCE="$(jq -n \
   --arg path "$SERIAL_PORT" \
   --arg stat "$(stat -f '%Sp %Su:%Sg %z bytes device=%Hr,%Lr' "$SERIAL_PORT" 2>/dev/null || stat -c '%A %U:%G %s bytes device=%t,%T' "$SERIAL_PORT")" \
+  --arg deviceModel "$DEVICE_MODEL" \
+  --arg deviceSerial "$DEVICE_SERIAL" \
   --argjson connections "$SERIAL_CONNECTIONS" \
-  '{path:$path,stat:$stat,connections:$connections}')"
+  '{
+    path:$path,stat:$stat,connections:$connections,
+    physicalIdentity:(if $deviceModel == "" then null else {model:$deviceModel,serialNumber:$deviceSerial} end)
+  }')"
 MQTT_EVIDENCE="$(jq -c '[.mqtt_uplinks[] | {
   sink_id, broker, client_id, username:(.username // null), password_env:(.password_env // null),
   tls_ca_path:(.tls_ca_path // null), topic_template, qos
@@ -172,25 +236,38 @@ TOPIC_EVIDENCE="$(jq -c '[.data_configs[] | select(.enabled == true) | {
 }]' "$CONFIG_PATH")"
 
 write_preflight_report() {
+  write_evidence_manifest preflight \
+    "${WORK_DIR}/configuration-package.json" \
+    "${WORK_DIR}/server-certificate.json" \
+    "${WORK_DIR}/runtime-certificate.json"
+  local manifest_sha256
+  manifest_sha256="$(sha256_file "${WORK_DIR}/evidence-manifest.json")"
   jq -n \
     --arg status passed \
     --arg mode preflight \
     --arg edgeId "$EDGE_ID" \
     --arg configVersion "$CONFIG_VERSION" \
     --arg packageSha256 "$PACKAGE_SHA256" \
+    --arg evidenceManifestSha256 "$manifest_sha256" \
     --arg serverName "$SERVER_NAME" \
     --argjson serial "$SERIAL_EVIDENCE" \
     --argjson mqtt "$MQTT_EVIDENCE" \
     --argjson dataConfigs "$TOPIC_EVIDENCE" \
+    --argjson minimumDistinctMqttRoutes "$MIN_MQTT_ROUTES" \
     --argjson serverCertificate "$(cat "${WORK_DIR}/server-certificate.json")" \
     --argjson runtimeCertificate "$(cat "${WORK_DIR}/runtime-certificate.json")" \
     '{
       status:$status, mode:$mode, physicalDeviceExercised:false,
       edgeId:$edgeId, configVersion:$configVersion, packageSha256:$packageSha256,
+      evidenceManifestSha256:$evidenceManifestSha256,
       edgeLink:{transport:"TLS/mTLS",serverName:$serverName,serverCertificate:$serverCertificate,runtimeCertificate:$runtimeCertificate},
       serial:$serial, mqtt:$mqtt, dataConfigs:$dataConfigs,
+      acceptancePolicy:{minimumDistinctMqttRoutes:$minimumDistinctMqttRoutes},
+      evidence:{configurationPackage:"configuration-package.json",manifest:"evidence-manifest.json"},
       note:"Inputs validated only; no Cloud, Runtime, serial request, or MQTT publication was executed."
-    }' | tee "$REPORT_PATH"
+    }' >"$REPORT_PATH"
+  "${ROOT_DIR}/scripts/verify-field-acceptance-report.sh" "$REPORT_PATH"
+  jq '.' "$REPORT_PATH"
 }
 
 if [[ "$PREFLIGHT_ONLY" == "1" ]]; then
@@ -201,6 +278,11 @@ fi
 
 [[ -n "$SITE_ID" ]] || fail "EDGEOPS_FIELD_SITE_ID is required for a physical acceptance run"
 [[ -n "$OPERATOR" ]] || fail "EDGEOPS_FIELD_OPERATOR is required for a physical acceptance run"
+[[ -n "$DEVICE_MODEL" ]] || fail "EDGEOPS_FIELD_DEVICE_MODEL is required for a physical acceptance run"
+[[ -n "$DEVICE_SERIAL" ]] || fail "EDGEOPS_FIELD_DEVICE_SERIAL is required for a physical acceptance run"
+[[ "$PHYSICAL_DEVICE_CONFIRMED" == "1" ]] || \
+  fail "EDGEOPS_FIELD_PHYSICAL_DEVICE_CONFIRMED=1 is required for a physical acceptance run"
+[[ -n "$BROKER_RECEIPT_SOURCE" ]] || fail "EDGEOPS_FIELD_BROKER_RECEIPT is required for a physical acceptance run"
 require_file "Cloud SQLite source database" "$CLOUD_DB_SOURCE"
 [[ "$SERIAL_PORT" != /dev/ttys* && "$SERIAL_PORT" != /dev/pts/* ]] || \
   fail "pseudo terminals cannot produce physical field acceptance evidence"
@@ -215,6 +297,7 @@ done
 CLOUD_SNAPSHOT_SHA256="$(shasum -a 256 "${WORK_DIR}/cloud.sqlite" | awk '{print $1}')"
 
 cargo build --release -p cloud-api -p edge-runtime >/dev/null
+[[ -x "$MQTT_ACK_BIN" ]] || fail "MQTT acknowledgement evidence binary is not executable: $MQTT_ACK_BIN"
 DATABASE_URL="sqlite://${WORK_DIR}/cloud.sqlite?mode=rwc"
 EDGEOPS_CLOUD_DB="$DATABASE_URL" \
 EDGEOPS_HTTP_ADDR="127.0.0.1:${HTTP_PORT}" \
@@ -294,6 +377,31 @@ ACKED_COUNT="$(sed -n 's/.*acked_message_count=\([0-9][0-9]*\).*/\1/p' "${WORK_D
 }
 [[ "${ACKED_COUNT:-0}" -gt 0 ]] || fail "Runtime did not receive an EdgeLink acknowledgement"
 
+"$MQTT_ACK_BIN" --runtime-db "${WORK_DIR}/runtime.rocksdb" --limit 10000 \
+  >"${WORK_DIR}/mqtt-acknowledgements.json"
+MQTT_ACKNOWLEDGEMENTS="$(cat "${WORK_DIR}/mqtt-acknowledgements.json")"
+MQTT_RECEIPT_COUNT="$(printf '%s' "$MQTT_ACKNOWLEDGEMENTS" | jq -er '.receiptCount')"
+[[ "$MQTT_RECEIPT_COUNT" -eq "$PUBLISHED_COUNT" ]] || \
+  fail "MQTT acknowledgement ledger count ${MQTT_RECEIPT_COUNT} differs from Runtime published count ${PUBLISHED_COUNT}"
+printf '%s' "$MQTT_ACKNOWLEDGEMENTS" | jq -e --argjson sinks "$MQTT_EVIDENCE" '
+  all(.acknowledgements[];
+    (.topic | type == "string" and length > 0)
+    and (.payloadBytes | type == "number" and . > 0)
+    and (. as $ack | any($sinks[];
+      .sink_id == $ack.sinkId
+      and .broker == $ack.broker
+      and .client_id == $ack.clientId
+      and .qos == $ack.qos)))
+' >/dev/null || fail "MQTT acknowledgement ledger contains a route that does not match the released package"
+DISTINCT_MQTT_ROUTES="$(printf '%s' "$MQTT_ACKNOWLEDGEMENTS" | jq \
+  '[.acknowledgements | unique_by([.sinkId, .topic])[]] | length')"
+[[ "$DISTINCT_MQTT_ROUTES" -ge "$MIN_MQTT_ROUTES" ]] || \
+  fail "only ${DISTINCT_MQTT_ROUTES} distinct MQTT routes were acknowledged; expected at least ${MIN_MQTT_ROUTES}"
+require_file "broker-side MQTT receipt" "$BROKER_RECEIPT_SOURCE"
+[[ -s "$BROKER_RECEIPT_SOURCE" ]] || fail "broker-side MQTT receipt is empty: $BROKER_RECEIPT_SOURCE"
+cp "$BROKER_RECEIPT_SOURCE" "${WORK_DIR}/broker-receipt.evidence"
+BROKER_RECEIPT_SHA256="$(sha256_file "${WORK_DIR}/broker-receipt.evidence")"
+
 RUNTIME_STATUS="$(curl -fsS --max-time 15 -H "$AUTH_HEADER" "http://127.0.0.1:${HTTP_PORT}/api/runtime-status")"
 RELEASES="$(curl -fsS --max-time 15 -H "$AUTH_HEADER" "http://127.0.0.1:${HTTP_PORT}/api/releases")"
 printf '%s' "$RUNTIME_STATUS" | jq -e \
@@ -310,24 +418,45 @@ wait "$CLOUD_PID"
 CLOUD_PID=""
 grep -q 'shutdown signal received' "${WORK_DIR}/cloud.log" || fail "Cloud did not log graceful shutdown"
 
+write_evidence_manifest physical-field \
+  "${WORK_DIR}/configuration-package.json" \
+  "${WORK_DIR}/server-certificate.json" \
+  "${WORK_DIR}/runtime-certificate.json" \
+  "${WORK_DIR}/cloud.log" \
+  "${WORK_DIR}/runtime.log" \
+  "${WORK_DIR}/cloud.sqlite" \
+  "${WORK_DIR}/cloud-database-backup.log" \
+  "${WORK_DIR}/catalog-edge.json" \
+  "${WORK_DIR}/mqtt-acknowledgements.json" \
+  "${WORK_DIR}/broker-receipt.evidence" \
+  "${WORK_DIR}/runtime.rocksdb"
+EVIDENCE_MANIFEST_SHA256="$(sha256_file "${WORK_DIR}/evidence-manifest.json")"
+
 jq -n \
   --arg status passed \
   --arg mode physical-field \
   --arg siteId "$SITE_ID" \
   --arg operator "$OPERATOR" \
+  --arg deviceModel "$DEVICE_MODEL" \
+  --arg deviceSerial "$DEVICE_SERIAL" \
   --arg edgeId "$EDGE_ID" \
   --arg runtimeId "$RUNTIME_ID" \
   --arg configVersion "$CONFIG_VERSION" \
   --arg releaseId "$RELEASE_ID" \
   --arg packageSha256 "$PACKAGE_SHA256" \
   --arg cloudSnapshotSha256 "$CLOUD_SNAPSHOT_SHA256" \
+  --arg brokerReceiptSha256 "$BROKER_RECEIPT_SHA256" \
+  --arg evidenceManifestSha256 "$EVIDENCE_MANIFEST_SHA256" \
   --arg startedAt "$RUNTIME_STARTED_AT" \
   --arg finishedAt "$RUNTIME_FINISHED_AT" \
   --argjson samplesCollected "$SAMPLES_COUNT" \
   --argjson mqttMessagesPublished "$PUBLISHED_COUNT" \
+  --argjson mqttDistinctRoutes "$DISTINCT_MQTT_ROUTES" \
+  --argjson minimumDistinctMqttRoutes "$MIN_MQTT_ROUTES" \
   --argjson edgeLinkMessagesAcknowledged "$ACKED_COUNT" \
   --argjson serial "$SERIAL_EVIDENCE" \
   --argjson mqtt "$MQTT_EVIDENCE" \
+  --argjson mqttAcknowledgements "$MQTT_ACKNOWLEDGEMENTS" \
   --argjson dataConfigs "$TOPIC_EVIDENCE" \
   --argjson catalogEdge "$CATALOG_EDGE" \
   --argjson runtimeStatus "$RUNTIME_STATUS" \
@@ -335,17 +464,28 @@ jq -n \
   '{
     status:$status, mode:$mode, physicalDeviceExercised:true,
     siteId:$siteId, operator:$operator, startedAt:$startedAt, finishedAt:$finishedAt,
+    physicalDevice:{model:$deviceModel,serialNumber:$deviceSerial,operatorConfirmed:true},
     edgeId:$edgeId, runtimeId:$runtimeId, configVersion:$configVersion, releaseId:$releaseId,
     packageSha256:$packageSha256, cloudSnapshotSha256:$cloudSnapshotSha256,
+    brokerReceiptSha256:$brokerReceiptSha256,
+    evidenceManifestSha256:$evidenceManifestSha256,
     catalogEdge:$catalogEdge, serial:$serial, mqtt:$mqtt, dataConfigs:$dataConfigs,
     samplesCollected:$samplesCollected,
-    mqttMessagesPublished:$mqttMessagesPublished, edgeLinkMessagesAcknowledged:$edgeLinkMessagesAcknowledged,
+    mqttMessagesPublished:$mqttMessagesPublished, mqttDistinctRoutes:$mqttDistinctRoutes,
+    mqttAcknowledgements:$mqttAcknowledgements,
+    acceptancePolicy:{minimumDistinctMqttRoutes:$minimumDistinctMqttRoutes},
+    edgeLinkMessagesAcknowledged:$edgeLinkMessagesAcknowledged,
     runtimeStatus:$runtimeStatus, releases:$releases,
     evidence:{
       cloudLog:"cloud.log",runtimeLog:"runtime.log",database:"cloud.sqlite",
       cloudDatabaseBackupLog:"cloud-database-backup.log",catalogEdge:"catalog-edge.json",
-      runtimeStore:"runtime.rocksdb"
+      runtimeStore:"runtime.rocksdb",mqttAcknowledgements:"mqtt-acknowledgements.json",
+      brokerReceipt:"broker-receipt.evidence",configurationPackage:"configuration-package.json",
+      manifest:"evidence-manifest.json"
     }
-  }' | tee "$REPORT_PATH"
+  }' >"$REPORT_PATH"
+
+"${ROOT_DIR}/scripts/verify-field-acceptance-report.sh" --require-physical "$REPORT_PATH"
+jq '.' "$REPORT_PATH"
 
 echo "physical field acceptance evidence: $WORK_DIR"

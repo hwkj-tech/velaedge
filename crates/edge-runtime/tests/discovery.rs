@@ -5,11 +5,13 @@ use edge_runtime::{RuntimeCapabilityConfig, SimulatedSerialDiscovery};
 fn runtime_capability_config_declares_serial_protocols_and_mqtt_uplink() {
     let capabilities = RuntimeCapabilityConfig::serial_mqtt_defaults().capabilities();
 
+    assert!(capabilities.contains(&"protocol:modbus-tcp".to_string()));
     assert!(capabilities.contains(&"protocol:modbus-rtu".to_string()));
     assert!(capabilities.contains(&"protocol:dlt645-2007".to_string()));
     assert!(capabilities.contains(&"protocol:iec60870-5-101-unbalanced".to_string()));
     assert!(capabilities.contains(&"protocol:custom-serial-frame-dsl-v1".to_string()));
     assert!(capabilities.contains(&"transport:serial".to_string()));
+    assert!(capabilities.contains(&"transport:tcp".to_string()));
     assert!(capabilities.contains(&"uplink:mqtt".to_string()));
     assert!(capabilities.contains(&"local-store:rocksdb".to_string()));
     assert!(!capabilities.contains(&"protocol:mqtt".to_string()));

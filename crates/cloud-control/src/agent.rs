@@ -94,8 +94,34 @@ impl AgentProposal {
             return Err(AgentProposalReviewError::InvalidDecision);
         }
 
+        let reviewer = reviewer.into();
+        let reviewer = reviewer.trim();
+        if reviewer.is_empty() {
+            return Err(AgentProposalReviewError::MissingReviewer);
+        }
+        if reviewer == self.created_by.trim() {
+            return Err(AgentProposalReviewError::SelfReview);
+        }
+
+        let note = note.and_then(|value| {
+            let value = value.trim();
+            (!value.is_empty()).then(|| value.to_string())
+        });
+        if note
+            .as_ref()
+            .is_some_and(|value| value.chars().count() > 2_000)
+        {
+            return Err(AgentProposalReviewError::ReviewNoteTooLong);
+        }
+        if decision == AgentProposalStatus::Approved
+            && self.risk == AgentProposalRisk::High
+            && note.is_none()
+        {
+            return Err(AgentProposalReviewError::ApprovalNoteRequired);
+        }
+
         self.status = decision;
-        self.reviewed_by = Some(reviewer.into());
+        self.reviewed_by = Some(reviewer.to_string());
         self.reviewed_at = Some(Utc::now());
         self.review_note = note;
         Ok(())
@@ -108,6 +134,14 @@ pub enum AgentProposalReviewError {
     AlreadyReviewed,
     #[error("agent proposal review decision must approve or reject")]
     InvalidDecision,
+    #[error("agent proposal reviewer must not be empty")]
+    MissingReviewer,
+    #[error("agent proposal creator cannot review their own proposal")]
+    SelfReview,
+    #[error("high-risk agent proposal approval requires a review note")]
+    ApprovalNoteRequired,
+    #[error("agent proposal review note must not exceed 2000 characters")]
+    ReviewNoteTooLong,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

@@ -11,7 +11,7 @@ describe('AppShell', () => {
       </AppShell>,
     );
 
-    expect(screen.getByText('EdgeOps Cloud')).toBeInTheDocument();
+    expect(screen.getByText('VelaEdge')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Dashboard/ })).toHaveAttribute(
       'aria-current',
       'page',

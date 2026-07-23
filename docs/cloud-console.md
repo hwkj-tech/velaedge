@@ -1,4 +1,4 @@
-# Cloud Console Workflow
+# VelaEdge Console Workflow
 
 The cloud console is the first built-in management surface for the edge-cloud platform. It is an operations tool for configuring edge collection, releasing versioned config packages, and checking edge apply status.
 
@@ -64,8 +64,14 @@ When there is no edge yet, the console does not query edge-scoped endpoints or i
 6. Collection task
    Group point mappings into runtime tasks with interval, timeout, retry, deadband, and cache policy.
 
-7. Algorithm configuration
-   Build deterministic calculation nodes in the visual collection graph. The DSL supports window aggregation, change reporting, deadband filtering, expressions, point merging, JSON shaping, and multiple MQTT outputs without executing arbitrary code.
+7. Collection orchestration
+   Build a directed, acyclic data flow from reusable point inputs through deterministic calculation
+   nodes to one or more MQTT outputs. The current palette contains window aggregation, moving
+   average, statistical summary, change reporting, deadband filtering, debounce, expression,
+   scale/offset, clamp, rate of change, multi-point merge, conditional routing, and alarm event
+   nodes. Conditional nodes expose named outputs, one output may fan out to several downstream
+   nodes, and separate branches may publish to different `sink_id` and topic templates. Runtime
+   executes the same persisted graph and DSL; the browser is not the execution engine.
 
 8. MQTT uplink
    Configure the runtime's northbound MQTT publishing sink to velaMQ. MQTT is used for serial telemetry upload, not as a device-side acquisition protocol.
@@ -77,7 +83,7 @@ When there is no edge yet, the console does not query edge-scoped endpoints or i
    Runtime validates the package, persists desired and applied versions in RocksDB, executes configured serial adapters and calculation graphs, buffers MQTT output in the acknowledged outbox, and reports the applied version.
 
 11. Runtime status
-   Compare desired and reported versions, heartbeat, protocol adapter capability, local storage status, and config apply history.
+   Compare desired and reported versions, heartbeat, protocol adapter capability, local storage status, and config apply history. CPU, memory, disk, and process uptime are sampled by the connected Runtime from its host; offline catalog rows may retain their last reported snapshot but the console does not fabricate a new live sample.
 
 ## Page Map
 
@@ -131,7 +137,7 @@ different project scope.
 
 The management API exposes a fail-closed Bearer-token RBAC layer and `/api/auth/me`. In `required`
 mode, viewer credentials are read-only, operators may author and publish, and only admins may delete
-resources or rotate edge access tokens. The console authenticates before loading data, retains the
+resources, rotate edge access tokens, or review Agent proposals. The console authenticates before loading data, retains the
 token only for the browser session, displays the effective subject/role, and supports logout. Agent
 conversation ownership plus knowledge/proposal audit actors come from the authenticated principal;
 request fields cannot override them. Disabled local mode remains available for the quick start.
@@ -139,7 +145,8 @@ request fields cannot override them. Disabled local mode remains available for t
 Generated suggestions can be saved as governed proposals from the Agent chat. Each proposal has
 an immutable ID, kind, risk level, optional project/edge scope, structured payload, creator, and
 review lifecycle. Reviewers may approve or reject a pending proposal exactly once and must leave
-an attributable audit record. Approval means only that the proposal may enter the normal manual
+an attributable audit record. Creators cannot review their own proposals, and high-risk approvals
+require a non-empty review note. Approval means only that the proposal may enter the normal manual
 configuration workflow; it does not create a release, publish a config, or dispatch an EdgeLink
 command. Proposals and their review records survive cloud restarts in SQLite.
 

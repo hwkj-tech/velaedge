@@ -3,9 +3,15 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { CollectionTasksPage } from './CollectionTasksPage';
 
+const taskFixture = {
+  edgeId: 'edge-dev', taskId: 'pump-main', deviceId: 'pump-1',
+  pointIds: ['pressure', 'running'], pointList: 'pressure, running',
+  intervalMs: 1000, interval: '1000ms', enabled: true, status: '启用',
+};
+
 describe('CollectionTasksPage', () => {
   it('shows collection task table and editor fields', () => {
-    render(<CollectionTasksPage selectedEdgeId="edge-dev" />);
+    render(<CollectionTasksPage tasks={[taskFixture]} selectedEdgeId="edge-dev" />);
 
     expect(screen.getByText('任务清单')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '编辑任务 pump-main' })).toBeInTheDocument();
@@ -16,7 +22,7 @@ describe('CollectionTasksPage', () => {
   });
 
   it('shows an explicit row action for editing collection tasks', () => {
-    render(<CollectionTasksPage selectedEdgeId="edge-dev" />);
+    render(<CollectionTasksPage tasks={[taskFixture]} selectedEdgeId="edge-dev" />);
 
     expect(screen.getByRole('columnheader', { name: '操作' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '修改任务 pump-main' }));
@@ -28,7 +34,7 @@ describe('CollectionTasksPage', () => {
   it('saves edited collection task drafts from the editor drawer', async () => {
     const onSaveTask = vi.fn().mockResolvedValue(undefined);
 
-    render(<CollectionTasksPage selectedEdgeId="edge-dev" onSaveTask={onSaveTask} />);
+    render(<CollectionTasksPage tasks={[taskFixture]} selectedEdgeId="edge-dev" onSaveTask={onSaveTask} />);
 
     fireEvent.click(screen.getByRole('button', { name: '编辑任务 pump-main' }));
     fireEvent.change(screen.getByLabelText('采集点位'), {

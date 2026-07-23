@@ -33,24 +33,6 @@ import type {
 import { Modal } from '../components/Modal';
 import { displayError } from '../utils/errors';
 
-const fallbackSuggestions: AgentSuggestionResponse[] = [
-  {
-    detail: '根据 pump@v1 模型发现缺少 flow_rate 映射',
-    state: '生成候选配置',
-    title: '点位补全',
-  },
-  {
-    detail: 'edge-lab-03 版本落后，建议先单边端灰度',
-    state: '需确认',
-    title: '发布风险',
-  },
-  {
-    detail: 'pressure 读数中断可能来自 modbus-line-a 超时',
-    state: '可查看',
-    title: '故障解释',
-  },
-];
-
 type ChatMessage = {
   body: string;
   id: string;
@@ -61,6 +43,7 @@ type ChatMessage = {
 };
 
 export function AgentAssistantPage({
+  canReviewProposals = true,
   onChat,
   onCreateProposal,
   onDeleteConversation,
@@ -75,6 +58,7 @@ export function AgentAssistantPage({
   onSaveKnowledge,
   projectOptions = [],
 }: {
+  canReviewProposals?: boolean;
   onChat?: (request: AgentChatRequest) => Promise<AgentChatResponse> | AgentChatResponse;
   onDeleteConversation?: (conversationId: string) => Promise<void> | void;
   onDeleteKnowledge?: (documentId: string) => Promise<void> | void;
@@ -238,12 +222,11 @@ export function AgentAssistantPage({
 
     try {
       const result = await onGenerateSuggestions?.();
-      const suggestions =
-        result?.suggestions && result.suggestions.length > 0
-          ? result.suggestions
-          : fallbackSuggestions;
+      const suggestions = result?.suggestions ?? [];
       pushMessage({
-        body: `已生成 ${suggestions.length} 条候选建议。建议只进入候选队列，不会自动修改配置。`,
+        body: suggestions.length > 0
+          ? `已生成 ${suggestions.length} 条候选建议。建议只进入候选队列，不会自动修改配置。`
+          : '当前没有可执行的候选建议。',
         role: 'assistant',
         suggestions,
         title: '候选建议',
@@ -476,7 +459,7 @@ export function AgentAssistantPage({
       <section className="agent-chat-main" aria-label="Agent 对话">
         <div className="agent-chat-hero">
           <div>
-            <span>EdgeOps Agent</span>
+            <span>VelaEdge Agent</span>
             <h2>云边配置助手</h2>
             <p>用对话方式分析运行状态、配置风险、候选点位和发布影响。</p>
           </div>
@@ -693,7 +676,7 @@ export function AgentAssistantPage({
                   </small>
                 </div>
                 <p>{proposal.summary}</p>
-                {proposal.status === 'pending_review' ? (
+                {proposal.status === 'pending_review' && canReviewProposals ? (
                   <div className="agent-review-actions">
                     <button
                       aria-label={`通过 ${proposal.title}`}
@@ -714,6 +697,8 @@ export function AgentAssistantPage({
                       <X size={14} aria-hidden="true" />
                     </button>
                   </div>
+                ) : proposal.status === 'pending_review' ? (
+                  <small>需要管理员审核</small>
                 ) : (
                   <small>{proposal.reviewedBy ?? '未知审核人'}</small>
                 )}
@@ -951,7 +936,6 @@ function welcomeMessages(): ChatMessage[] {
       body: '我可以帮你检查边端配置风险、生成候选点位和解释发布影响。所有建议都需要人工确认后才会生效。',
       id: 'welcome',
       role: 'assistant',
-      suggestions: fallbackSuggestions,
       title: 'Agent 助手已就绪',
     },
   ];

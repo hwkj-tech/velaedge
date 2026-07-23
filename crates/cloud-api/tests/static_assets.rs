@@ -26,5 +26,5 @@ async fn serves_built_console_index() {
 
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = std::str::from_utf8(&body).unwrap();
-    assert!(html.contains("Edge Agent · 边缘智能控制中心"));
+    assert!(html.contains("VelaEdge · 边缘智能控制中心"));
 }

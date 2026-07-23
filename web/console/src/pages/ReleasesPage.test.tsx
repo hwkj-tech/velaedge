@@ -7,7 +7,7 @@ describe('ReleasesPage', () => {
   it('publishes the latest draft through the page action', async () => {
     const onPublish = vi.fn().mockResolvedValue(undefined);
 
-    render(<ReleasesPage onPublish={onPublish} />);
+    render(<ReleasesPage selectedEdgeId="edge-dev" onPublish={onPublish} />);
 
     fireEvent.click(screen.getByRole('button', { name: '创建发布' }));
 
@@ -66,6 +66,7 @@ describe('ReleasesPage', () => {
 
     render(
       <ReleasesPage
+        selectedEdgeId="edge-dev"
         onShowDiff={onShowDiff}
         onValidateRelease={onValidateRelease}
       />,

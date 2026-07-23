@@ -54,6 +54,7 @@ async fn http_edge_config_sync_client_fetches_desired_config_and_reports_version
     assert_eq!(desired.package.edge_id, "edge-dev");
     assert!(requests[0].starts_with("GET /api/edges/edge-dev/desired-config HTTP/1.1"));
     assert!(requests[1].starts_with("POST /api/edges/edge-dev/reported-config HTTP/1.1"));
+    assert!(requests[1].contains("\"desiredVersion\":\"2026.06.26-004\""));
     assert!(requests[1].contains("\"reportedVersion\":\"2026.06.26-004\""));
 }
 

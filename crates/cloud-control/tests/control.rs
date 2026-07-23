@@ -1,10 +1,11 @@
 use cloud_control::{
-    AgentCommandDraft, AgentProposal, AgentProposalKind, AgentProposalStatus, ConfigPackage,
-    EdgeNode, FleetRegistry,
+    AgentCommandDraft, AgentProposal, AgentProposalKind, AgentProposalReviewError,
+    AgentProposalRisk, AgentProposalStatus, ConfigPackage, EdgeNode, FleetRegistry,
 };
 use edge_core::{
-    AlgorithmDsl, AlgorithmKind, AlgorithmRuntime, AlgorithmSpec, CommandParameter, CommandRisk,
-    CommandSpec, DeviceSpec, NumberRange, PolicyEngine, TelemetryType, TelemetryValue,
+    AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
+    AlgorithmReportPolicy, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger, CommandParameter,
+    CommandRisk, CommandSpec, DeviceSpec, NumberRange, PolicyEngine, TelemetryType, TelemetryValue,
 };
 
 #[test]
@@ -19,16 +20,61 @@ fn fleet_registry_stores_and_retrieves_edge_nodes() {
 }
 
 #[test]
+fn agent_proposal_separates_author_and_reviewer() {
+    let mut proposal = AgentProposal::new(
+        "fleet-agent",
+        AgentProposalKind::ConfigSuggestion,
+        "调整采集周期",
+        "建议将压力点采集周期调整为 2 秒",
+        "operator-a",
+    );
+
+    assert_eq!(
+        proposal.review(AgentProposalStatus::Approved, "operator-a", None),
+        Err(AgentProposalReviewError::SelfReview)
+    );
+    assert_eq!(proposal.status, AgentProposalStatus::PendingReview);
+}
+
+#[test]
+fn high_risk_agent_proposal_requires_approval_note() {
+    let mut proposal = AgentProposal::new(
+        "fleet-agent",
+        AgentProposalKind::CommandCandidate,
+        "调整泵速",
+        "建议调整生产泵运行速度",
+        "operator-a",
+    );
+    proposal.risk = AgentProposalRisk::High;
+
+    assert_eq!(
+        proposal.review(AgentProposalStatus::Approved, "reviewer-a", None),
+        Err(AgentProposalReviewError::ApprovalNoteRequired)
+    );
+    proposal
+        .review(
+            AgentProposalStatus::Approved,
+            "reviewer-a",
+            Some("已核对联锁条件，仅允许进入人工配置流程".to_string()),
+        )
+        .unwrap();
+    assert_eq!(proposal.status, AgentProposalStatus::Approved);
+}
+
+#[test]
 fn config_package_targets_edge_and_versions_algorithms() {
-    let algorithm = AlgorithmSpec {
-        id: "pump-anomaly".to_string(),
-        version: "1.0.0".to_string(),
-        kind: AlgorithmKind::ChangeReport,
-        dsl: AlgorithmDsl::default(),
-        runtime: AlgorithmRuntime::Onnx,
-        inputs: vec!["pressure".to_string()],
-        outputs: vec!["anomaly_score".to_string()],
-    };
+    let algorithm = AlgorithmSpec::dsl(
+        "pump-anomaly",
+        "1.0.0",
+        AlgorithmKind::ChangeReport,
+        AlgorithmDsl {
+            inputs: vec![AlgorithmInputBinding::new("pressure", "pressure")],
+            trigger: AlgorithmTrigger::on_sample(),
+            steps: vec![AlgorithmStep::change_filter("pressure", 0.05)],
+            outputs: vec![AlgorithmOutput::virtual_point("pressure", "anomaly_score")],
+            report: AlgorithmReportPolicy::new(AlgorithmReportMode::OnChange, "velamq-main"),
+        },
+    );
     let package = ConfigPackage::new("edge-1", "2026.06.26")
         .with_algorithm(algorithm.clone())
         .with_device_spec(DeviceSpec::new("pump", "1.0.0"));

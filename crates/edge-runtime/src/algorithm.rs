@@ -1,11 +1,14 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    time::{Duration, Instant},
+};
 
 use anyhow::{bail, Result};
 use chrono::{DateTime, Utc};
 use edge_core::{
-    AlgorithmKind, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger, CompareOperator, DataQuality,
-    EdgeRuntimeEvent, EventSeverity, RuntimeEventCategory, RuntimeEventSeverity, TelemetrySample,
-    TelemetryValue, WindowAggregateFunction,
+    AlgorithmKind, AlgorithmRuntimeMetrics, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger,
+    CompareOperator, DataQuality, EdgeRuntimeEvent, EventSeverity, RuntimeEventCategory,
+    RuntimeEventSeverity, TelemetrySample, TelemetryValue, WindowAggregateFunction,
 };
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -17,6 +20,15 @@ pub struct AlgorithmExecutionReport {
 pub struct AlgorithmEngine {
     algorithms: Vec<AlgorithmSpec>,
     states: BTreeMap<String, AlgorithmState>,
+    execution: BTreeMap<String, AlgorithmExecutionStats>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct AlgorithmExecutionStats {
+    healthy: bool,
+    last_run_latency_ms: u64,
+    error_count: u64,
+    alert_count: u64,
 }
 
 impl AlgorithmEngine {
@@ -30,7 +42,25 @@ impl AlgorithmEngine {
         Ok(Self {
             algorithms,
             states: BTreeMap::new(),
+            execution: BTreeMap::new(),
         })
+    }
+
+    pub fn runtime_metrics(&self) -> Vec<AlgorithmRuntimeMetrics> {
+        self.algorithms
+            .iter()
+            .filter_map(|algorithm| {
+                self.execution
+                    .get(&algorithm.id)
+                    .map(|stats| AlgorithmRuntimeMetrics {
+                        algorithm_id: algorithm.id.clone(),
+                        healthy: stats.healthy,
+                        last_run_latency_ms: stats.last_run_latency_ms,
+                        error_count: stats.error_count,
+                        alert_count: stats.alert_count,
+                    })
+            })
+            .collect()
     }
 
     pub fn apply_samples(
@@ -64,25 +94,42 @@ impl AlgorithmEngine {
                     continue;
                 }
                 let state = self.states.entry(algorithm.id.clone()).or_default();
-                let mut generated = match algorithm.kind {
-                    AlgorithmKind::ChangeReport => apply_change_report(&algorithm, state, &sample)?,
-                    AlgorithmKind::WindowAggregate => {
-                        apply_window_aggregate(&algorithm, state, &sample)?
+                let started = Instant::now();
+                let execution = match algorithm.kind {
+                    AlgorithmKind::ChangeReport | AlgorithmKind::Deadband => {
+                        apply_change_report(&algorithm, state, &sample)
+                            .map(|samples| (samples, Vec::new()))
+                    }
+                    AlgorithmKind::WindowAggregate | AlgorithmKind::Statistics => {
+                        apply_window_aggregate(&algorithm, state, &sample)
+                            .map(|samples| (samples, Vec::new()))
                     }
                     AlgorithmKind::ExpressionAggregate => {
-                        apply_expression(&algorithm, state, &sample)?
+                        apply_transform(&algorithm, state, &sample)
+                            .map(|samples| (samples, Vec::new()))
                     }
                     AlgorithmKind::ThresholdRule => {
-                        report
-                            .events
-                            .extend(apply_threshold_rule(&algorithm, state, &sample)?);
-                        Vec::new()
+                        apply_threshold_rule(&algorithm, state, &sample)
                     }
-                    AlgorithmKind::DurationRule
-                    | AlgorithmKind::Deadband
-                    | AlgorithmKind::Debounce
-                    | AlgorithmKind::Statistics => Vec::new(),
+                    AlgorithmKind::Debounce => apply_debounce(&algorithm, state, &sample)
+                        .map(|samples| (samples, Vec::new())),
+                    AlgorithmKind::DurationRule => Ok((Vec::new(), Vec::new())),
                 };
+                let stats = self.execution.entry(algorithm.id.clone()).or_default();
+                stats.last_run_latency_ms = elapsed_millis(started.elapsed());
+                let (mut generated, events) = match execution {
+                    Ok(result) => {
+                        stats.healthy = true;
+                        result
+                    }
+                    Err(error) => {
+                        stats.healthy = false;
+                        stats.error_count = stats.error_count.saturating_add(1);
+                        return Err(error);
+                    }
+                };
+                stats.alert_count = stats.alert_count.saturating_add(events.len() as u64);
+                report.events.extend(events);
                 if report.samples.len().saturating_add(generated.len()) > max_generated_samples {
                     bail!("algorithm graph generated too many samples; check for a cycle");
                 }
@@ -94,11 +141,27 @@ impl AlgorithmEngine {
     }
 }
 
+fn elapsed_millis(duration: Duration) -> u64 {
+    if duration.is_zero() {
+        0
+    } else {
+        duration.as_millis().max(1).min(u128::from(u64::MAX)) as u64
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 struct AlgorithmState {
     last_reported: BTreeMap<String, TelemetryValue>,
     latest_by_alias: BTreeMap<String, TelemetrySample>,
+    previous_by_alias: BTreeMap<String, TelemetrySample>,
+    debounce_by_alias: BTreeMap<String, DebounceState>,
     windows: BTreeMap<String, WindowState>,
+}
+
+#[derive(Clone, Debug)]
+struct DebounceState {
+    value: TelemetryValue,
+    since: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -223,7 +286,7 @@ fn apply_window_aggregate(
     Ok(outputs)
 }
 
-fn apply_expression(
+fn apply_transform(
     algorithm: &AlgorithmSpec,
     state: &mut AlgorithmState,
     sample: &TelemetrySample,
@@ -235,21 +298,64 @@ fn apply_expression(
                 .insert(input.alias.clone(), sample.clone());
         }
     }
-    let Some((output_name, expr)) = algorithm.dsl.steps.iter().find_map(|step| match step {
-        AlgorithmStep::Expression { output, expr } => Some((output, expr)),
+    let Some(result) = algorithm.dsl.steps.iter().find_map(|step| match step {
+        AlgorithmStep::Expression { output, expr } => {
+            if !algorithm
+                .dsl
+                .inputs
+                .iter()
+                .all(|input| state.latest_by_alias.contains_key(&input.alias))
+            {
+                return None;
+            }
+            Some(evaluate_expression(expr, &state.latest_by_alias).map(|value| (output, value)))
+        }
+        AlgorithmStep::Scale {
+            source,
+            output,
+            factor,
+            offset,
+        } => numeric_source(algorithm, state, sample, source)
+            .map(|value| Ok((output, value * factor + offset))),
+        AlgorithmStep::Clamp {
+            source,
+            output,
+            min,
+            max,
+        } => numeric_source(algorithm, state, sample, source)
+            .map(|value| Ok((output, value.clamp(*min, *max)))),
+        AlgorithmStep::RateOfChange {
+            source,
+            output,
+            per_ms,
+        } => {
+            let binding = algorithm
+                .dsl
+                .inputs
+                .iter()
+                .find(|input| input.alias == *source)?;
+            if binding.point_id != sample.telemetry_id {
+                return None;
+            }
+            let current = sample.value.as_f64()?;
+            let previous = state
+                .previous_by_alias
+                .insert(source.clone(), sample.clone())?;
+            let elapsed_ms = (sample.timestamp - previous.timestamp).num_milliseconds();
+            let previous_value = previous.value.as_f64()?;
+            if elapsed_ms <= 0 || *per_ms == 0 {
+                return None;
+            }
+            Some(Ok((
+                output,
+                (current - previous_value) * *per_ms as f64 / elapsed_ms as f64,
+            )))
+        }
         _ => None,
     }) else {
         return Ok(Vec::new());
     };
-    if !algorithm
-        .dsl
-        .inputs
-        .iter()
-        .all(|input| state.latest_by_alias.contains_key(&input.alias))
-    {
-        return Ok(Vec::new());
-    }
-    let value = evaluate_addition_expression(expr, &state.latest_by_alias)?;
+    let (output_name, value) = result?;
     let Some(output) = algorithm
         .dsl
         .outputs
@@ -271,21 +377,114 @@ fn apply_expression(
     )])
 }
 
+fn numeric_source(
+    algorithm: &AlgorithmSpec,
+    state: &AlgorithmState,
+    sample: &TelemetrySample,
+    source: &str,
+) -> Option<f64> {
+    let binding = algorithm
+        .dsl
+        .inputs
+        .iter()
+        .find(|input| input.alias == source)?;
+    if binding.point_id != sample.telemetry_id {
+        return None;
+    }
+    state
+        .latest_by_alias
+        .get(source)
+        .and_then(|sample| sample.value.as_f64())
+}
+
+fn apply_debounce(
+    algorithm: &AlgorithmSpec,
+    state: &mut AlgorithmState,
+    sample: &TelemetrySample,
+) -> Result<Vec<TelemetrySample>> {
+    let Some((source, stable_ms)) = algorithm.dsl.steps.iter().find_map(|step| match step {
+        AlgorithmStep::Debounce { source, stable_ms } => Some((source, *stable_ms)),
+        _ => None,
+    }) else {
+        return Ok(Vec::new());
+    };
+    let Some(binding) = algorithm
+        .dsl
+        .inputs
+        .iter()
+        .find(|input| input.alias == *source)
+    else {
+        bail!(
+            "algorithm {} references missing input alias {}",
+            algorithm.id,
+            source
+        );
+    };
+    if binding.point_id != sample.telemetry_id {
+        return Ok(Vec::new());
+    }
+    let pending = state
+        .debounce_by_alias
+        .entry(source.clone())
+        .or_insert_with(|| DebounceState {
+            value: sample.value.clone(),
+            since: sample.timestamp,
+        });
+    if pending.value != sample.value {
+        pending.value = sample.value.clone();
+        pending.since = sample.timestamp;
+        return Ok(Vec::new());
+    }
+    if (sample.timestamp - pending.since).num_milliseconds() < stable_ms as i64 {
+        return Ok(Vec::new());
+    }
+    let Some(output) = algorithm.dsl.outputs.first() else {
+        bail!("algorithm {} requires an output", algorithm.id);
+    };
+    if state.last_reported.get(&output.point_id) == Some(&sample.value) {
+        return Ok(Vec::new());
+    }
+    state
+        .last_reported
+        .insert(output.point_id.clone(), sample.value.clone());
+    Ok(vec![TelemetrySample::new(
+        sample.device_id.clone(),
+        output.point_id.clone(),
+        sample.value.clone(),
+        sample.quality,
+        sample.timestamp,
+    )])
+}
+
 fn apply_threshold_rule(
     algorithm: &AlgorithmSpec,
     _state: &mut AlgorithmState,
     sample: &TelemetrySample,
-) -> Result<Vec<EdgeRuntimeEvent>> {
+) -> Result<(Vec<TelemetrySample>, Vec<EdgeRuntimeEvent>)> {
+    let mut samples = Vec::new();
     let mut events = Vec::new();
     for step in &algorithm.dsl.steps {
-        let AlgorithmStep::ThresholdRule {
-            source,
-            operator,
-            threshold,
-            event,
-        } = step
-        else {
-            continue;
+        let (source, operator, threshold, event, route_outputs) = match step {
+            AlgorithmStep::ThresholdRule {
+                source,
+                operator,
+                threshold,
+                event,
+            } => (source, operator, threshold, Some(event), None),
+            AlgorithmStep::ConditionalRoute {
+                source,
+                operator,
+                threshold,
+                matched_output,
+                unmatched_output,
+            } => (
+                source,
+                operator,
+                threshold,
+                None,
+                Some((matched_output, unmatched_output)),
+            ),
+            _ => continue,
         };
         let Some(binding) = algorithm
             .dsl
@@ -305,7 +504,37 @@ fn apply_threshold_rule(
         let Some(value) = sample.value.as_f64() else {
             continue;
         };
-        if compare(value, *operator, *threshold) {
+        let matched = compare(value, *operator, *threshold);
+        if let Some((matched_output, unmatched_output)) = route_outputs {
+            let output_name = if matched {
+                matched_output
+            } else {
+                unmatched_output
+            };
+            let Some(output) = algorithm
+                .dsl
+                .outputs
+                .iter()
+                .find(|output| output.name == *output_name)
+            else {
+                bail!(
+                    "algorithm {} references missing route output {}",
+                    algorithm.id,
+                    output_name
+                );
+            };
+            samples.push(TelemetrySample::new(
+                sample.device_id.clone(),
+                output.point_id.clone(),
+                sample.value.clone(),
+                sample.quality,
+                sample.timestamp,
+            ));
+        }
+        if matched {
+            let Some(event) = event else {
+                continue;
+            };
             events.push(
                 EdgeRuntimeEvent::new(
                     "",
@@ -319,7 +548,7 @@ fn apply_threshold_rule(
             );
         }
     }
-    Ok(events)
+    Ok((samples, events))
 }
 
 fn value_changed(previous: &TelemetryValue, current: &TelemetryValue, threshold: f64) -> bool {
@@ -370,19 +599,179 @@ fn non_empty(values: &[f64]) -> Option<&[f64]> {
     }
 }
 
-fn evaluate_addition_expression(
-    expr: &str,
-    values: &BTreeMap<String, TelemetrySample>,
-) -> Result<f64> {
-    let mut total = 0.0;
-    for term in expr.split('+') {
-        let alias = term.trim();
-        let Some(value) = values.get(alias).and_then(|sample| sample.value.as_f64()) else {
-            bail!("expression references missing numeric alias `{alias}`");
-        };
-        total += value;
+fn evaluate_expression(expr: &str, values: &BTreeMap<String, TelemetrySample>) -> Result<f64> {
+    let mut parser = ExpressionParser::new(expr, values);
+    let value = parser.parse_expression()?;
+    parser.skip_whitespace();
+    if parser.position != parser.input.len() {
+        bail!(
+            "unexpected expression token near `{}`",
+            &parser.input[parser.position..]
+        );
     }
-    Ok(total)
+    Ok(value)
+}
+
+struct ExpressionParser<'a> {
+    input: &'a str,
+    position: usize,
+    values: &'a BTreeMap<String, TelemetrySample>,
+}
+
+impl<'a> ExpressionParser<'a> {
+    fn new(input: &'a str, values: &'a BTreeMap<String, TelemetrySample>) -> Self {
+        Self {
+            input,
+            position: 0,
+            values,
+        }
+    }
+
+    fn parse_expression(&mut self) -> Result<f64> {
+        let mut value = self.parse_term()?;
+        loop {
+            self.skip_whitespace();
+            if self.consume('+') {
+                value += self.parse_term()?;
+            } else if self.consume('-') {
+                value -= self.parse_term()?;
+            } else {
+                return Ok(value);
+            }
+        }
+    }
+
+    fn parse_term(&mut self) -> Result<f64> {
+        let mut value = self.parse_factor()?;
+        loop {
+            self.skip_whitespace();
+            if self.consume('*') {
+                value *= self.parse_factor()?;
+            } else if self.consume('/') {
+                let divisor = self.parse_factor()?;
+                if divisor == 0.0 {
+                    bail!("expression division by zero");
+                }
+                value /= divisor;
+            } else {
+                return Ok(value);
+            }
+        }
+    }
+
+    fn parse_factor(&mut self) -> Result<f64> {
+        self.skip_whitespace();
+        if self.consume('-') {
+            return Ok(-self.parse_factor()?);
+        }
+        if self.consume('(') {
+            let value = self.parse_expression()?;
+            self.skip_whitespace();
+            if !self.consume(')') {
+                bail!("expression is missing `)`");
+            }
+            return Ok(value);
+        }
+        if self
+            .peek()
+            .is_some_and(|character| character.is_ascii_digit() || character == '.')
+        {
+            return self.parse_number();
+        }
+        let identifier = self.parse_identifier()?;
+        self.skip_whitespace();
+        if self.consume('(') {
+            let first = self.parse_expression()?;
+            self.skip_whitespace();
+            let second = if self.consume(',') {
+                Some(self.parse_expression()?)
+            } else {
+                None
+            };
+            self.skip_whitespace();
+            if !self.consume(')') {
+                bail!("function {identifier} is missing `)`");
+            }
+            return match (identifier.as_str(), second) {
+                ("abs", None) => Ok(first.abs()),
+                ("round", None) => Ok(first.round()),
+                ("floor", None) => Ok(first.floor()),
+                ("ceil", None) => Ok(first.ceil()),
+                ("sqrt", None) if first >= 0.0 => Ok(first.sqrt()),
+                ("min", Some(second)) => Ok(first.min(second)),
+                ("max", Some(second)) => Ok(first.max(second)),
+                ("pow", Some(second)) => Ok(first.powf(second)),
+                _ => bail!("unsupported expression function `{identifier}`"),
+            };
+        }
+        self.values
+            .get(&identifier)
+            .and_then(|sample| sample.value.as_f64())
+            .ok_or_else(|| {
+                anyhow::anyhow!("expression references missing numeric alias `{identifier}`")
+            })
+    }
+
+    fn parse_number(&mut self) -> Result<f64> {
+        let start = self.position;
+        while self.peek().is_some_and(|character| {
+            character.is_ascii_digit() || matches!(character, '.' | 'e' | 'E' | '+' | '-')
+        }) {
+            if self.position > start && matches!(self.peek(), Some('+') | Some('-')) {
+                let previous = self.input.as_bytes()[self.position - 1] as char;
+                if !matches!(previous, 'e' | 'E') {
+                    break;
+                }
+            }
+            self.advance();
+        }
+        self.input[start..self.position]
+            .parse::<f64>()
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "invalid numeric literal `{}`",
+                    &self.input[start..self.position]
+                )
+            })
+    }
+
+    fn parse_identifier(&mut self) -> Result<String> {
+        let start = self.position;
+        while self
+            .peek()
+            .is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
+        {
+            self.advance();
+        }
+        if start == self.position {
+            bail!("expected expression value");
+        }
+        Ok(self.input[start..self.position].to_string())
+    }
+
+    fn skip_whitespace(&mut self) {
+        while self.peek().is_some_and(char::is_whitespace) {
+            self.advance();
+        }
+    }
+
+    fn consume(&mut self, expected: char) -> bool {
+        if self.peek() == Some(expected) {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.input[self.position..].chars().next()
+    }
+    fn advance(&mut self) {
+        if let Some(character) = self.peek() {
+            self.position += character.len_utf8();
+        }
+    }
 }
 
 fn compare(value: f64, operator: CompareOperator, threshold: f64) -> bool {

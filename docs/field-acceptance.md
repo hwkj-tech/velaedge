@@ -6,10 +6,24 @@ the configured MQTT broker, and Cloud records the applied configuration and Runt
 `/dev/null`, a simulated adapter, or configuration-only validation is useful preflight evidence but
 is not physical acceptance.
 
+Before travelling to site, run `scripts/run-lab-serial-acceptance.sh`. It produces repeatable PTY
+evidence for Modbus RTU, DL/T 645, and IEC 101 through the production serial factory, Runtime data
+configuration, JSON payload builder, and MQTT QoS 1 acknowledgement path. A passing report removes
+software framing and integration uncertainty, but its `physicalDeviceExercised` field remains
+`false` and it cannot be used as site sign-off.
+
+Ethernet collection can be exercised locally with `modbus-tcp-simulator` on port `1502`. Unlike an
+in-process mock, it makes the production Runtime open a real TCP connection, decode Modbus frames,
+execute the released graph, and publish through the configured MQTT broker. This is useful end-to-end
+laboratory evidence, but the simulated register source still means `physicalDeviceExercised: false`.
+Run `scripts/run-lab-modbus-tcp-acceptance.sh` to retain a machine-readable report containing source
+hashes, the exercised production components, Modbus functions, MQTT acknowledgement requirement,
+and the explicit physical-device limitation.
+
 ## Site prerequisites
 
-- Record the site/work-order ID, operator, device model, meter/slave address, wiring, and approved
-  configuration version before testing.
+- Record the site/work-order ID, operator, device model, device asset/serial number, meter/slave
+  address, wiring, and approved configuration version before testing.
 - Wire RS-485 A/B and reference ground according to the device manual. Apply termination and bias
   only where the bus topology requires it, and confirm the USB/serial adapter direction control.
 - Stop other processes using the port. The Runtime account must have read/write access to the
@@ -19,6 +33,9 @@ is not physical acceptance.
   MQTT password values are never copied into evidence.
 - Configure every MQTT sink for QoS 1. Production acceptance requires `mqtts://`, a readable CA
   path, and any password environment variable named by `password_env`.
+- Start a broker-side consumer or export the broker audit record to a file. The physical harness
+  requires this receipt in addition to Runtime's PUBACK ledger, so a client-only acknowledgement
+  cannot be mistaken for end-consumer evidence.
 
 Export an existing validated package, then change its serial endpoint, point addresses, MQTT broker,
 TLS CA, credentials variable name, and topic templates for the target site:
@@ -58,6 +75,15 @@ The generated `report.json` has `mode: "preflight"` and
 `physicalDeviceExercised: false`. Controlled CI can exercise the preflight parser with `/dev/null`
 only by also setting `EDGEOPS_FIELD_ALLOW_TEST_SERIAL=1`; full acceptance always rejects it.
 
+For a repeatable repository-owned preflight, run:
+
+```bash
+scripts/run-field-preflight-acceptance.sh
+```
+
+This command uses a minimal Modbus RTU-to-MQTT QoS 1 package and the EdgeLink test certificate
+chain. It is included in the local release gate and never sets `physicalDeviceExercised` to true.
+
 ## Physical run
 
 Ensure the device is in an approved operating state before transmitting protocol requests. The
@@ -69,6 +95,10 @@ once with mTLS and MQTT enabled. It does not stop or modify the normal service o
 ```bash
 export EDGEOPS_FIELD_SITE_ID=WO-2026-0719-SH01
 export EDGEOPS_FIELD_OPERATOR=field-engineer-name
+export EDGEOPS_FIELD_DEVICE_MODEL='Acme PowerMeter PM-800'
+export EDGEOPS_FIELD_DEVICE_SERIAL='PM800-SH01-00042'
+export EDGEOPS_FIELD_PHYSICAL_DEVICE_CONFIRMED=1
+export EDGEOPS_FIELD_BROKER_RECEIPT=/secure/staging/velamq-consumer-receipt.json
 scripts/run-field-hardware-acceptance.sh
 ```
 
@@ -76,6 +106,15 @@ Use `EDGEOPS_FIELD_HTTP_PORT` and `EDGEOPS_FIELD_GATEWAY_PORT` if the isolated p
 Use `EDGEOPS_FIELD_WORK_DIR` to place evidence on an encrypted or retained volume. A controlled lab
 may explicitly set `EDGEOPS_FIELD_ALLOW_INSECURE_MQTT=1`; such evidence must not be approved as a
 production security acceptance.
+
+For a product graph with multiple MQTT output branches, set the minimum expected distinct routes
+before running. A route is the pair `[sink_id, expanded topic]`, so two branches that publish to the
+same topic count once:
+
+```bash
+export EDGEOPS_FIELD_MIN_MQTT_ROUTES=2
+scripts/run-field-hardware-acceptance.sh
+```
 
 ## Pass criteria
 
@@ -87,17 +126,36 @@ The command exits zero only when all of these are true:
 3. Cloud becomes ready with SQLite, required API authentication, and an mTLS EdgeLink listener.
 4. Runtime receives the exact package version, stores it in RocksDB, performs collection through
    the physical serial adapter, records `samples_collected > 0`, and exits without a protocol error.
-5. At least one message reaches a configured MQTT sink and receives the broker acknowledgement.
+5. Every Runtime-reported MQTT publication has a matching RocksDB broker-acknowledgement receipt.
+   Each receipt matches a released sink, has a non-empty expanded topic and positive payload size,
+   and the number of distinct `[sink_id, topic]` routes meets `EDGEOPS_FIELD_MIN_MQTT_ROUTES`. A
+   non-empty broker-side consumer/audit receipt is copied into the evidence bundle and hashed.
 6. EdgeLink acknowledges Runtime state, Cloud records the same reported version as `已应用`, and
    Runtime status reports connected Cloud sync and RocksDB state.
-7. Cloud handles SIGTERM gracefully.
+7. The report records the physical device model, serial/asset number, operator and explicit operator
+   confirmation. Cloud handles SIGTERM gracefully.
 
 Retain the entire `target/field-acceptance-*` directory. `report.json` includes package and Cloud
 snapshot SHA-256 values, the matched catalog edge, certificate metadata, serial settings, MQTT
 brokers/topics without secrets, collected sample and message counts, release/runtime IDs, Runtime
-status, and release acknowledgement. `runtime.log`, `cloud.log`, the isolated SQLite snapshot, and
-the Runtime RocksDB directory remain available for incident review.
+status, release acknowledgement, `mqttDistinctRoutes`, and bounded `mqttAcknowledgements` route
+metadata. Payload bytes and credentials are not copied into the receipt ledger. `runtime.log`,
+`cloud.log`, `mqtt-acknowledgements.json`, the isolated SQLite snapshot, and the Runtime RocksDB
+directory remain available for incident review.
 
-For site sign-off, attach a wiring photo, device model/serial number, broker-side topic receipt or
-consumer evidence, and the report directory checksum to the work order. The repository's automated
-PTY, mTLS, VelaMQ, recovery, and performance reports complement this evidence; none replaces it.
+Every run also stores the validated package as `configuration-package.json` and creates
+`evidence-manifest.json`. The manifest contains the relative path, byte count and SHA-256 digest of
+every retained evidence file, including Runtime RocksDB files. Verify a bundle independently with:
+
+```bash
+scripts/verify-field-acceptance-report.sh --require-physical /retained/evidence/report.json
+```
+
+The verifier rejects preflight reports in physical mode, unsafe evidence paths, PTYs/test character
+devices, missing identity or broker receipt, insufficient MQTT routes, mismatched Runtime/release
+versions, and any modified or missing evidence file.
+
+For site sign-off, attach a wiring photo and the verified report bundle to the work order. Device
+identity and broker-side receipt are now mandatory report evidence; the manifest replaces an
+informal directory checksum with file-level verification. The repository's automated PTY, mTLS,
+VelaMQ, recovery, and performance reports complement this evidence; none replaces it.

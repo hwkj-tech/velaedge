@@ -1,0 +1,106 @@
+{
+  "edge_id": "edge-preflight",
+  "version": "field-preflight-v1",
+  "device_models": [],
+  "devices": [
+    {
+      "device_id": "meter-1",
+      "device_type": "meter"
+    }
+  ],
+  "protocol_connections": [
+    {
+      "connection_id": "modbus-physical",
+      "protocol": "ModbusRtu",
+      "endpoint": "/dev/null",
+      "serial": {
+        "port": "/dev/null",
+        "baud_rate": 9600,
+        "data_bits": 8,
+        "stop_bits": 1,
+        "parity": "none"
+      }
+    }
+  ],
+  "mqtt_uplinks": [
+    {
+      "sink_id": "velamq-main",
+      "broker": "mqtt://127.0.0.1:1883",
+      "client_id": "edge-preflight",
+      "topic_template": "field/{edge_id}/{device_id}/telemetry",
+      "qos": 1,
+      "batch_size": 100,
+      "flush_interval_ms": 1000
+    }
+  ],
+  "data_configs": [
+    {
+      "config_id": "meter-telemetry",
+      "name": "Field preflight",
+      "enabled": true,
+      "device_id": "meter-1",
+      "protocol_connection_id": "modbus-physical",
+      "collection": {
+        "period_ms": 1000,
+        "timeout_ms": 800,
+        "retry_count": 2
+      },
+      "points": [
+        {
+          "point_id": "voltage",
+          "semantic_id": "meter.voltage",
+          "address": {
+            "kind": "holding_register",
+            "value": "40001"
+          },
+          "value_type": "Integer",
+          "unit": "V",
+          "json_field": "voltage"
+        }
+      ],
+      "algorithm_ids": [],
+      "visual_graph": {
+        "nodes": [],
+        "edges": []
+      },
+      "publish": {
+        "sink_id": "velamq-main",
+        "topic_template": "field/{edge_id}/{device_id}/telemetry",
+        "qos": 1,
+        "payload": {
+          "mode": "Object",
+          "timestamp_field": "ts",
+          "include_quality": true
+        }
+      }
+    }
+  ],
+  "point_mappings": [
+    {
+      "point_id": "voltage",
+      "device_id": "meter-1",
+      "semantic_id": "meter.voltage",
+      "protocol_connection_id": "modbus-physical",
+      "address": {
+        "kind": "holding_register",
+        "value": "40001"
+      },
+      "value_type": "Integer",
+      "unit": "V",
+      "range": null,
+      "interval_ms": 1000
+    }
+  ],
+  "collection_tasks": [
+    {
+      "task_id": "meter-main",
+      "device_id": "meter-1",
+      "point_ids": [
+        "voltage"
+      ],
+      "interval_ms": 1000,
+      "enabled": true
+    }
+  ],
+  "algorithms": []
+}

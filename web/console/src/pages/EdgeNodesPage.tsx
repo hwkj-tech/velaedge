@@ -19,19 +19,6 @@ import type {
 import { Modal } from '../components/Modal';
 import { displayError } from '../utils/errors';
 
-const fallbackEdges: EdgeNodeResponse[] = [
-  {
-    edgeId: 'edge-dev',
-    displayName: '研发实验室边端',
-    site: '研发/实验室',
-    runtimeId: 'runtime-dev',
-    status: '健康',
-    resources: '18.5% / 42% / 61%',
-    heartbeat: '8 秒前',
-    capabilities: ['protocol:modbus-tcp', 'local-store:jsonl'],
-  },
-];
-
 export type EdgeConfigTabKey =
   | 'versions'
   | 'protocol'
@@ -73,7 +60,7 @@ export interface CreateManagedEdgeRequest {
 export function EdgeNodesPage({
   accessTokens = {},
   configSummaries = [],
-  edges = fallbackEdges,
+  edges = [],
   mqttUplink,
   onCreateEdge,
   onDeleteEdge,
@@ -189,6 +176,13 @@ export function EdgeNodesPage({
               </tr>
             </thead>
             <tbody>
+              {visibleEdges.length === 0 ? (
+                <tr>
+                  <td className="table-empty-cell" colSpan={7}>
+                    暂无边端实例，请新增边端并使用接入 Token 启动 Runtime
+                  </td>
+                </tr>
+              ) : null}
               {visibleEdges.map((edge) => {
                 const summary = findConfigSummary(configSummaries, edge.edgeId);
 
@@ -649,7 +643,7 @@ function MqttField({
 function defaultMqttUplink(edgeId: string): MqttUplinkResponse {
   return {
     batchSize: 100,
-    broker: 'mqtts://velamq.local:8883',
+    broker: '',
     clientId: `${edgeId}-runtime`,
     flushIntervalMs: 1000,
     qos: 1,

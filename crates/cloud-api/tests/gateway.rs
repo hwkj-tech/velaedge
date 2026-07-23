@@ -7,7 +7,8 @@ use cloud_api::gateway::{
     serve_edgelink_gateway_for_sessions, EdgeGatewayCommandRegistry,
 };
 use cloud_control::{
-    CloudControlStore, EdgeAccessCredential, ReleaseService, ReleaseStatus, SqliteCloudStore,
+    CloudControlStore, EdgeAccessCredential, EdgeNode, ReleaseService, ReleaseStatus,
+    SqliteCloudStore,
 };
 use edge_core::{
     decode_edgelink_frame, encode_edgelink_frame, CloudSyncMetrics, CollectionRuntimeMetrics,
@@ -507,6 +508,79 @@ async fn gateway_deploys_latest_config_and_marks_release_applied_from_report() {
         .expect("release should still exist");
     assert_eq!(updated.status, ReleaseStatus::Applied);
     assert_eq!(updated.reported_version.as_deref(), Some("2026.06.27-010"));
+}
+
+#[tokio::test]
+async fn gateway_failed_config_report_preserves_the_last_applied_product_version() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let gateway_addr = listener.local_addr().expect("listener should expose addr");
+    let mut seeded = CloudControlStore::default();
+    let mut edge = EdgeNode::new("edge-reject", "Rejecting Edge");
+    edge.reported_product_version = Some("v1.0.0".to_string());
+    seeded.register_edge(edge);
+    let release = ReleaseService::create_release(
+        &mut seeded,
+        EdgeConfigPackage::new("edge-reject", "v1.1.0"),
+    )
+    .expect("release should be valid");
+    let store = Arc::new(Mutex::new(seeded));
+    let gateway_store = store.clone();
+
+    let gateway = tokio::spawn(async move {
+        let (stream, peer_addr) = listener.accept().await.expect("runtime should connect");
+        handle_edgelink_session_with_store(stream, peer_addr, gateway_store)
+            .await
+            .expect("session should process rejected config report")
+    });
+
+    let mut runtime = TcpStream::connect(gateway_addr)
+        .await
+        .expect("runtime should connect to gateway");
+    let hello = EdgeLinkMessage::hello(
+        "edge-reject",
+        "runtime-reject",
+        "0.1.0",
+        Some("v1.0.0".to_string()),
+        Vec::new(),
+    );
+    write_one_message(&mut runtime, &hello).await;
+    assert_ack_for(&mut runtime, &hello).await;
+
+    let deploy = read_one_message(&mut runtime).await;
+    let EdgeLinkPayload::ConfigDeploy(package) = deploy.payload else {
+        panic!("expected config deploy payload");
+    };
+    assert_eq!(package.version, "v1.1.0");
+
+    let report = EdgeLinkMessage::config_report(
+        "edge-reject",
+        "runtime-reject",
+        2,
+        "v1.1.0",
+        None,
+        false,
+        Some("runtime validation rejected the package".to_string()),
+    );
+    write_one_message(&mut runtime, &report).await;
+    assert_ack_for(&mut runtime, &report).await;
+    drop(runtime);
+
+    let session = gateway.await.expect("gateway task should finish");
+    assert_eq!(session.config_report_count, 1);
+
+    let store = store.lock().expect("store mutex should not be poisoned");
+    let updated = store
+        .release(release.release_id)
+        .expect("release should still exist");
+    assert_eq!(updated.status, ReleaseStatus::Failed);
+    assert_eq!(updated.reported_version.as_deref(), Some("rejected"));
+    let edge = store
+        .edge_nodes()
+        .find(|edge| edge.edge_id == "edge-reject")
+        .expect("edge should still exist");
+    assert_eq!(edge.reported_product_version.as_deref(), Some("v1.0.0"));
 }
 
 #[tokio::test]

@@ -16,48 +16,9 @@ import { Modal } from '../components/Modal';
 import { displayError } from '../utils/errors';
 import './PointMappingsPage.css';
 
-const emptyPoint: DataConfigPoint = {
-  addressKind: 'holding_register',
-  addressValue: '40001',
-  jsonField: 'pressure',
-  pointId: 'pressure',
-  semanticId: 'pump.pressure',
-  unit: 'MPa',
-  valueType: 'float32',
-};
-
-const fallbackConfig: DataConfigResponse = {
-  edgeId: 'edge-dev',
-  configId: 'pump_status',
-  name: '泵状态上报',
-  enabled: true,
-  deviceId: 'pump-1',
-  protocolConnectionId: 'modbus-line-a',
-  collection: { periodMs: 1000, retryCount: 2, timeoutMs: 800 },
-  points: [emptyPoint],
-  algorithmIds: ['pump-anomaly-v1'],
-  visualGraph: {
-    edges: [
-      { edgeId: 'pressure-to-algorithm', from: 'point-pressure', to: 'algorithm-pump-anomaly-v1' },
-      { edgeId: 'algorithm-to-mqtt', from: 'algorithm-pump-anomaly-v1', to: 'mqtt-output' },
-    ],
-    nodes: [
-      { kind: 'point', label: 'pressure', nodeId: 'point-pressure', refId: 'pressure', x: 80, y: 88 },
-      { kind: 'algorithm', label: 'pump-anomaly-v1', nodeId: 'algorithm-pump-anomaly-v1', refId: 'pump-anomaly-v1', x: 280, y: 88 },
-      { kind: 'mqtt', label: 'MQTT Topic', nodeId: 'mqtt-output', refId: 'factory/{edge_id}/{device_id}/status', x: 520, y: 88 },
-    ],
-  },
-  publish: {
-    payload: { includeQuality: true, mode: 'object', timestampField: 'ts' },
-    qos: 1,
-    sinkId: 'velamq-main',
-    topicTemplate: 'factory/{edge_id}/{device_id}/status',
-  },
-};
-
 export function DataConfigsPage({
   algorithms = [],
-  configs = [fallbackConfig],
+  configs = [],
   createLabel = '新建数据上报',
   description = '点位输入、计算节点处理与 MQTT 输出的一体化数据流水线。',
   edges = [],
@@ -69,7 +30,7 @@ export function DataConfigsPage({
   pageTitle = '采集管理',
   pointMappings = [],
   protocolConnections = [],
-  selectedEdgeId = configs[0]?.edgeId ?? 'edge-dev',
+  selectedEdgeId = configs[0]?.edgeId ?? '',
 }: {
   algorithms?: AlgorithmResponse[];
   configs?: DataConfigResponse[];
@@ -888,17 +849,17 @@ function createDefaultForm(
   protocolConnections: ProtocolConnectionResponse[] = [],
   pointMappings: PointMappingResponse[] = [],
 ): SaveDataConfigRequest {
-  const initialPoints = pointMappings.length ? [] : [emptyPoint];
+  const initialPoints: DataConfigPoint[] = [];
   const firstPoint = pointMappings[0];
   const firstConnectionId =
     firstPoint?.connection ||
     protocolConnections[0]?.connectionId ||
-    'modbus-line-a';
+    '';
 
   return {
     collection: { periodMs: 1000, retryCount: 2, timeoutMs: 800 },
     configId: `${edgeId}_data_${Date.now().toString().slice(-4)}`,
-    deviceId: firstPoint?.deviceId || 'pump-1',
+    deviceId: firstPoint?.deviceId || '',
     enabled: true,
     algorithmIds: [],
     visualGraph: buildVisualGraph(initialPoints, [], 'factory/{edge_id}/{device_id}/telemetry'),
@@ -908,7 +869,7 @@ function createDefaultForm(
     publish: {
       payload: { includeQuality: true, mode: 'object', timestampField: 'ts' },
       qos: mqttUplink?.qos ?? 1,
-      sinkId: mqttUplink?.sinkId ?? 'velamq-main',
+      sinkId: mqttUplink?.sinkId ?? '',
       topicTemplate: 'factory/{edge_id}/{device_id}/telemetry',
     },
   };

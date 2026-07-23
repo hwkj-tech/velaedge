@@ -4,11 +4,11 @@ use cloud_control::{
     ReleaseRecord, ReleaseStatus, SqliteCloudStore,
 };
 use edge_core::{
-    CloudSyncMetrics, CollectionRuntimeMetrics, CollectionTask, DeviceInstance, DiscoveredPoint,
-    DiscoveryReport, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot,
-    LocalStoreMetrics, MqttUplinkConfig, PointAddress, PointMappingSuggestion, ProtocolConnection,
-    ProtocolType, RuntimeEventCategory, RuntimeEventSeverity, SystemRuntimeMetrics,
-    TelemetryPointMapping, TelemetryType,
+    AlgorithmRuntime, CloudSyncMetrics, CollectionRuntimeMetrics, CollectionTask, DeviceInstance,
+    DiscoveredPoint, DiscoveryReport, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent,
+    EdgeRuntimeMetricsSnapshot, LocalStoreMetrics, MqttUplinkConfig, PointAddress,
+    PointMappingSuggestion, ProtocolConnection, ProtocolType, RuntimeEventCategory,
+    RuntimeEventSeverity, SystemRuntimeMetrics, TelemetryPointMapping, TelemetryType,
 };
 
 fn valid_package(version: &str) -> EdgeConfigPackage {
@@ -294,5 +294,54 @@ async fn sqlite_store_migrates_legacy_mqtt_protocol_packages_on_read() {
     assert_eq!(
         package.protocol_connections[0].protocol,
         ProtocolType::CustomSerial
+    );
+}
+
+#[tokio::test]
+async fn sqlite_store_migrates_legacy_algorithm_runtimes_to_dsl_rule() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let database_url = format!("sqlite://{}", tempdir.path().join("cloud.db").display());
+    let store = SqliteCloudStore::connect(&database_url).await.unwrap();
+    let legacy_package = serde_json::json!({
+        "edge_id": "edge-dev",
+        "version": "2026.06.26-legacy-onnx",
+        "device_models": [],
+        "devices": [],
+        "protocol_connections": [],
+        "point_mappings": [],
+        "collection_tasks": [],
+        "algorithms": [{
+            "id": "legacy-anomaly",
+            "version": "1.0.0",
+            "kind": "ChangeReport",
+            "runtime": "Onnx",
+            "inputs": ["pressure"],
+            "outputs": ["anomaly"]
+        }]
+    });
+
+    sqlx::query(
+        r#"
+        INSERT INTO config_packages (edge_id, version, package_json)
+        VALUES (?1, ?2, ?3)
+        "#,
+    )
+    .bind("edge-dev")
+    .bind("2026.06.26-legacy-onnx")
+    .bind(legacy_package.to_string())
+    .execute(store.pool())
+    .await
+    .unwrap();
+
+    let package = store
+        .latest_config_package_for_edge("edge-dev")
+        .await
+        .unwrap()
+        .expect("legacy algorithm package should remain readable");
+
+    assert_eq!(package.algorithms[0].runtime, AlgorithmRuntime::Rule);
+    assert_eq!(
+        serde_json::to_value(&package).unwrap()["algorithms"][0]["runtime"],
+        "Rule"
     );
 }

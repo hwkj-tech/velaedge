@@ -110,6 +110,8 @@ fn edge_runtime_cli_can_run_cloud_config_sync_and_runtime_reporting_once() {
 
     assert!(requests[0].starts_with("GET /api/edges/edge-dev/desired-config HTTP/1.1"));
     assert!(requests[1].starts_with("POST /api/edges/edge-dev/reported-config HTTP/1.1"));
+    assert!(requests[1].contains("\"desiredVersion\":\"2026.06.26-005\""));
+    assert!(requests[1].contains("\"reportedVersion\":\"2026.06.26-005\""));
     assert!(requests[2].starts_with("POST /api/edges/edge-dev/runtime-metrics HTTP/1.1"));
     assert!(requests[2].contains("\"runtime_id\":\"runtime-cli\""));
     assert!(requests[2].contains("\"config_version\":\"2026.06.26-005\""));

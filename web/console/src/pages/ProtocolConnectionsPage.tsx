@@ -14,30 +14,20 @@ import { PaginationBar } from '../components/PaginationBar';
 import { displayError } from '../utils/errors';
 import './PointMappingsPage.css';
 
-const fallbackConnections: ProtocolConnectionResponse[] = [
-  {
-    edgeId: 'edge-dev',
-    connectionId: 'modbus-line-a',
-    protocol: 'Modbus TCP',
+const emptyConnection: ProtocolConnectionResponse = {
+    edgeId: '',
+    connectionId: '',
+    protocol: '',
     protocolType: 'ModbusTcp',
-    endpoint: '10.12.0.20:502',
-    status: '启用',
-    policy: '1000ms timeout / 3 retry',
-  },
-];
+    endpoint: '',
+    status: '停用',
+    policy: '',
+};
 
-const fallbackEdges: EdgeNodeResponse[] = [
-  {
-    edgeId: 'edge-dev',
-    displayName: '研发实验室边端',
-    site: '研发/实验室',
-    runtimeId: 'runtime-dev',
-    status: '健康',
-    resources: '18.5% / 42% / 61%',
-    heartbeat: '8 秒前',
-    capabilities: ['protocol:modbus-tcp'],
-  },
-];
+const emptyEdge: EdgeNodeResponse = {
+  edgeId: '', displayName: '未选择边端', site: '-', runtimeId: '-', status: '未接入',
+  resources: '-', heartbeat: '-', capabilities: [],
+};
 
 const protocolOptions = [
   ['ModbusTcp', 'Modbus TCP'],
@@ -51,15 +41,15 @@ const protocolOptions = [
 ];
 
 export function ProtocolConnectionsPage({
-  connections = fallbackConnections,
-  edges = fallbackEdges,
+  connections = [],
+  edges = [],
   embedded = false,
   mode = 'configure',
   onCreateConnection,
   onDeleteConnection,
   onSaveConnection,
   onValidateConnection,
-  selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
+  selectedEdgeId = edges[0]?.edgeId ?? '',
 }: {
   connections?: ProtocolConnectionResponse[];
   edges?: EdgeNodeResponse[];
@@ -84,13 +74,13 @@ export function ProtocolConnectionsPage({
   selectedEdgeId?: string;
 }) {
   const [selectedConnectionId, setSelectedConnectionId] = useState(
-    () => connections[0]?.connectionId ?? fallbackConnections[0].connectionId,
+    () => connections[0]?.connectionId ?? '',
   );
   const [page, setPage] = useState(1);
   const selectedConnection =
     connections.find((connection) => connection.connectionId === selectedConnectionId) ??
     connections[0] ??
-    fallbackConnections[0];
+    emptyConnection;
   const [form, setForm] = useState(() => connectionToEditorForm(selectedConnection));
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>(
     'idle',
@@ -114,7 +104,7 @@ export function ProtocolConnectionsPage({
     currentPage * pageSize,
   );
   const activeEdge =
-    edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
+    edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? emptyEdge;
 
   useEffect(() => {
     setForm(connectionToEditorForm(selectedConnection));
@@ -230,7 +220,7 @@ export function ProtocolConnectionsPage({
             <>
               <button
                 className="secondary-button"
-                disabled={validateState === 'validating'}
+                disabled={validateState === 'validating' || !selectedEdgeId}
                 onClick={() => {
                   void handleValidateConnection();
                 }}
@@ -241,7 +231,7 @@ export function ProtocolConnectionsPage({
               </button>
               <button
                 className="primary-button"
-                disabled={createState === 'creating'}
+                disabled={createState === 'creating' || !selectedEdgeId}
                 onClick={() => setCreateDialogOpen(true)}
                 type="button"
               >
@@ -399,6 +389,13 @@ export function ProtocolConnectionsPage({
                 </tr>
               </thead>
               <tbody>
+                {visibleConnections.length === 0 ? (
+                  <tr>
+                    <td className="table-empty-cell" colSpan={isConfigureMode ? 6 : 5}>
+                      暂无协议连接
+                    </td>
+                  </tr>
+                ) : null}
                 {visibleConnections.map((connection) => (
                   <tr key={`${connection.edgeId}:${connection.connectionId}`}>
                     <td>

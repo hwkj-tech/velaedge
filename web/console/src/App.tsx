@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent, type MouseEvent, type PointerEvent } from 'react';
+import { Check, Trash2, X } from 'lucide-react';
 
 import {
   bindEdgeProduct,
@@ -1286,6 +1287,7 @@ export function ConsoleApp({
         releaseList,
         runtimeStatus,
         auditRecords,
+        principal,
       )}
     </AppShell>
   );
@@ -1486,6 +1488,7 @@ export function hydrateProductTemplate(
             kind: string;
             label: string;
             node_id: string;
+            params?: Record<string, boolean | number | string | string[]>;
             ref_id?: string | null;
             x: number;
             y: number;
@@ -1596,6 +1599,7 @@ export function hydrateProductTemplate(
               kind: node.kind.toLowerCase() as DataConfigVisualGraph['nodes'][number]['kind'],
               label: node.label,
               nodeId: node.node_id,
+              params: node.params ?? {},
               refId:
                 node.kind.toLowerCase() === 'algorithm' && node.ref_id
                   ? algorithmKindsById.get(node.ref_id) ?? node.ref_id
@@ -1630,19 +1634,30 @@ export function hydrateProductTemplate(
 }
 
 function productComputeKindFromStoredAlgorithm(algorithm: CoreProductAlgorithmSpec) {
+  const step = algorithm.dsl?.steps[0];
   switch (algorithm.kind) {
-    case 'WindowAggregate':
+    case 'WindowAggregate': {
+      if (step?.type === 'windowAggregate' && step.functions.length === 1 && step.functions[0]?.function === 'avg') {
+        return 'moving_average';
+      }
       return 'window_aggregate';
-    case 'ThresholdRule':
-      return 'alarm_event';
-    case 'ChangeReport': {
-      const step = algorithm.dsl?.steps.find((candidate) => candidate.type === 'changeFilter');
-      return step?.type === 'changeFilter' && step.threshold > 0
-        ? 'deadband_filter'
-        : 'change_report';
     }
-    case 'ExpressionAggregate':
+    case 'Statistics':
+      return 'statistics';
+    case 'ThresholdRule':
+      return step?.type === 'conditionalRoute' ? 'condition_route' : 'alarm_event';
+    case 'Deadband':
+      return 'deadband_filter';
+    case 'ChangeReport':
+      return 'change_report';
+    case 'Debounce':
+      return 'debounce';
+    case 'ExpressionAggregate': {
+      if (step?.type === 'scale') return 'scale_offset';
+      if (step?.type === 'clamp') return 'clamp';
+      if (step?.type === 'rateOfChange') return 'rate_of_change';
       return 'expression';
+    }
     default:
       return 'expression';
   }
@@ -1768,6 +1783,7 @@ export function buildProductVersionRequest(
                     : 'Json',
             label: node.label,
             node_id: node.nodeId,
+            params: node.params ?? {},
             ref_id: node.refId ?? null,
             x: Math.round(node.x),
             y: Math.round(node.y),
@@ -2299,12 +2315,21 @@ function buildProductComputeAlgorithm(
   const primaryAlias = inputs[0].alias;
   const sink = template.dataConfig.publish.sinkId;
   const outputBase = `${algorithmId}.output`;
+  const params = node.params ?? {};
 
-  if (kind === 'window_aggregate') {
-    const functions = ['avg', 'min', 'max', 'sum', 'count'] as const;
+  if (kind === 'window_aggregate' || kind === 'moving_average' || kind === 'statistics') {
+    const supportedFunctions = ['avg', 'min', 'max', 'sum', 'count', 'first', 'last'] as const;
+    const requestedFunctions = Array.isArray(params.metrics)
+      ? params.metrics.map(String)
+      : kind === 'moving_average'
+        ? ['avg']
+        : kind === 'statistics'
+          ? [...supportedFunctions]
+          : ['avg', 'min', 'max', 'sum', 'count'];
+    const functions = supportedFunctions.filter((name) => requestedFunctions.includes(name));
     return {
       algorithmId,
-      algorithmKind: 'WindowAggregate',
+      algorithmKind: kind === 'statistics' ? 'Statistics' : 'WindowAggregate',
       dsl: {
         inputs,
         outputs: functions.map((name) => ({ name, pointId: `${outputBase}.${name}` })),
@@ -2317,7 +2342,7 @@ function buildProductComputeAlgorithm(
           },
         ],
         trigger: {
-          everyMs: Math.max(template.dataConfig.collection.periodMs, 1000),
+          everyMs: Math.max(productNodeParamNumber(node, 'windowMs', 5000), 1),
           type: 'window',
         },
       },
@@ -2328,7 +2353,7 @@ function buildProductComputeAlgorithm(
   if (kind === 'change_report' || kind === 'deadband_filter') {
     return {
       algorithmId,
-      algorithmKind: 'ChangeReport',
+      algorithmKind: kind === 'deadband_filter' ? 'Deadband' : 'ChangeReport',
       dsl: {
         inputs,
         outputs: [{ name: 'value', pointId: outputBase }],
@@ -2336,10 +2361,103 @@ function buildProductComputeAlgorithm(
         steps: [
           {
             source: primaryAlias,
-            threshold: kind === 'deadband_filter' ? 0.1 : 0,
+            threshold: Math.max(productNodeParamNumber(node, 'threshold', kind === 'deadband_filter' ? 0.1 : 0), 0),
             type: 'changeFilter',
           },
         ],
+        trigger: { type: 'onSample' },
+      },
+      version: template.version,
+    };
+  }
+
+  if (kind === 'debounce') {
+    return {
+      algorithmId,
+      algorithmKind: 'Debounce',
+      dsl: {
+        inputs,
+        outputs: [{ name: 'value', pointId: outputBase }],
+        report: { mode: 'OnOutput', sink },
+        steps: [{ source: primaryAlias, stableMs: Math.max(productNodeParamNumber(node, 'stableMs', 1000), 1), type: 'debounce' }],
+        trigger: { type: 'onSample' },
+      },
+      version: template.version,
+    };
+  }
+
+  if (kind === 'scale_offset') {
+    return {
+      algorithmId,
+      algorithmKind: 'ExpressionAggregate',
+      dsl: {
+        inputs,
+        outputs: [{ name: 'value', pointId: outputBase }],
+        report: { mode: 'OnOutput', sink },
+        steps: [{
+          factor: productNodeParamNumber(node, 'factor', 1),
+          offset: productNodeParamNumber(node, 'offset', 0),
+          output: 'value',
+          source: primaryAlias,
+          type: 'scale',
+        }],
+        trigger: { type: 'onSample' },
+      },
+      version: template.version,
+    };
+  }
+
+  if (kind === 'clamp') {
+    const min = productNodeParamNumber(node, 'min', 0);
+    const max = productNodeParamNumber(node, 'max', 100);
+    return {
+      algorithmId,
+      algorithmKind: 'ExpressionAggregate',
+      dsl: {
+        inputs,
+        outputs: [{ name: 'value', pointId: outputBase }],
+        report: { mode: 'OnOutput', sink },
+        steps: [{ max: Math.max(min, max), min: Math.min(min, max), output: 'value', source: primaryAlias, type: 'clamp' }],
+        trigger: { type: 'onSample' },
+      },
+      version: template.version,
+    };
+  }
+
+  if (kind === 'rate_of_change') {
+    return {
+      algorithmId,
+      algorithmKind: 'ExpressionAggregate',
+      dsl: {
+        inputs,
+        outputs: [{ name: 'value', pointId: outputBase }],
+        report: { mode: 'OnOutput', sink },
+        steps: [{ output: 'value', perMs: Math.max(productNodeParamNumber(node, 'perMs', 1000), 1), source: primaryAlias, type: 'rateOfChange' }],
+        trigger: { type: 'onSample' },
+      },
+      version: template.version,
+    };
+  }
+
+  if (kind === 'condition_route') {
+    return {
+      algorithmId,
+      algorithmKind: 'ThresholdRule',
+      dsl: {
+        inputs,
+        outputs: [
+          { name: 'matched', pointId: `${outputBase}.matched` },
+          { name: 'unmatched', pointId: `${outputBase}.unmatched` },
+        ],
+        report: { mode: 'OnOutput', sink },
+        steps: [{
+          matchedOutput: 'matched',
+          operator: productNodeCompareOperator(node),
+          source: primaryAlias,
+          threshold: productNodeParamNumber(node, 'threshold', 0),
+          type: 'conditionalRoute',
+          unmatchedOutput: 'unmatched',
+        }],
         trigger: { type: 'onSample' },
       },
       version: template.version,
@@ -2361,9 +2479,9 @@ function buildProductComputeAlgorithm(
               message: `${node.label}触发`,
               severity: 'Warning',
             },
-            operator: 'Gt',
+            operator: productNodeCompareOperator(node),
             source: primaryAlias,
-            threshold: 0,
+            threshold: productNodeParamNumber(node, 'threshold', 0),
             type: 'thresholdRule',
           },
         ],
@@ -2382,7 +2500,7 @@ function buildProductComputeAlgorithm(
       report: { mode: 'OnOutput', sink },
       steps: [
         {
-          expr: inputs.map((input) => input.alias).join(' + '),
+          expr: String(params.expression ?? inputs.map((input) => input.alias).join(' + ')),
           output: 'value',
           type: 'expression',
         },
@@ -2410,17 +2528,40 @@ function resolveProductComputeInputs(
       if (source.kind === 'point') return source.refId ? [source.refId] : [];
       const upstreamAlgorithmId = runtimeAlgorithmIds.get(source.nodeId);
       if (upstreamAlgorithmId) {
-        return [productComputePrimaryOutputId(source.refId, upstreamAlgorithmId)];
+        return [productComputeOutputId(source.refId, upstreamAlgorithmId, edge.fromPort)];
       }
       return resolveProductComputeInputs(graph, source.nodeId, runtimeAlgorithmIds, nextVisited);
     });
   return Array.from(new Set(pointIds));
 }
 
-function productComputePrimaryOutputId(kind: string | null | undefined, algorithmId: string) {
-  return kind === 'window_aggregate'
+function productComputeOutputId(
+  kind: string | null | undefined,
+  algorithmId: string,
+  outputPort?: string | null,
+) {
+  if (kind === 'condition_route' && (outputPort === 'matched' || outputPort === 'unmatched')) {
+    return `${algorithmId}.output.${outputPort}`;
+  }
+  return kind === 'window_aggregate' || kind === 'moving_average' || kind === 'statistics'
     ? `${algorithmId}.output.avg`
     : `${algorithmId}.output`;
+}
+
+function productNodeParamNumber(
+  node: DataConfigVisualGraph['nodes'][number],
+  key: string,
+  fallback: number,
+) {
+  const value = Number(node.params?.[key] ?? fallback);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function productNodeCompareOperator(node: DataConfigVisualGraph['nodes'][number]) {
+  const operator = String(node.params?.operator ?? 'Gt');
+  return ['Gt', 'Gte', 'Lt', 'Lte', 'Eq', 'Ne'].includes(operator)
+    ? (operator as 'Gt' | 'Gte' | 'Lt' | 'Lte' | 'Eq' | 'Ne')
+    : 'Gt';
 }
 
 function buildEdgeProductOptions(
@@ -2659,6 +2800,7 @@ function renderPage(
   releaseList?: ReleaseListResponse,
   runtimeStatus?: RuntimeStatusResponse,
   auditRecords?: AuditRecordResponse[],
+  principal?: AuthStatusResponse,
 ) {
   switch (activePage) {
     case 'dashboard':
@@ -2846,6 +2988,7 @@ function renderPage(
     case 'agentAssistant':
       return (
         <AgentAssistantPage
+          canReviewProposals={principal?.role === 'admin'}
           onChat={onAgentChat}
           onDeleteKnowledge={onDeleteAgentKnowledge}
           onCreateProposal={onCreateAgentProposal}
@@ -4162,33 +4305,102 @@ function formatCatalogTime(value: string): string {
     : date.toLocaleString('zh-CN', { hour12: false });
 }
 
-const PRODUCT_SCENARIO_ALGORITHMS = [
+interface ProductAlgorithmDefinition {
+  category: string;
+  defaultParams: Record<string, boolean | number | string | string[]>;
+  description: string;
+  kind: string;
+  label: string;
+}
+
+const PRODUCT_SCENARIO_ALGORITHMS: ProductAlgorithmDefinition[] = [
   {
-    description: '按时间窗口输出 avg/min/max/sum/count',
+    category: '聚合',
+    defaultParams: { metrics: ['avg', 'min', 'max', 'sum', 'count'], windowMs: 5000 },
+    description: '按时间窗口输出均值、极值、总和、计数、首末值',
     kind: 'window_aggregate',
     label: '窗口聚合',
   },
   {
+    category: '聚合',
+    defaultParams: { windowMs: 5000 },
+    description: '对连续采样计算滑动平均值',
+    kind: 'moving_average',
+    label: '移动平均',
+  },
+  {
+    category: '聚合',
+    defaultParams: { metrics: ['avg', 'min', 'max', 'sum', 'count', 'first', 'last'], windowMs: 10000 },
+    description: '输出完整窗口统计结果',
+    kind: 'statistics',
+    label: '统计汇总',
+  },
+  {
+    category: '过滤',
+    defaultParams: { threshold: 0 },
     description: '数值变化超过阈值才进入输出',
     kind: 'change_report',
     label: '变化上报',
   },
   {
+    category: '过滤',
+    defaultParams: { threshold: 0.1 },
     description: '过滤小范围抖动，降低无效消息',
     kind: 'deadband_filter',
     label: '死区过滤',
   },
   {
-    description: '按表达式生成虚拟点位',
+    category: '过滤',
+    defaultParams: { stableMs: 1000 },
+    description: '输入稳定指定时间后才输出',
+    kind: 'debounce',
+    label: '信号防抖',
+  },
+  {
+    category: '转换',
+    defaultParams: { expression: 'p0', outputField: 'value' },
+    description: '支持四则运算及 min/max/abs/round/sqrt/pow',
     kind: 'expression',
     label: '表达式计算',
   },
   {
-    description: '多点合并为一个业务 JSON 结构',
+    category: '转换',
+    defaultParams: { factor: 1, offset: 0 },
+    description: '按 factor × value + offset 做工程量换算',
+    kind: 'scale_offset',
+    label: '缩放偏移',
+  },
+  {
+    category: '转换',
+    defaultParams: { max: 100, min: 0 },
+    description: '将数值限制在指定上下限内',
+    kind: 'clamp',
+    label: '数值限幅',
+  },
+  {
+    category: '转换',
+    defaultParams: { perMs: 1000 },
+    description: '计算单位时间内的数值变化率',
+    kind: 'rate_of_change',
+    label: '变化率',
+  },
+  {
+    category: '结构',
+    defaultParams: {},
+    description: '多路点位汇合后交给下游计算或输出',
     kind: 'merge_points',
     label: '多点合并',
   },
   {
+    category: '路由',
+    defaultParams: { operator: 'Gt', threshold: 0 },
+    description: '按条件将数据送往命中或未命中分支',
+    kind: 'condition_route',
+    label: '条件分支',
+  },
+  {
+    category: '事件',
+    defaultParams: { operator: 'Gt', severity: 'Warning', threshold: 0 },
     description: '满足阈值条件时输出事件',
     kind: 'alarm_event',
     label: '告警事件',
@@ -4202,17 +4414,15 @@ function ProductCollectionPlanner({
   onChange: (dataConfig: EdgeTemplateDefinition['dataConfig']) => void;
   template: EdgeTemplateDefinition;
 }) {
-  const [selectedAlgorithmKind, setSelectedAlgorithmKind] = useState(
-    PRODUCT_SCENARIO_ALGORITHMS[0].kind,
-  );
   const [selectedNodeId, setSelectedNodeId] = useState<string>('mqtt-output');
-  const [connectFromNodeId, setConnectFromNodeId] = useState<string>();
-  const [dragWire, setDragWire] = useState<{ fromNodeId: string; x: number; y: number }>();
+  const [connectFrom, setConnectFrom] = useState<{ nodeId: string; portId: string }>();
+  const [dragWire, setDragWire] = useState<{ fromNodeId: string; fromPort: string; x: number; y: number }>();
   const [draggingNodeId, setDraggingNodeId] = useState<string>();
   const [nodeMenu, setNodeMenu] = useState<{ nodeId: string; x: number; y: number }>();
   const [editingNodeId, setEditingNodeId] = useState<string>();
   const wireDragRef = useRef<{
     fromNodeId: string;
+    fromPort: string;
     moved: boolean;
     pointerId: number;
     startX: number;
@@ -4220,6 +4430,7 @@ function ProductCollectionPlanner({
   } | undefined>(undefined);
   const mouseWireDragRef = useRef<{
     fromNodeId: string;
+    fromPort: string;
     moved: boolean;
     startX: number;
     startY: number;
@@ -4242,10 +4453,6 @@ function ProductCollectionPlanner({
   );
   const selectedNode = graph.nodes.find((node) => node.nodeId === selectedNodeId) ?? graph.nodes[0];
   const editingNode = graph.nodes.find((node) => node.nodeId === editingNodeId);
-  const editingNodeEdges = editingNode
-    ? graph.edges.filter((edge) => edge.from === editingNode.nodeId || edge.to === editingNode.nodeId)
-    : [];
-
   const updateDataConfig = (nextConfig: EdgeTemplateDefinition['dataConfig']) => {
     onChange({
       ...nextConfig,
@@ -4276,7 +4483,7 @@ function ProductCollectionPlanner({
     });
   };
 
-  const addAlgorithmNode = (kind = selectedAlgorithmKind) => {
+  const addAlgorithmNode = (kind: string) => {
     const nodeId = nextProductComputeNodeId(graph, kind);
     const instanceIndex = graph.nodes.filter(
       (node) => (node.kind === 'algorithm' || node.kind === 'json') && node.refId === kind,
@@ -4289,6 +4496,7 @@ function ProductCollectionPlanner({
           kind: 'algorithm',
           label: productComputeInstanceLabel(kind, instanceIndex),
           nodeId,
+          params: defaultProductComputeParams(kind, template.dataConfig.collection.periodMs),
           refId: kind,
           x: 360,
           y: 110 + graph.nodes.filter((node) => node.kind === 'algorithm').length * 92,
@@ -4410,6 +4618,7 @@ function ProductCollectionPlanner({
           ? {
               ...node,
               label: productComputeInstanceLabel(kind, instanceIndex),
+              params: defaultProductComputeParams(kind, template.dataConfig.collection.periodMs),
               refId: kind,
             }
           : node,
@@ -4421,6 +4630,21 @@ function ProductCollectionPlanner({
         .filter((node) => node.kind === 'algorithm' || node.kind === 'json')
         .map((node) => node.refId ?? node.nodeId),
       visualGraph: nextGraph,
+    });
+  };
+
+  const updateComputeNodeParam = (
+    nodeId: string,
+    key: string,
+    value: boolean | number | string | string[],
+  ) => {
+    updateGraph({
+      edges: graph.edges,
+      nodes: graph.nodes.map((node) =>
+        node.nodeId === nodeId
+          ? { ...node, params: { ...(node.params ?? {}), [key]: value } }
+          : node,
+      ),
     });
   };
 
@@ -4442,15 +4666,15 @@ function ProductCollectionPlanner({
     });
   };
 
-  const createEdge = (from: string, to: string) => {
+  const createEdge = (from: string, to: string, requestedFromPort?: string) => {
     if (
       !isAllowedProductGraphEdge(graph, from, to) ||
       wouldCreateProductGraphCycle(graph, from, to)
     ) {
-      setConnectFromNodeId(undefined);
+      setConnectFrom(undefined);
       return;
     }
-    const fromPort = defaultProductGraphPort(graph, from, 'out');
+    const fromPort = requestedFromPort ?? defaultProductGraphPort(graph, from, 'out');
     const toPort = defaultProductGraphPort(graph, to, 'in');
     const edgeId = `${from}:${fromPort}-to-${to}:${toPort}`;
     updateGraph({
@@ -4459,7 +4683,7 @@ function ProductCollectionPlanner({
         : [...graph.edges, { edgeId, from, fromPort, to, toPort }],
       nodes: graph.nodes,
     });
-    setConnectFromNodeId(undefined);
+    setConnectFrom(undefined);
   };
 
   const removeEdge = (edgeId: string) => {
@@ -4471,8 +4695,8 @@ function ProductCollectionPlanner({
 
   const handleNodeClick = (nodeId: string) => {
     setNodeMenu(undefined);
-    if (connectFromNodeId && connectFromNodeId !== nodeId) {
-      createEdge(connectFromNodeId, nodeId);
+    if (connectFrom && connectFrom.nodeId !== nodeId) {
+      createEdge(connectFrom.nodeId, nodeId, connectFrom.portId);
       setSelectedNodeId(nodeId);
       return;
     }
@@ -4486,7 +4710,7 @@ function ProductCollectionPlanner({
     event.preventDefault();
     event.stopPropagation();
     setSelectedNodeId(node.nodeId);
-    setConnectFromNodeId(undefined);
+    setConnectFrom(undefined);
     setDraggingNodeId(undefined);
     const canvas = event.currentTarget.closest('.node-red-canvas');
     const rect = canvas?.getBoundingClientRect();
@@ -4497,25 +4721,29 @@ function ProductCollectionPlanner({
     });
   };
 
-  const handleOutputPortClick = (nodeId: string) => {
+  const handleOutputPortClick = (nodeId: string, portId: string) => {
     if (suppressPortClickRef.current) {
       suppressPortClickRef.current = false;
       return;
     }
     setSelectedNodeId(nodeId);
     setNodeMenu(undefined);
-    setConnectFromNodeId((current) => (current === nodeId ? undefined : nodeId));
+    setConnectFrom((current) =>
+      current?.nodeId === nodeId && current.portId === portId ? undefined : { nodeId, portId },
+    );
   };
 
   const handleOutputPortPointerDown = (
     event: PointerEvent<HTMLButtonElement>,
     nodeId: string,
+    fromPort: string,
   ) => {
     if (event.button !== 0) return;
     event.stopPropagation();
     event.currentTarget.setPointerCapture?.(event.pointerId);
     wireDragRef.current = {
       fromNodeId: nodeId,
+      fromPort,
       moved: false,
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -4535,9 +4763,10 @@ function ProductCollectionPlanner({
     const canvas = event.currentTarget.closest('.node-red-canvas');
     if (!(canvas instanceof HTMLElement)) return;
     const rect = canvas.getBoundingClientRect();
-    setConnectFromNodeId(drag.fromNodeId);
+    setConnectFrom({ nodeId: drag.fromNodeId, portId: drag.fromPort });
     setDragWire({
       fromNodeId: drag.fromNodeId,
+      fromPort: drag.fromPort,
       x: event.clientX - rect.left + canvas.scrollLeft,
       y: event.clientY - rect.top + canvas.scrollTop,
     });
@@ -4558,9 +4787,9 @@ function ProductCollectionPlanner({
             ?.closest<HTMLElement>('[data-node-input]');
       const targetNodeId = target?.dataset.nodeInput;
       if (targetNodeId && targetNodeId !== drag.fromNodeId) {
-        createEdge(drag.fromNodeId, targetNodeId);
+        createEdge(drag.fromNodeId, targetNodeId, drag.fromPort);
       } else {
-        setConnectFromNodeId(undefined);
+        setConnectFrom(undefined);
       }
       setDragWire(undefined);
       suppressPortClickRef.current = true;
@@ -4573,11 +4802,13 @@ function ProductCollectionPlanner({
   const handleOutputPortMouseDown = (
     event: MouseEvent<HTMLButtonElement>,
     nodeId: string,
+    fromPort: string,
   ) => {
     if (event.button !== 0) return;
     event.stopPropagation();
     mouseWireDragRef.current = {
       fromNodeId: nodeId,
+      fromPort,
       moved: false,
       startX: event.clientX,
       startY: event.clientY,
@@ -4594,9 +4825,10 @@ function ProductCollectionPlanner({
     }
     drag.moved = true;
     const rect = event.currentTarget.getBoundingClientRect();
-    setConnectFromNodeId(drag.fromNodeId);
+    setConnectFrom({ nodeId: drag.fromNodeId, portId: drag.fromPort });
     setDragWire({
       fromNodeId: drag.fromNodeId,
+      fromPort: drag.fromPort,
       x: event.clientX - rect.left + event.currentTarget.scrollLeft,
       y: event.clientY - rect.top + event.currentTarget.scrollTop,
     });
@@ -4612,9 +4844,9 @@ function ProductCollectionPlanner({
       ?.closest<HTMLElement>('[data-node-input]');
     const targetNodeId = target?.dataset.nodeInput;
     if (targetNodeId && targetNodeId !== drag.fromNodeId) {
-      createEdge(drag.fromNodeId, targetNodeId);
+      createEdge(drag.fromNodeId, targetNodeId, drag.fromPort);
     } else {
-      setConnectFromNodeId(undefined);
+      setConnectFrom(undefined);
     }
     setDragWire(undefined);
     suppressPortClickRef.current = true;
@@ -4626,8 +4858,8 @@ function ProductCollectionPlanner({
   const handleInputPortClick = (nodeId: string) => {
     setSelectedNodeId(nodeId);
     setNodeMenu(undefined);
-    if (!connectFromNodeId || connectFromNodeId === nodeId) return;
-    createEdge(connectFromNodeId, nodeId);
+    if (!connectFrom || connectFrom.nodeId === nodeId) return;
+    createEdge(connectFrom.nodeId, nodeId, connectFrom.portId);
   };
 
   const handleCanvasDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -4674,6 +4906,7 @@ function ProductCollectionPlanner({
             kind: 'algorithm',
             label: productComputeInstanceLabel(kind, instanceIndex),
             nodeId,
+            params: defaultProductComputeParams(kind, template.dataConfig.collection.periodMs),
             refId: kind,
             x,
             y,
@@ -4704,7 +4937,6 @@ function ProductCollectionPlanner({
       <aside className="product-flow-palette" aria-label="采集编排资源">
         <div>
           <h5>产品点位</h5>
-          <p>拖到画布作为输入节点，也可以点击快速添加。</p>
           {template.points.map((point) => (
             <button
               className={selectedPointIds.has(point.pointId) ? 'selected' : ''}
@@ -4723,21 +4955,6 @@ function ProductCollectionPlanner({
         </div>
         <div>
           <h5>计算节点</h5>
-          <p>选择窗口、变化、死区、表达式等计算类型，点位先进入计算节点，再输出到 MQTT。</p>
-          <label className="editor-control compact-control">
-            <span>默认计算类型</span>
-            <select
-              aria-label="默认计算类型"
-              onChange={(event) => setSelectedAlgorithmKind(event.target.value)}
-              value={selectedAlgorithmKind}
-            >
-              {PRODUCT_SCENARIO_ALGORITHMS.map((algorithm) => (
-                <option key={algorithm.kind} value={algorithm.kind}>
-                  {algorithm.label}
-                </option>
-              ))}
-            </select>
-          </label>
           {PRODUCT_SCENARIO_ALGORITHMS.map((algorithm) => (
             <button
               className={selectedAlgorithmIds.has(algorithm.kind) ? 'selected' : ''}
@@ -4756,7 +4973,6 @@ function ProductCollectionPlanner({
         </div>
         <div>
           <h5>输出节点</h5>
-          <p>每个输出节点独立配置 MQTT Topic，可连接不同的点位或计算链路。</p>
           <button
             draggable
             onClick={() => addMqttOutputNode()}
@@ -4769,6 +4985,49 @@ function ProductCollectionPlanner({
             <span>拖入画布创建独立主题</span>
           </button>
         </div>
+        <details className="node-red-flow-settings">
+          <summary>流程设置</summary>
+          <div className="node-red-flow-settings-body">
+            <label className="editor-control">
+              <span>流水线 ID</span>
+              <input
+                aria-label="流水线 ID"
+                onChange={(event) =>
+                  onChange({ ...template.dataConfig, configId: event.target.value })
+                }
+                value={template.dataConfig.configId}
+              />
+            </label>
+            <label className="editor-control">
+              <span>名称</span>
+              <input
+                aria-label="流水线名称"
+                onChange={(event) =>
+                  onChange({ ...template.dataConfig, name: event.target.value })
+                }
+                value={template.dataConfig.name}
+              />
+            </label>
+            <label className="editor-control">
+              <span>采集周期(ms)</span>
+              <input
+                aria-label="采集周期(ms)"
+                min={1}
+                onChange={(event) =>
+                  onChange({
+                    ...template.dataConfig,
+                    collection: {
+                      ...template.dataConfig.collection,
+                      periodMs: Number(event.target.value),
+                    },
+                  })
+                }
+                type="number"
+                value={template.dataConfig.collection.periodMs}
+              />
+            </label>
+          </div>
+        </details>
       </aside>
       <section className="node-red-canvas-shell" aria-label="采集编排画布">
         <div className="node-red-toolbar">
@@ -4783,10 +5042,10 @@ function ProductCollectionPlanner({
             <span className={graphIssueCount === 0 ? 'flow-health ok' : 'flow-health warn'}>
               {graphIssueCount === 0 ? '拓扑有效' : `${graphIssueCount} 项待连接`}
             </span>
-            {connectFromNodeId ? (
+            {connectFrom ? (
               <button
                 className="secondary-button compact active"
-                onClick={() => setConnectFromNodeId(undefined)}
+                onClick={() => setConnectFrom(undefined)}
                 type="button"
               >
                 取消连线
@@ -4802,7 +5061,7 @@ function ProductCollectionPlanner({
           </div>
         </div>
         <div
-          className={connectFromNodeId ? 'node-red-canvas is-connecting' : 'node-red-canvas'}
+          className={connectFrom ? 'node-red-canvas is-connecting' : 'node-red-canvas'}
           onClick={() => setNodeMenu(undefined)}
           onContextMenu={(event) => {
             event.preventDefault();
@@ -4844,7 +5103,7 @@ function ProductCollectionPlanner({
               const from = graph.nodes.find((node) => node.nodeId === edge.from);
               const to = graph.nodes.find((node) => node.nodeId === edge.to);
               if (!from || !to) return null;
-              const fromPoint = getProductNodeAnchor(from, 'out');
+              const fromPoint = getProductNodeAnchor(from, 'out', edge.fromPort ?? undefined);
               const toPoint = getProductNodeAnchor(to, 'in');
               const isSelectedEdge = Boolean(
                 selectedNode && (edge.from === selectedNode.nodeId || edge.to === selectedNode.nodeId),
@@ -4877,7 +5136,7 @@ function ProductCollectionPlanner({
             {dragWire ? (() => {
               const from = graph.nodes.find((node) => node.nodeId === dragWire.fromNodeId);
               if (!from) return null;
-              const fromPoint = getProductNodeAnchor(from, 'out');
+              const fromPoint = getProductNodeAnchor(from, 'out', dragWire.fromPort);
               return (
                 <path
                   className="node-red-wire-preview"
@@ -4893,8 +5152,8 @@ function ProductCollectionPlanner({
                 'node-red-node',
                 `kind-${node.kind}`,
                 selectedNode?.nodeId === node.nodeId ? 'selected' : '',
-                connectFromNodeId === node.nodeId ? 'connecting' : '',
-                connectFromNodeId && connectFromNodeId !== node.nodeId ? 'connect-target' : '',
+                connectFrom?.nodeId === node.nodeId ? 'connecting' : '',
+                connectFrom && connectFrom.nodeId !== node.nodeId ? 'connect-target' : '',
               ].join(' ')}
               key={node.nodeId}
               style={{ left: node.x, top: node.y }}
@@ -4903,6 +5162,11 @@ function ProductCollectionPlanner({
                 aria-label={`流程节点 ${node.label}`}
                 className="node-red-node-body"
                 onClick={() => handleNodeClick(node.nodeId)}
+                onDoubleClick={() => {
+                  setSelectedNodeId(node.nodeId);
+                  setEditingNodeId(node.nodeId);
+                  setNodeMenu(undefined);
+                }}
                 onContextMenu={(event) => handleNodeContextMenu(event, node)}
                 onPointerDown={(event) => {
                   event.currentTarget.setPointerCapture(event.pointerId);
@@ -4948,33 +5212,43 @@ function ProductCollectionPlanner({
                   type="button"
                 />
               ) : null}
-              {node.kind !== 'mqtt' ? (
-                <button
-                  aria-label={`从 ${node.label} 连线`}
-                  className="node-red-port out"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    handleOutputPortClick(node.nodeId);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Enter' && event.key !== ' ') return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    handleOutputPortClick(node.nodeId);
-                  }}
-                  onMouseDown={(event) => handleOutputPortMouseDown(event, node.nodeId)}
-                  onPointerCancel={(event) => finishOutputPortDrag(event, true)}
-                  onPointerDown={(event) => handleOutputPortPointerDown(event, node.nodeId)}
-                  onPointerMove={handleOutputPortPointerMove}
-                  onPointerUp={finishOutputPortDrag}
-                  type="button"
-                />
-              ) : null}
+              {node.kind !== 'mqtt'
+                ? productNodeOutputPorts(node).map((port, portIndex, ports) => (
+                    <button
+                      aria-label={
+                        ports.length === 1
+                          ? `从 ${node.label} 连线`
+                          : `从 ${node.label} 的 ${port.label} 端口连线`
+                      }
+                      className={`node-red-port out port-${port.id}`}
+                      data-port-label={ports.length > 1 ? port.label : undefined}
+                      key={port.id}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleOutputPortClick(node.nodeId, port.id);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter' && event.key !== ' ') return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        handleOutputPortClick(node.nodeId, port.id);
+                      }}
+                      onMouseDown={(event) => handleOutputPortMouseDown(event, node.nodeId, port.id)}
+                      onPointerCancel={(event) => finishOutputPortDrag(event, true)}
+                      onPointerDown={(event) => handleOutputPortPointerDown(event, node.nodeId, port.id)}
+                      onPointerMove={handleOutputPortPointerMove}
+                      onPointerUp={finishOutputPortDrag}
+                      style={{ top: `calc(${((portIndex + 1) / (ports.length + 1)) * 100}% - 13px)` }}
+                      title={port.label}
+                      type="button"
+                    />
+                  ))
+                : null}
             </div>
           ))}
-          {connectFromNodeId ? (
+          {connectFrom ? (
             <div className="node-red-hint">
-              点击目标节点左侧端口完成连线
+              正在连接“{productGraphNodeName(graph, connectFrom.nodeId)} / {productPortLabel(connectFrom.portId)}”，点击或拖到目标输入端口
             </div>
           ) : null}
           {nodeMenu ? (
@@ -5017,196 +5291,264 @@ function ProductCollectionPlanner({
         </div>
       </section>
       {editingNode ? (
-      <aside className="product-flow-inspector node-red-edit-inspector">
-        <div className="node-red-inspector-title">
-          <h5>编辑节点</h5>
-          <button
-            aria-label="关闭节点编辑"
-            className="icon-button compact-icon"
-            onClick={() => setEditingNodeId(undefined)}
-            type="button"
-          >
-            ×
-          </button>
-        </div>
-        <div className="node-red-edit-note">右键节点进入编辑；普通点击只负责选中和连线定位。</div>
-        {editingNode ? (
-          <div className="node-red-selected-node">
-            <span>{productNodeKindLabel(editingNode.kind)}</span>
-            <strong>{editingNode.label}</strong>
-            <small>{editingNode.refId ?? 'payload'}</small>
-          </div>
-        ) : null}
-        {editingNode ? (
-          <div className="node-red-edge-list">
+        <aside aria-label="节点编辑" className="product-flow-inspector node-red-edit-inspector">
+          <div className="node-red-inspector-title">
             <div>
-              <strong>连接关系</strong>
-              <span>{editingNodeEdges.length} 条连线</span>
+              <span>编辑{productNodeKindLabel(editingNode.kind)}节点</span>
+              <h5>{editingNode.label}</h5>
             </div>
-            {editingNodeEdges.length === 0 ? (
-              <p>当前节点未建立连接。</p>
-            ) : (
-              editingNodeEdges.map((edge) => (
-                <div className="node-red-edge-row" key={edge.edgeId}>
-                  <span>
-                    {productGraphNodeName(graph, edge.from)} → {productGraphNodeName(graph, edge.to)}
-                  </span>
-                  <button
-                    aria-label={`移除连接 ${edge.edgeId}`}
-                    className="danger-button compact"
-                    onClick={() => removeEdge(edge.edgeId)}
-                    type="button"
-                  >
-                    移除
-                  </button>
-                </div>
-              ))
-            )}
+            <button
+              aria-label="关闭节点编辑"
+              className="icon-button compact-icon"
+              onClick={() => setEditingNodeId(undefined)}
+              title="关闭"
+              type="button"
+            >
+              <X aria-hidden="true" size={16} />
+            </button>
           </div>
-        ) : null}
-        <label className="editor-control">
-          <span>流水线 ID</span>
-          <input
-            aria-label="流水线 ID"
-            onChange={(event) =>
-              onChange({ ...template.dataConfig, configId: event.target.value })
-            }
-            value={template.dataConfig.configId}
-          />
-        </label>
-        <label className="editor-control">
-          <span>名称</span>
-          <input
-            aria-label="流水线名称"
-            onChange={(event) =>
-              onChange({ ...template.dataConfig, name: event.target.value })
-            }
-            value={template.dataConfig.name}
-          />
-        </label>
-        {editingNode.kind === 'point' ? (
-          <>
-            <label className="editor-control">
-              <span>JSON 字段</span>
-              <input
-                aria-label={`产品 JSON 字段 ${editingNode.refId}`}
-                onChange={(event) => {
-                  if (editingNode.refId) updatePointField(editingNode.refId, event.target.value);
-                }}
-                value={
-                  template.dataConfig.points.find((point) => point.pointId === editingNode.refId)?.jsonField ?? ''
-                }
-              />
-            </label>
+          <div className="node-red-inspector-body">
+            {editingNode.kind === 'point' ? (
+              <section className="node-red-inspector-section">
+                <div className="node-red-section-heading">
+                  <h4>字段映射</h4>
+                  <p>设置该点位进入后续计算时使用的字段名。</p>
+                </div>
+                <label className="editor-control">
+                  <span>输出字段</span>
+                  <input
+                    aria-label={`产品 JSON 字段 ${editingNode.refId}`}
+                    onChange={(event) => {
+                      if (editingNode.refId) updatePointField(editingNode.refId, event.target.value);
+                    }}
+                    value={
+                      template.dataConfig.points.find((point) => point.pointId === editingNode.refId)?.jsonField ?? ''
+                    }
+                  />
+                </label>
+              </section>
+            ) : null}
+            {editingNode.kind === 'algorithm' ? (
+              <section className="node-red-inspector-section">
+                <div className="node-red-section-heading">
+                  <h4>计算设置</h4>
+                </div>
+                <label className="editor-control">
+                  <span>计算类型</span>
+                  <select
+                    aria-label="选中计算类型"
+                    value={editingNode.refId ?? ''}
+                    onChange={(event) => updateComputeNodeKind(editingNode.nodeId, event.target.value)}
+                  >
+                    {PRODUCT_SCENARIO_ALGORITHMS.map((algorithm) => (
+                      <option key={algorithm.kind} value={algorithm.kind}>
+                        {algorithm.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="node-red-control-help">
+                  {productAlgorithmDescription(editingNode.refId ?? '')}
+                </p>
+                {hasProductComputeParameters(editingNode.refId ?? '') ? (
+                  <div className="node-red-parameter-block">
+                    <ProductComputeParameterEditor
+                      node={editingNode}
+                      onParamChange={(key, value) =>
+                        updateComputeNodeParam(editingNode.nodeId, key, value)
+                      }
+                    />
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
+            {editingNode.kind === 'mqtt' ? (
+              <section className="node-red-inspector-section">
+                <div className="node-red-section-heading">
+                  <h4>输出设置</h4>
+                  <p>配置该分支独立发布的主题和传输等级。</p>
+                </div>
+                <label className="editor-control">
+                  <span>输出名称</span>
+                  <input
+                    aria-label="MQTT 输出名称"
+                    onChange={(event) =>
+                      updateMqttOutputNode(editingNode.nodeId, { label: event.target.value })
+                    }
+                    value={editingNode.label}
+                  />
+                </label>
+                <label className="editor-control">
+                  <span>MQTT Topic</span>
+                  <input
+                    aria-label="MQTT Topic"
+                    onChange={(event) =>
+                      updateMqttOutputNode(editingNode.nodeId, { topic: event.target.value })
+                    }
+                    value={editingNode.refId ?? ''}
+                  />
+                </label>
+                <label className="editor-control">
+                  <span>QoS</span>
+                  <select
+                    aria-label="MQTT QoS"
+                    onChange={(event) =>
+                      onChange({
+                        ...template.dataConfig,
+                        publish: { ...template.dataConfig.publish, qos: Number(event.target.value) },
+                      })
+                    }
+                    value={template.dataConfig.publish.qos}
+                  >
+                    <option value={0}>QoS 0</option>
+                    <option value={1}>QoS 1</option>
+                    <option value={2}>QoS 2</option>
+                  </select>
+                </label>
+              </section>
+            ) : null}
+          </div>
+          <div className="node-red-inspector-footer">
+            {editingNode.kind !== 'mqtt' || graph.nodes.filter((node) => node.kind === 'mqtt').length > 1 ? (
+              <button
+                className="danger-button compact node-red-delete-node"
+                onClick={() => deleteGraphNode(editingNode)}
+                type="button"
+              >
+                <Trash2 aria-hidden="true" size={14} />
+                删除
+              </button>
+            ) : <span />}
             <button
-              className="danger-button compact"
-              onClick={() => {
-                if (editingNode.refId) removePoint(editingNode.refId);
-              }}
+              className="primary-button compact"
+              onClick={() => setEditingNodeId(undefined)}
               type="button"
             >
-              移除点位
+              <Check aria-hidden="true" size={14} />
+              完成
             </button>
-          </>
-        ) : null}
-        {editingNode.kind === 'algorithm' ? (
-          <>
-            <div className="node-red-algorithm-card">
-              <strong>{productAlgorithmDescription(editingNode.refId ?? '')}</strong>
-              <span>计算参数会随节点进入 DSL，runtime 按产品配置版本执行。</span>
-            </div>
-            <label className="editor-control">
-              <span>计算类型</span>
-              <select
-                aria-label="选中计算类型"
-                value={editingNode.refId ?? ''}
-                onChange={(event) => updateComputeNodeKind(editingNode.nodeId, event.target.value)}
-              >
-                {PRODUCT_SCENARIO_ALGORITHMS.map((algorithm) => (
-                  <option key={algorithm.kind} value={algorithm.kind}>
-                    {algorithm.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              className="danger-button compact"
-              onClick={() => removeAlgorithmNode(editingNode.nodeId)}
-              type="button"
-            >
-              移除计算节点
-            </button>
-          </>
-        ) : null}
-        {editingNode.kind === 'mqtt' ? (
-          <>
-            <label className="editor-control">
-              <span>输出名称</span>
-              <input
-                aria-label="MQTT 输出名称"
-                onChange={(event) =>
-                  updateMqttOutputNode(editingNode.nodeId, { label: event.target.value })
-                }
-                value={editingNode.label}
-              />
-            </label>
-            <label className="editor-control">
-              <span>MQTT Topic</span>
-              <input
-                aria-label="MQTT Topic"
-                onChange={(event) =>
-                  updateMqttOutputNode(editingNode.nodeId, { topic: event.target.value })
-                }
-                value={editingNode.refId ?? ''}
-              />
-            </label>
-            <label className="editor-control">
-              <span>QoS（流水线共享）</span>
-              <select
-                aria-label="MQTT QoS"
-                onChange={(event) =>
-                  onChange({
-                    ...template.dataConfig,
-                    publish: { ...template.dataConfig.publish, qos: Number(event.target.value) },
-                  })
-                }
-                value={template.dataConfig.publish.qos}
-              >
-                <option value={0}>QoS 0</option>
-                <option value={1}>QoS 1</option>
-                <option value={2}>QoS 2</option>
-              </select>
-            </label>
-          </>
-        ) : null}
-        <label className="editor-control">
-          <span>采集周期(ms)</span>
-          <input
-            aria-label="采集周期(ms)"
-            onChange={(event) =>
-              onChange({
-                ...template.dataConfig,
-                collection: {
-                  ...template.dataConfig.collection,
-                  periodMs: Number(event.target.value),
-                },
-              })
-            }
-            type="number"
-            value={template.dataConfig.collection.periodMs}
-          />
-        </label>
-        <div className="info-panel">
-                点位必须先进入计算节点，计算节点完成窗口、变化、过滤或表达式处理后再输出到 MQTT；JSON 字段在点位属性中配置。
-        </div>
-        <div className="product-flow-dsl">
-          <strong>当前 DSL</strong>
-          <pre>{JSON.stringify(buildProductFlowDsl(template.dataConfig, graph), null, 2)}</pre>
-        </div>
-      </aside>
+          </div>
+        </aside>
       ) : null}
     </div>
   );
+}
+
+function ProductComputeParameterEditor({
+  node,
+  onParamChange,
+}: {
+  node: DataConfigVisualGraph['nodes'][number];
+  onParamChange: (key: string, value: boolean | number | string | string[]) => void;
+}) {
+  const kind = node.refId ?? 'expression';
+  const params = node.params ?? {};
+  const numberField = (key: string, label: string, fallback: number, min?: number) => (
+    <label className="editor-control" key={key}>
+      <span>{label}</span>
+      <input
+        aria-label={label}
+        min={min}
+        onChange={(event) => onParamChange(key, Number(event.target.value))}
+        type="number"
+        value={Number(params[key] ?? fallback)}
+      />
+    </label>
+  );
+
+  if (kind === 'window_aggregate' || kind === 'statistics' || kind === 'moving_average') {
+    const availableMetrics = kind === 'moving_average'
+      ? ['avg']
+      : ['avg', 'min', 'max', 'sum', 'count', 'first', 'last'];
+    const selectedMetrics = Array.isArray(params.metrics)
+      ? params.metrics.map(String)
+      : kind === 'moving_average'
+        ? ['avg']
+        : ['avg', 'min', 'max', 'sum', 'count'];
+    return (
+      <div className="node-red-parameter-grid">
+        {numberField('windowMs', '窗口时长(ms)', 5000, 1)}
+        <fieldset className="node-red-metric-picker">
+          <legend>输出指标</legend>
+          {availableMetrics.map((metric) => (
+            <label key={metric}>
+              <input
+                checked={selectedMetrics.includes(metric)}
+                disabled={kind === 'moving_average'}
+                onChange={(event) => {
+                  const next = event.target.checked
+                    ? Array.from(new Set([...selectedMetrics, metric]))
+                    : selectedMetrics.filter((item) => item !== metric);
+                  onParamChange('metrics', next.length ? next : ['avg']);
+                }}
+                type="checkbox"
+              />
+              <span>{metric}</span>
+            </label>
+          ))}
+        </fieldset>
+      </div>
+    );
+  }
+  if (kind === 'change_report' || kind === 'deadband_filter') {
+    return <div className="node-red-parameter-grid">{numberField('threshold', '变化阈值', kind === 'deadband_filter' ? 0.1 : 0, 0)}</div>;
+  }
+  if (kind === 'debounce') {
+    return <div className="node-red-parameter-grid">{numberField('stableMs', '稳定时长(ms)', 1000, 1)}</div>;
+  }
+  if (kind === 'scale_offset') {
+    return <div className="node-red-parameter-grid">{numberField('factor', '缩放系数', 1)}{numberField('offset', '偏移量', 0)}</div>;
+  }
+  if (kind === 'clamp') {
+    return <div className="node-red-parameter-grid">{numberField('min', '最小值', 0)}{numberField('max', '最大值', 100)}</div>;
+  }
+  if (kind === 'rate_of_change') {
+    return <div className="node-red-parameter-grid">{numberField('perMs', '变化率单位(ms)', 1000, 1)}</div>;
+  }
+  if (kind === 'expression') {
+    return (
+      <div className="node-red-parameter-grid">
+        <label className="editor-control">
+          <span>表达式</span>
+          <input
+            aria-label="计算表达式"
+            onChange={(event) => onParamChange('expression', event.target.value)}
+            placeholder="(p0 + p1) / 2"
+            value={String(params.expression ?? 'p0')}
+          />
+        </label>
+        <small className="node-red-expression-help">输入别名按连线顺序为 p0、p1…，支持 + - * /、括号及 min/max/abs/round/sqrt/pow。</small>
+      </div>
+    );
+  }
+  if (kind === 'condition_route' || kind === 'alarm_event') {
+    return (
+      <div className="node-red-parameter-grid two-column">
+        <label className="editor-control">
+          <span>比较符</span>
+          <select
+            aria-label="条件比较符"
+            onChange={(event) => onParamChange('operator', event.target.value)}
+            value={String(params.operator ?? 'Gt')}
+          >
+            <option value="Gt">大于</option>
+            <option value="Gte">大于等于</option>
+            <option value="Lt">小于</option>
+            <option value="Lte">小于等于</option>
+            <option value="Eq">等于</option>
+            <option value="Ne">不等于</option>
+          </select>
+        </label>
+        {numberField('threshold', '比较阈值', 0)}
+      </div>
+    );
+  }
+  return null;
+}
+
+function hasProductComputeParameters(kind: string): boolean {
+  const definition = PRODUCT_SCENARIO_ALGORITHMS.find((algorithm) => algorithm.kind === kind);
+  return Boolean(definition && Object.keys(definition.defaultParams).length > 0);
 }
 
 function templatePointToDataConfigPoint(
@@ -5249,24 +5591,37 @@ function buildProductPlannerGraph(
   const previousComputeNodes = (existingGraph?.nodes ?? []).filter(
     (node) => node.kind === 'algorithm' || node.kind === 'json',
   );
+  const configuredAlgorithmIds = getEffectiveProductAlgorithmIds(dataConfig);
   const algorithmNodes = previousComputeNodes.length
-    ? previousComputeNodes.map((node, index) => ({
-        ...node,
-        kind: 'algorithm' as const,
-        label:
-          node.label ||
-          PRODUCT_SCENARIO_ALGORITHMS.find((algorithm) => algorithm.kind === node.refId)?.label ||
-          node.refId ||
-          `计算节点 ${index + 1}`,
-        x: node.x ?? 360,
-        y: node.y ?? 110 + index * 92,
-      }))
+    ? previousComputeNodes.map((node, index) => {
+        const kind =
+          node.kind === 'json'
+            ? 'merge_points'
+            : node.refId ?? configuredAlgorithmIds[index] ?? 'merge_points';
+        const definition = productAlgorithmDefinition(kind);
+        const legacyLabel = node.kind === 'json' || node.label === 'JSON Payload';
+        return {
+          ...node,
+          kind: 'algorithm' as const,
+          label: legacyLabel
+            ? definition?.label ?? '多点合并'
+            : node.label || definition?.label || kind || `计算节点 ${index + 1}`,
+          params: {
+            ...defaultProductComputeParams(kind, dataConfig.collection.periodMs),
+            ...(node.params ?? {}),
+          },
+          refId: kind,
+          x: node.x ?? 360,
+          y: node.y ?? 110 + index * 92,
+        };
+      })
     : getEffectiveProductAlgorithmIds(dataConfig).map((algorithmId, index) => ({
         kind: 'algorithm' as const,
         label:
           PRODUCT_SCENARIO_ALGORITHMS.find((algorithm) => algorithm.kind === algorithmId)?.label ??
           algorithmId,
         nodeId: `algorithm-${algorithmId}`,
+        params: defaultProductComputeParams(algorithmId, dataConfig.collection.periodMs),
         refId: algorithmId,
         x: 360,
         y: 110 + index * 92,
@@ -5322,6 +5677,37 @@ function productComputeInstanceLabel(kind: string, instanceIndex: number) {
   return instanceIndex > 1 ? `${base} ${instanceIndex}` : base;
 }
 
+function productAlgorithmDefinition(kind: string | null | undefined) {
+  return PRODUCT_SCENARIO_ALGORITHMS.find((algorithm) => algorithm.kind === kind);
+}
+
+function defaultProductComputeParams(kind: string, collectionPeriodMs: number) {
+  const defaults: Record<string, boolean | number | string | string[]> =
+    productAlgorithmDefinition(kind)?.defaultParams ?? {};
+  if ('windowMs' in defaults) {
+    return { ...defaults, windowMs: Math.max(Number(defaults.windowMs), collectionPeriodMs) };
+  }
+  return { ...defaults };
+}
+
+function productNodeOutputPorts(node: DataConfigVisualGraph['nodes'][number]) {
+  if (node.kind === 'point') return [{ id: 'value', label: '数据' }];
+  if (node.refId === 'condition_route') {
+    return [
+      { id: 'matched', label: '命中' },
+      { id: 'unmatched', label: '未命中' },
+    ];
+  }
+  return [{ id: 'output', label: '输出' }];
+}
+
+function productPortLabel(portId: string) {
+  if (portId === 'matched') return '命中';
+  if (portId === 'unmatched') return '未命中';
+  if (portId === 'value') return '数据';
+  return '输出';
+}
+
 function layoutProductPlannerGraph(graph: DataConfigVisualGraph): DataConfigVisualGraph {
   const indexes = new Map<DataConfigVisualGraph['nodes'][number]['kind'], number>();
   return {
@@ -5369,10 +5755,16 @@ function wouldCreateProductGraphCycle(
 function getProductNodeAnchor(
   node: DataConfigVisualGraph['nodes'][number],
   side: 'in' | 'out',
+  portId?: string,
 ) {
+  const ports = productNodeOutputPorts(node);
+  const portIndex = Math.max(0, ports.findIndex((port) => port.id === portId));
   return {
     x: node.x + (side === 'out' ? PRODUCT_FLOW_NODE_WIDTH : 0),
-    y: node.y + PRODUCT_FLOW_NODE_HEIGHT / 2,
+    y:
+      side === 'out'
+        ? node.y + (PRODUCT_FLOW_NODE_HEIGHT * (portIndex + 1)) / (ports.length + 1)
+        : node.y + PRODUCT_FLOW_NODE_HEIGHT / 2,
   };
 }
 
@@ -5401,11 +5793,12 @@ function defaultProductGraphPort(
   if (!node) return side === 'in' ? 'input' : 'output';
   if (node.kind === 'point') return side === 'in' ? 'bind' : 'value';
   if (node.kind === 'mqtt') return side === 'in' ? 'payload' : 'published';
+  if (side === 'out' && node.refId === 'condition_route') return 'matched';
   return side === 'in' ? 'input' : 'output';
 }
 
 function productAlgorithmDescription(algorithmId: string) {
-  return PRODUCT_SCENARIO_ALGORITHMS.find((algorithm) => algorithm.kind === algorithmId)?.description ?? '自定义计算节点';
+  return productAlgorithmDefinition(algorithmId)?.description ?? '自定义计算节点';
 }
 
 function mergeDataConfigPoints(current: DataConfigPoint[], next: DataConfigPoint[]) {
@@ -5435,6 +5828,7 @@ function buildProductFlowDsl(
         id: node.nodeId,
         kind: node.kind,
         label: node.label,
+        params: node.params ?? {},
         refId: node.refId,
       })),
     },
@@ -5504,7 +5898,7 @@ function buildProductRuntimePlan(
       outputs: graph.edges
         .filter((edge) => edge.from === node.nodeId)
         .map((edge) => buildProductRuntimeOutputLink(dataConfig, graph, edge)),
-      params: buildProductRuntimeComputeParams(node.refId ?? node.kind, dataConfig),
+      params: buildProductRuntimeComputeParams(node, dataConfig),
       type: 'compute',
     })),
   };
@@ -5540,7 +5934,17 @@ function buildProductRuntimeTreeNode(
       ...descriptor,
       inputs,
       link,
-      params: buildProductRuntimeComputeParams(String(descriptor.computeKind ?? ''), dataConfig),
+      params: buildProductRuntimeComputeParams(
+        graph.nodes.find((node) => node.nodeId === nodeId) ?? {
+          kind: 'algorithm',
+          label: nodeId,
+          nodeId,
+          refId: String(descriptor.computeKind ?? ''),
+          x: 0,
+          y: 0,
+        },
+        dataConfig,
+      ),
     };
   }
 
@@ -5623,6 +6027,7 @@ function buildProductRuntimeEndpoint(
       kind: 'compute',
       label: node.label,
       nodeId: node.nodeId,
+      params: node.params ?? {},
     };
   }
 
@@ -5642,38 +6047,53 @@ function productPointByNodeId(
 }
 
 function buildProductRuntimeComputeParams(
-  computeKind: string,
+  node: DataConfigVisualGraph['nodes'][number],
   dataConfig: EdgeTemplateDefinition['dataConfig'],
 ) {
+  const computeKind = node.refId ?? node.kind;
+  const configured = node.params ?? {};
   if (computeKind === 'window_aggregate') {
     return {
-      metrics: ['avg', 'min', 'max', 'sum', 'count'],
-      windowMs: Math.max(dataConfig.collection.periodMs, 1000),
+      metrics: configured.metrics ?? ['avg', 'min', 'max', 'sum', 'count'],
+      windowMs: configured.windowMs ?? Math.max(dataConfig.collection.periodMs, 1000),
     };
   }
   if (computeKind === 'change_report') {
     return {
       compare: 'last_value',
-      threshold: 0,
+      threshold: configured.threshold ?? 0,
     };
   }
   if (computeKind === 'deadband_filter') {
     return {
-      absoluteDeadband: 0,
+      absoluteDeadband: configured.threshold ?? 0.1,
       mode: 'suppress_noise',
     };
   }
   if (computeKind === 'expression') {
     return {
-      expression: 'value',
-      outputField: 'value',
+      expression: configured.expression ?? 'p0',
+      outputField: configured.outputField ?? 'value',
     };
   }
   if (computeKind === 'alarm_event') {
     return {
-      condition: 'value > threshold',
-      severity: 'warning',
+      condition: `value ${configured.operator ?? 'Gt'} ${configured.threshold ?? 0}`,
+      severity: configured.severity ?? 'Warning',
     };
+  }
+  if (computeKind === 'moving_average' || computeKind === 'statistics') {
+    return {
+      metrics: configured.metrics ?? (computeKind === 'moving_average' ? ['avg'] : ['avg', 'min', 'max', 'sum', 'count', 'first', 'last']),
+      windowMs: configured.windowMs ?? Math.max(dataConfig.collection.periodMs, 1000),
+    };
+  }
+  if (computeKind === 'debounce') return { stableMs: configured.stableMs ?? 1000 };
+  if (computeKind === 'scale_offset') return { factor: configured.factor ?? 1, offset: configured.offset ?? 0 };
+  if (computeKind === 'clamp') return { min: configured.min ?? 0, max: configured.max ?? 100 };
+  if (computeKind === 'rate_of_change') return { perMs: configured.perMs ?? 1000 };
+  if (computeKind === 'condition_route') {
+    return { operator: configured.operator ?? 'Gt', threshold: configured.threshold ?? 0 };
   }
   return {
     outputMode: dataConfig.publish.payload.mode,

@@ -1,18 +1,7 @@
 import type { AuditRecordResponse } from '../api/types';
 
-const fallbackAuditRecords: AuditRecordResponse[] = [
-  {
-    createdAt: '2026-06-26T10:00:00Z',
-    time: '10:00:00',
-    actor: 'system',
-    action: 'create_release',
-    target: '2026.06.26-001',
-    result: '成功',
-  },
-];
-
 export function AuditLogPage({
-  auditRecords = fallbackAuditRecords,
+  auditRecords = [],
 }: {
   auditRecords?: AuditRecordResponse[];
 }) {
@@ -42,6 +31,11 @@ export function AuditLogPage({
               </tr>
             </thead>
             <tbody>
+              {auditRecords.length === 0 ? (
+                <tr>
+                  <td colSpan={5}>暂无审计记录</td>
+                </tr>
+              ) : null}
               {auditRecords.map((record) => (
                 <tr key={`${record.createdAt}-${record.action}-${record.target}`}>
                   <td>{record.time}</td>

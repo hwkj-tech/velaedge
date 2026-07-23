@@ -839,6 +839,103 @@ describe('App cloud console write actions', () => {
     expect(materialized.algorithms[1].dsl.inputs[0].pointId).toBe('pump_running');
   });
 
+  it('persists conditional branch parameters and named ports for multiple MQTT outputs', () => {
+    const template = JSON.parse(
+      JSON.stringify(EDGE_CONFIG_TEMPLATES[1]),
+    ) as (typeof EDGE_CONFIG_TEMPLATES)[number];
+    template.dataConfig.visualGraph = {
+      nodes: [
+        { kind: 'point', label: 'pressure', nodeId: 'point-pump_pressure', refId: 'pump_pressure', x: 50, y: 120 },
+        {
+          kind: 'algorithm',
+          label: '压力分支',
+          nodeId: 'algorithm-condition_route',
+          params: { operator: 'Gte', threshold: 80 },
+          refId: 'condition_route',
+          x: 320,
+          y: 120,
+        },
+        { kind: 'mqtt', label: '高压主题', nodeId: 'mqtt-high', refId: 'factory/{edge_id}/pressure/high', x: 650, y: 60 },
+        { kind: 'mqtt', label: '正常主题', nodeId: 'mqtt-normal', refId: 'factory/{edge_id}/pressure/normal', x: 650, y: 210 },
+      ],
+      edges: [
+        {
+          edgeId: 'pressure-route',
+          from: 'point-pump_pressure',
+          fromPort: 'value',
+          to: 'algorithm-condition_route',
+          toPort: 'input',
+        },
+        {
+          edgeId: 'route-high',
+          from: 'algorithm-condition_route',
+          fromPort: 'matched',
+          to: 'mqtt-high',
+          toPort: 'payload',
+        },
+        {
+          edgeId: 'route-normal',
+          from: 'algorithm-condition_route',
+          fromPort: 'unmatched',
+          to: 'mqtt-normal',
+          toPort: 'payload',
+        },
+      ],
+    };
+
+    const materialized = materializeProductRuntime(template, 'modbus-line-a');
+    expect(materialized.algorithms).toHaveLength(1);
+    expect(materialized.algorithms[0]).toMatchObject({
+      algorithmKind: 'ThresholdRule',
+      dsl: {
+        outputs: [
+          { name: 'matched', pointId: expect.stringContaining('.output.matched') },
+          { name: 'unmatched', pointId: expect.stringContaining('.output.unmatched') },
+        ],
+        steps: [
+          expect.objectContaining({
+            matchedOutput: 'matched',
+            operator: 'Gte',
+            threshold: 80,
+            type: 'conditionalRoute',
+            unmatchedOutput: 'unmatched',
+          }),
+        ],
+      },
+    });
+
+    const saved = buildProductVersionRequest(template, 'v1.4.4', []);
+    const storedDataConfig = saved.dataConfigs[0] as { visual_graph: unknown };
+    expect(storedDataConfig.visual_graph).toMatchObject({
+      edges: expect.arrayContaining([
+        expect.objectContaining({ from_port: 'matched', to: 'mqtt-high' }),
+        expect.objectContaining({ from_port: 'unmatched', to: 'mqtt-normal' }),
+      ]),
+      nodes: expect.arrayContaining([
+        expect.objectContaining({
+          node_id: 'algorithm-condition_route',
+          params: { operator: 'Gte', threshold: 80 },
+        }),
+      ]),
+    });
+
+    const hydrated = hydrateProductTemplate(
+      template,
+      {
+        ...saved,
+        createdAt: '2026-07-19T00:00:00Z',
+        productId: template.templateId,
+        status: 'draft',
+      },
+      [],
+    );
+    const restoredRoute = hydrated.dataConfig.visualGraph?.nodes.find(
+      (node) => node.nodeId === 'algorithm-condition_route',
+    );
+    expect(restoredRoute?.refId).toBe('condition_route');
+    expect(restoredRoute?.params).toEqual({ operator: 'Gte', threshold: 80 });
+  });
+
   it('restores visual compute kinds after a product version save and reload', () => {
     const template = JSON.parse(
       JSON.stringify(EDGE_CONFIG_TEMPLATES[1]),
@@ -1024,6 +1121,10 @@ describe('App cloud console write actions', () => {
     fireEvent.click(within(dialog).getByRole('tab', { name: '采集编排' }));
     expect(within(dialog).getByLabelText('采集编排资源')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('采集编排画布')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: '流程节点 JSON Payload' }))
+      .not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: '流程节点 多点合并' }))
+      .toBeInTheDocument();
     expect(dialog.querySelector('.node-red-canvas')).toBeInTheDocument();
     expect(dialog.querySelector('.node-red-wires')).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: '开始连线' })).not.toBeInTheDocument();
@@ -1033,19 +1134,26 @@ describe('App cloud console write actions', () => {
     expect(within(dialog).getByRole('menuitem', { name: '编辑节点' })).toBeInTheDocument();
     expect(within(dialog).getByRole('menuitem', { name: '删除节点' })).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('menuitem', { name: '编辑节点' }));
-    expect(within(dialog).getByRole('heading', { name: '编辑节点' })).toBeInTheDocument();
+    const inspector = dialog.querySelector('.node-red-edit-inspector') as HTMLElement;
+    expect(within(inspector).getByRole('heading', { name: '窗口聚合' })).toBeInTheDocument();
+    expect(within(inspector).getByRole('heading', { name: '计算设置' })).toBeInTheDocument();
+    expect(within(inspector).queryByRole('heading', { name: '处理方式' })).not.toBeInTheDocument();
+    expect(within(inspector).queryByLabelText('流水线 ID')).not.toBeInTheDocument();
+    expect(within(inspector).queryByLabelText('采集周期(ms)')).not.toBeInTheDocument();
+    expect(within(dialog).getByText('流程设置')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: /流程节点 voltage_a/ }));
     expect(within(dialog).queryByLabelText('产品 JSON 字段 meter_voltage_a')).not.toBeInTheDocument();
     fireEvent.contextMenu(within(dialog).getByRole('button', { name: /流程节点 voltage_a/ }));
     fireEvent.click(within(dialog).getByRole('menuitem', { name: '编辑节点' }));
-    expect(within(dialog).getByText('连接关系')).toBeInTheDocument();
-    expect(within(dialog).getByText('当前节点未建立连接。')).toBeInTheDocument();
+    expect(within(inspector).getByRole('heading', { name: 'voltage_a' })).toBeInTheDocument();
+    expect(within(inspector).getByRole('heading', { name: '字段映射' })).toBeInTheDocument();
+    expect(within(inspector).queryByText('连接')).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: '从 voltage_a 连线' }));
     fireEvent.click(within(dialog).getByRole('button', { name: '连接到 多点合并' }));
     expect(
-      within(dialog).getByRole('button', {
-        name: '移除连接 point-meter_voltage_a:value-to-algorithm-merge_points:input',
-      }),
+      within(dialog).getByLabelText(
+        '删除连线 point-meter_voltage_a:value-to-algorithm-merge_points:input',
+      ),
     ).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: '从 多点合并 连线' }));
     fireEvent.click(within(dialog).getByRole('button', { name: '连接到 窗口聚合' }));
@@ -1091,24 +1199,51 @@ describe('App cloud console write actions', () => {
     expect(dialog.querySelector('.node-red-wire-preview')).toBeInTheDocument();
     dispatchPointer('pointerup', 760, 360);
     expect(dialog.querySelector('.node-red-wire-preview')).not.toBeInTheDocument();
-    expect(within(dialog).getByText('窗口聚合 → 告警主题')).toBeInTheDocument();
+    expect(
+      within(dialog).getByLabelText(
+        /删除连线 algorithm-window_aggregate:output-to-mqtt-output-\d+:payload/,
+      ),
+    ).toBeInTheDocument();
     Object.defineProperty(document, 'elementFromPoint', {
       configurable: true,
       value: originalElementFromPoint,
     });
 
-    expect(within(dialog).getByText('当前 DSL')).toBeInTheDocument();
-    expect(within(dialog).getAllByText(/factory\/\{edge_id\}\/pump\/status/).length).toBeGreaterThan(0);
-    expect(within(dialog).getAllByText(/factory\/\{edge_id\}\/pump\/alarm/).length).toBeGreaterThan(0);
-    expect(within(dialog).getByText(/"field": "ua"/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/"runtimePlan"/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/"executionTree"/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/"nodeId": "mqtt-output"/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/"fromPort": "value"/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/"toPort": "payload"/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/"outputs"/)).toBeInTheDocument();
+    expect(within(dialog).queryByText('当前 DSL')).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
     await waitFor(() => expect(createProductVersion).toHaveBeenCalledOnce());
+    const savedRequest = vi.mocked(createProductVersion).mock.calls[0][1];
+    const savedDataConfig = savedRequest.dataConfigs[0] as {
+      points: Array<{ json_field: string; point_id: string }>;
+      visual_graph: {
+        edges: Array<{ from: string; from_port: string; to: string; to_port: string }>;
+        nodes: Array<{ kind: string; label: string; ref_id: string }>;
+      };
+    };
+    expect(savedDataConfig.points).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ json_field: 'ua', point_id: 'meter_voltage_a' }),
+      ]),
+    );
+    expect(savedDataConfig.visual_graph.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'Mqtt',
+          ref_id: 'factory/{edge_id}/pump/status',
+        }),
+        expect.objectContaining({
+          kind: 'Mqtt',
+          label: '告警主题',
+          ref_id: 'factory/{edge_id}/pump/alarm',
+        }),
+      ]),
+    );
+    expect(savedDataConfig.visual_graph.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ from_port: 'value', to_port: 'input' }),
+        expect.objectContaining({ from_port: 'output', to_port: 'payload' }),
+      ]),
+    );
     expect(within(dialog).getByText('已保存')).toBeInTheDocument();
   });
 

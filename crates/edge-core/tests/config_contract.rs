@@ -1,11 +1,11 @@
 use edge_core::{
     AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
-    AlgorithmReportPolicy, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger, CollectionTask,
-    CustomSerialChecksum, CustomSerialPointSpec, CustomSerialValueEncoding, DataConfig,
-    DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish, DeviceInstance,
-    EdgeConfigPackage, MqttUplinkConfig, NumberRange, PointAddress, ProtocolConnection,
-    ProtocolType, SerialConnectionSettings, TelemetryPointMapping, TelemetryType,
-    WindowAggregateFunction,
+    AlgorithmReportPolicy, AlgorithmRuntime, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger,
+    CollectionTask, CustomSerialChecksum, CustomSerialPointSpec, CustomSerialValueEncoding,
+    DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish,
+    DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, NumberRange, PointAddress,
+    ProtocolConnection, ProtocolType, SerialConnectionSettings, TelemetryPointMapping,
+    TelemetryType, WindowAggregateFunction,
 };
 
 #[test]
@@ -62,6 +62,15 @@ fn modbus_rtu_connection_preserves_serial_settings() {
     assert_eq!(connection.protocol, ProtocolType::ModbusRtu);
     assert_eq!(connection.endpoint.as_deref(), Some("/dev/ttyUSB0"));
     assert_eq!(connection.serial.as_ref(), Some(&serial));
+}
+
+#[test]
+fn modbus_tcp_connection_preserves_network_endpoint() {
+    let connection = ProtocolConnection::modbus_tcp("plc-main", "tcp://127.0.0.1:1502");
+
+    assert_eq!(connection.protocol, ProtocolType::ModbusTcp);
+    assert_eq!(connection.endpoint.as_deref(), Some("tcp://127.0.0.1:1502"));
+    assert!(connection.serial.is_none());
 }
 
 #[test]
@@ -262,4 +271,35 @@ fn algorithm_dsl_binds_point_inputs_and_virtual_outputs() {
     assert_eq!(json["kind"], "WindowAggregate");
     assert_eq!(json["dsl"]["inputs"][0]["pointId"], "pressure");
     assert_eq!(json["dsl"]["outputs"][0]["pointId"], "pressure.avg_1m");
+}
+
+#[test]
+fn controlled_field_preflight_fixture_matches_the_runtime_config_contract() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/fixtures/field-preflight-config.json");
+    let json = std::fs::read_to_string(&fixture).expect("preflight fixture is readable");
+    let package: EdgeConfigPackage =
+        serde_json::from_str(&json).expect("preflight fixture matches EdgeConfigPackage");
+
+    assert_eq!(package.edge_id, "edge-preflight");
+    assert_eq!(package.protocol_connections.len(), 1);
+    assert_eq!(
+        package.protocol_connections[0].protocol,
+        ProtocolType::ModbusRtu
+    );
+    assert_eq!(package.data_configs.len(), 1);
+    assert_eq!(package.data_configs[0].points.len(), 1);
+    assert_eq!(package.mqtt_uplinks[0].qos, 1);
+}
+
+#[test]
+fn legacy_algorithm_runtime_values_migrate_to_the_dsl_engine() {
+    for legacy in ["Rule", "Wasm", "Onnx", "Python"] {
+        let runtime: AlgorithmRuntime =
+            serde_json::from_str(&format!("\"{legacy}\"")).expect("legacy value migrates");
+        assert_eq!(runtime, AlgorithmRuntime::Rule);
+        assert_eq!(serde_json::to_string(&runtime).unwrap(), "\"Rule\"");
+    }
+
+    assert!(serde_json::from_str::<AlgorithmRuntime>("\"NativePlugin\"").is_err());
 }

@@ -96,8 +96,10 @@ export function AppShell({
     <div className="app-shell">
       <aside className="sidebar" aria-label="主导航">
         <div className="brand">
-          <div className="brand-mark" aria-hidden="true"><span>EA</span></div>
-          <div><strong>EDGE AGENT</strong><span>Autonomous Edge Fabric</span><span className="sr-only">EdgeOps Cloud</span></div>
+          <div className="brand-mark" aria-hidden="true">
+            <img alt="" src="/velaedge-mark.svg" />
+          </div>
+          <div><strong>VELAEDGE</strong><span>Edge Intelligence Fabric</span><span className="sr-only">VelaEdge</span></div>
         </div>
 
         <div className="nav-caption">CONTROL CENTER</div>
@@ -127,7 +129,7 @@ export function AppShell({
       <div className="main">
         <header className="topbar">
           <div>
-            <span className="breadcrumb">EDGE AGENT / {activeTitle}</span>
+            <span className="breadcrumb">VELAEDGE / {activeTitle}</span>
             <h1>{activeTitle}</h1>
           </div>
 

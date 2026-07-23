@@ -193,11 +193,20 @@ pub async fn auth_status(
 fn required_role(method: &Method, path: &str) -> ApiRole {
     if method == Method::GET || method == Method::HEAD || method == Method::OPTIONS {
         ApiRole::Viewer
-    } else if method == Method::DELETE || path.ends_with("/access-token") {
+    } else if method == Method::DELETE
+        || path.ends_with("/access-token")
+        || is_agent_proposal_review(method, path)
+    {
         ApiRole::Admin
     } else {
         ApiRole::Operator
     }
+}
+
+fn is_agent_proposal_review(method: &Method, path: &str) -> bool {
+    *method == Method::POST
+        && path.starts_with("/api/agent/proposals/")
+        && (path.ends_with("/approve") || path.ends_with("/reject"))
 }
 
 fn bearer_token(value: Option<&HeaderValue>) -> Option<&str> {

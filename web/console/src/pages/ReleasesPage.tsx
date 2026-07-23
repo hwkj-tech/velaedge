@@ -10,48 +10,13 @@ import { displayError } from '../utils/errors';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import './PointMappingsPage.css';
 
-const fallbackReleaseList: ReleaseListResponse = {
-  draftVersion: '2026.06.26-001',
-  validationStatus: '已通过',
-  changeSummary: '新增 2 个 Modbus 点位',
-  rolloutPolicy: '先灰度 edge-lab-03',
-  applyResults: [
-    {
-      edgeId: 'edge-shanghai-01',
-      desiredVersion: '2026.06.26-001',
-      reportedVersion: '2026.06.26-001',
-      result: '已应用',
-      heartbeat: '18 秒前',
-    },
-    {
-      edgeId: 'edge-suzhou-02',
-      desiredVersion: '2026.06.26-001',
-      reportedVersion: '2026.06.26-001',
-      result: '已应用',
-      heartbeat: '24 秒前',
-    },
-    {
-      edgeId: 'edge-lab-03',
-      desiredVersion: '2026.06.26-001',
-      reportedVersion: '2026.06.25-004',
-      result: '等待下发',
-      heartbeat: '11 分钟前',
-    },
-  ],
+const emptyReleaseList: ReleaseListResponse = {
+  draftVersion: '-',
+  validationStatus: '未校验',
+  changeSummary: '暂无变更',
+  rolloutPolicy: '未配置',
+  applyResults: [],
 };
-
-const fallbackEdges: EdgeNodeResponse[] = [
-  {
-    edgeId: 'edge-dev',
-    displayName: '研发实验室边端',
-    site: '研发/实验室',
-    runtimeId: 'runtime-dev',
-    status: '健康',
-    resources: '18% / 42% / 61%',
-    heartbeat: '8 秒前',
-    capabilities: ['protocol:modbus-tcp'],
-  },
-];
 
 const applyColumns: Array<DataTableColumn<ReleaseListResponse['applyResults'][number]>> = [
   { key: 'edgeId', header: 'Edge ID', width: '180px', render: (row) => row.edgeId },
@@ -81,11 +46,11 @@ const applyColumns: Array<DataTableColumn<ReleaseListResponse['applyResults'][nu
 ];
 
 export function ReleasesPage({
-  edges = fallbackEdges,
+  edges = [],
   onPublish,
   onShowDiff,
   onValidateRelease,
-  releaseList = fallbackReleaseList,
+  releaseList = emptyReleaseList,
   selectedEdgeId: controlledEdgeId,
 }: {
   edges?: EdgeNodeResponse[];
@@ -99,7 +64,7 @@ export function ReleasesPage({
   releaseList?: ReleaseListResponse;
   selectedEdgeId?: string;
 }) {
-  const selectedEdgeId = controlledEdgeId ?? edges[0]?.edgeId ?? 'edge-dev';
+  const selectedEdgeId = controlledEdgeId ?? edges[0]?.edgeId ?? '';
   const [publishState, setPublishState] = useState<
     'idle' | 'publishing' | 'published' | 'error'
   >('idle');
@@ -166,7 +131,7 @@ export function ReleasesPage({
           ) : null}
           <button
             className="secondary-button"
-            disabled={actionState === 'diffing'}
+            disabled={actionState === 'diffing' || !selectedEdgeId}
             onClick={() => {
               void handleShowDiff();
             }}
@@ -177,7 +142,7 @@ export function ReleasesPage({
           </button>
           <button
             className="secondary-button"
-            disabled={actionState === 'validating'}
+            disabled={actionState === 'validating' || !selectedEdgeId}
             onClick={() => {
               void handleValidateRelease();
             }}
@@ -191,7 +156,7 @@ export function ReleasesPage({
           </span>
           <button
             className="primary-button"
-            disabled={publishState === 'publishing'}
+            disabled={publishState === 'publishing' || !selectedEdgeId}
             onClick={handlePublish}
             type="button"
           >
@@ -205,17 +170,17 @@ export function ReleasesPage({
         <article className="release-step">
           <span>待发布版本</span>
           <strong>{releaseList.draftVersion}</strong>
-          <small>点位与采集任务已生成</small>
+          <small>版本由当前配置草稿生成</small>
         </article>
         <article className="release-step">
           <span>校验状态</span>
           <strong>{releaseList.validationStatus}</strong>
-          <small>协议连接和点位地址有效</small>
+          <small>发布前校验协议、点位和流水线</small>
         </article>
         <article className="release-step">
           <span>变更摘要</span>
           <strong>{releaseList.changeSummary}</strong>
-          <small>影响 pump-1 采集任务</small>
+          <small>影响范围以云端差异结果为准</small>
         </article>
         <article className="release-step">
           <span>发布策略</span>
@@ -231,6 +196,7 @@ export function ReleasesPage({
         </div>
         <DataTable
           columns={applyColumns}
+          emptyMessage="暂无边端应用回执"
           getRowKey={(row) => row.edgeId}
           rows={releaseList.applyResults}
         />

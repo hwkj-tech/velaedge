@@ -16,17 +16,17 @@ use edge_runtime::{
     publish_edgelink_runtime_status_with_store_and_capabilities_once,
     sync_and_report_mqtt_uplink_with_store_once, sync_and_report_once, AppliedEdgeConfig,
     CollectionRunStats, CollectionSchedule, ConfiguredEdgeRuntime, DataConfigSchedule,
-    EdgeConfigSyncClient, EdgeLinkClientTlsConfig, EdgeRuntime, HttpEdgeConfigSyncClient,
-    HttpRuntimeStatusReporter, JsonlLocalStore, MqttOutboxStats, MqttPublisher,
-    MultiBrokerMqttPublisher, RocksEdgeRuntimeStore, RuntimeCapabilityConfig,
-    RuntimeStatusReporter, SimulatedProtocolAdapter, SimulatedRuntimeMetricsCollector,
+    EdgeConfigSyncClient, EdgeLinkClientTlsConfig, EdgeRuntime, HostSystemMetricsSampler,
+    HttpEdgeConfigSyncClient, HttpRuntimeStatusReporter, JsonlLocalStore, MqttOutboxStats,
+    MqttPublisher, MultiBrokerMqttPublisher, RocksEdgeRuntimeStore, RuntimeCapabilityConfig,
+    RuntimeMetricsCollector, RuntimeStatusReporter, SimulatedProtocolAdapter,
     TokioSerialBusFactory,
 };
 use tracing::{info, warn};
 
 #[derive(Debug, Parser)]
 #[command(name = "edge-runtime")]
-#[command(about = "Runs the edge runtime MVP with a simulated protocol adapter")]
+#[command(about = "Runs the cloud-managed edge collection runtime")]
 struct Args {
     #[arg(long, default_value = "edge-dev")]
     edge_id: String,
@@ -78,6 +78,7 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+    let mut system_metrics = HostSystemMetricsSampler::new(&args.runtime_db);
     if let Some(cloud_gateway_addr) = args.cloud_gateway_addr.as_deref() {
         let access_token = resolve_access_token(&args)?;
         let edgelink_tls = load_edgelink_tls_config(&args)?;
@@ -94,6 +95,7 @@ async fn main() -> Result<()> {
                     &args.storage,
                     active_config,
                     Some(runtime_store.mqtt_outbox_stats()?),
+                    system_metrics.sample(),
                 );
                 match publish_edgelink_runtime_daemon_session(
                     cloud_gateway_addr,
@@ -136,6 +138,7 @@ async fn main() -> Result<()> {
             &args.storage,
             active_config,
             Some(runtime_store.mqtt_outbox_stats()?),
+            system_metrics.sample(),
         );
         let report = if let Some(tls_config) = edgelink_tls.as_ref() {
             publish_edgelink_runtime_status_tls_once(
@@ -453,8 +456,10 @@ where
     config_client
         .report_applied_version(edge_id, &applied_version)
         .await?;
-    let snapshot = SimulatedRuntimeMetricsCollector::new(runtime_id, applied)
+    let snapshot = RuntimeMetricsCollector::new(runtime_id, applied)
         .with_collection_metrics(stats.metrics())
+        .with_protocol_metrics(runtime.protocol_runtime_metrics())
+        .with_algorithm_metrics(runtime.algorithm_runtime_metrics())
         .with_mqtt_outbox_stats(store.mqtt_outbox_stats()?)
         .snapshot();
     runtime_reporter.report_metrics(snapshot).await?;
@@ -538,8 +543,10 @@ where
     config_client
         .report_applied_version(edge_id, &applied_version)
         .await?;
-    let snapshot = SimulatedRuntimeMetricsCollector::new(runtime_id, applied)
+    let snapshot = RuntimeMetricsCollector::new(runtime_id, applied)
         .with_collection_metrics(stats.metrics())
+        .with_protocol_metrics(runtime.protocol_runtime_metrics())
+        .with_algorithm_metrics(runtime.algorithm_runtime_metrics())
         .with_mqtt_outbox_stats(store.mqtt_outbox_stats()?)
         .snapshot();
     runtime_reporter.report_metrics(snapshot).await?;
@@ -563,19 +570,16 @@ fn runtime_metrics_snapshot(
     storage: &std::path::Path,
     active_config: Option<AppliedEdgeConfig>,
     mqtt_outbox_stats: Option<MqttOutboxStats>,
+    system: SystemRuntimeMetrics,
 ) -> EdgeRuntimeMetricsSnapshot {
+    let disk_percent = system.disk_percent;
     let fallback = EdgeRuntimeMetricsSnapshot {
         edge_id: edge_id.to_string(),
         runtime_id: runtime_id.to_string(),
         config_version: "local-runtime".to_string(),
         timestamp: Utc::now(),
         health: EdgeHealth::Healthy,
-        system: SystemRuntimeMetrics {
-            cpu_percent: 0.0,
-            memory_percent: 0.0,
-            disk_percent: 0.0,
-            process_uptime_seconds: 0,
-        },
+        system,
         collection: CollectionRuntimeMetrics {
             active_task_count: 0,
             success_rate: 1.0,
@@ -599,7 +603,7 @@ fn runtime_metrics_snapshot(
                 .to_string(),
             buffered_records: 0,
             oldest_buffer_age_seconds: 0,
-            disk_usage_percent: 0.0,
+            disk_usage_percent: disk_percent,
         },
         algorithms: Vec::new(),
         cloud_sync: CloudSyncMetrics {
@@ -614,7 +618,7 @@ fn runtime_metrics_snapshot(
         return apply_outbox_stats(fallback, mqtt_outbox_stats);
     };
 
-    let mut collector = SimulatedRuntimeMetricsCollector::new(runtime_id, active_config);
+    let mut collector = RuntimeMetricsCollector::new(runtime_id, active_config);
     if let Some(stats) = mqtt_outbox_stats {
         collector = collector.with_mqtt_outbox_stats(stats);
     }

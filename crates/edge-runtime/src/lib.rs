@@ -12,6 +12,7 @@ pub mod iec101;
 pub mod local_db;
 pub mod metrics;
 pub mod modbus_rtu;
+pub mod modbus_tcp;
 pub mod mqtt_acceptance;
 pub mod mqtt_uplink;
 pub mod protocol;
@@ -45,9 +46,14 @@ pub use edgelink_client::{
     EdgeLinkConnectReport, EdgeLinkPublishReport,
 };
 pub use iec101::{append_iec101_checksum, Iec101Adapter};
-pub use local_db::{MqttOutboxEntry, MqttOutboxStats, RocksEdgeRuntimeStore};
-pub use metrics::{CollectionRunStats, SimulatedRuntimeMetricsCollector};
+pub use local_db::{
+    MqttOutboxEntry, MqttOutboxStats, MqttPublishAcknowledgement, RocksEdgeRuntimeStore,
+};
+pub use metrics::{CollectionRunStats, HostSystemMetricsSampler, RuntimeMetricsCollector};
 pub use modbus_rtu::{append_modbus_rtu_crc, ModbusRtuAdapter};
+pub use modbus_tcp::{
+    DynamicFloatPoint, ModbusTcpAdapter, ModbusTcpSimulator, ModbusTcpSimulatorOptions,
+};
 pub use mqtt_acceptance::{run_mqtt_acceptance, MqttAcceptanceOptions, MqttAcceptanceReport};
 pub use mqtt_uplink::{
     build_data_config_mqtt_publish_messages, build_mqtt_publish_messages, flush_mqtt_outbox,

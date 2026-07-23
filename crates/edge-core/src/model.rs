@@ -284,6 +284,7 @@ pub struct AlgorithmSpec {
     pub kind: AlgorithmKind,
     #[serde(default)]
     pub dsl: AlgorithmDsl,
+    #[serde(default)]
     pub runtime: AlgorithmRuntime,
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
@@ -340,12 +341,11 @@ impl AlgorithmSpec {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AlgorithmRuntime {
+    #[default]
+    #[serde(alias = "Wasm", alias = "Onnx", alias = "Python")]
     Rule,
-    Wasm,
-    Onnx,
-    Python,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -437,6 +437,38 @@ pub enum AlgorithmStep {
     Expression {
         output: String,
         expr: String,
+    },
+    Scale {
+        source: String,
+        output: String,
+        factor: f64,
+        offset: f64,
+    },
+    Clamp {
+        source: String,
+        output: String,
+        min: f64,
+        max: f64,
+    },
+    RateOfChange {
+        source: String,
+        output: String,
+        #[serde(rename = "perMs")]
+        per_ms: u64,
+    },
+    Debounce {
+        source: String,
+        #[serde(rename = "stableMs")]
+        stable_ms: u64,
+    },
+    ConditionalRoute {
+        source: String,
+        operator: CompareOperator,
+        threshold: f64,
+        #[serde(rename = "matchedOutput")]
+        matched_output: String,
+        #[serde(rename = "unmatchedOutput")]
+        unmatched_output: String,
     },
     ThresholdRule {
         source: String,

@@ -6,9 +6,9 @@ use axum::{
 use cloud_api::{app, AppState, BootstrapMode};
 use cloud_control::{EdgeNode, Product, ProductVersion, ProductVersionStatus, ReleaseStatus};
 use edge_core::{
-    DataConfig, DataConfigCollection, DataConfigGraphNode, DataConfigGraphNodeKind,
-    DataConfigPayload, DataConfigPoint, DataConfigPublish, DeviceInstance, MqttUplinkConfig,
-    PointAddress, ProtocolConnection, TelemetryType,
+    DataConfig, DataConfigCollection, DataConfigGraphEdge, DataConfigGraphNode,
+    DataConfigGraphNodeKind, DataConfigPayload, DataConfigPoint, DataConfigPublish, DeviceInstance,
+    MqttUplinkConfig, PointAddress, ProtocolConnection, TelemetryType,
 };
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -332,6 +332,7 @@ async fn product_version_rejects_a_disconnected_visual_graph_before_persisting()
             kind: DataConfigGraphNodeKind::Point,
             label: "pressure".to_string(),
             ref_id: Some("pump_pressure".to_string()),
+            params: Default::default(),
             x: 60,
             y: 80,
         },
@@ -340,6 +341,7 @@ async fn product_version_rejects_a_disconnected_visual_graph_before_persisting()
             kind: DataConfigGraphNodeKind::Mqtt,
             label: "MQTT output".to_string(),
             ref_id: Some("factory/{edge_id}/pressure".to_string()),
+            params: Default::default(),
             x: 620,
             y: 80,
         },
@@ -364,6 +366,81 @@ async fn product_version_rejects_a_disconnected_visual_graph_before_persisting()
         .unwrap()
         .product_versions()
         .all(|candidate| candidate.product_id != "invalid-graph-product"));
+}
+
+#[tokio::test]
+async fn product_version_round_trips_visual_graph_node_parameters_and_named_ports() {
+    let state = AppState::default();
+    state.store.lock().unwrap().upsert_product(Product::new(
+        "branch-graph-product",
+        "demo-plant",
+        "Branch Graph Product",
+        "pump",
+    ));
+    let mut version = publishable_version("branch-graph-product", "v1.0.0");
+    version.point_set_ids.clear();
+    version.data_configs[0].visual_graph.nodes = vec![
+        DataConfigGraphNode {
+            node_id: "point-pressure".to_string(),
+            kind: DataConfigGraphNodeKind::Point,
+            label: "pressure".to_string(),
+            ref_id: Some("pump_pressure".to_string()),
+            params: Default::default(),
+            x: 60,
+            y: 80,
+        },
+        DataConfigGraphNode {
+            node_id: "mqtt-high".to_string(),
+            kind: DataConfigGraphNodeKind::Mqtt,
+            label: "high pressure".to_string(),
+            ref_id: Some("factory/{edge_id}/pressure/high".to_string()),
+            params: [
+                ("operator".to_string(), json!("Gte")),
+                ("threshold".to_string(), json!(80)),
+            ]
+            .into_iter()
+            .collect(),
+            x: 620,
+            y: 80,
+        },
+    ];
+    version.data_configs[0].visual_graph.edges = vec![DataConfigGraphEdge {
+        edge_id: "pressure-high".to_string(),
+        from: "point-pressure".to_string(),
+        from_port: Some("matched".to_string()),
+        to: "mqtt-high".to_string(),
+        to_port: Some("payload".to_string()),
+    }];
+
+    let router = app(state);
+    let (status, created) = send_json(
+        router.clone(),
+        "POST",
+        "/api/products/branch-graph-product/versions",
+        serde_json::to_value(version).unwrap(),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        created["dataConfigs"][0]["visual_graph"]["nodes"][1]["params"]["threshold"],
+        80
+    );
+    assert_eq!(
+        created["dataConfigs"][0]["visual_graph"]["edges"][0]["from_port"],
+        "matched"
+    );
+
+    let (status, versions) = get_json(router, "/api/products/branch-graph-product/versions").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        versions[0]["dataConfigs"][0]["visual_graph"]["nodes"][1]["params"]["operator"],
+        "Gte"
+    );
+    assert_eq!(
+        versions[0]["dataConfigs"][0]["visual_graph"]["edges"][0]["to_port"],
+        "payload"
+    );
 }
 
 #[tokio::test]
@@ -418,7 +495,7 @@ async fn product_versions_publish_and_rollback_atomically_across_reopen() {
     assert_eq!(second["status"], "published");
 
     let (status, rolled_back) = send_json(
-        router,
+        router.clone(),
         "POST",
         "/api/products/lifecycle-product/versions/v1.0.0/rollback",
         Value::Null,
@@ -426,6 +503,18 @@ async fn product_versions_publish_and_rollback_atomically_across_reopen() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(rolled_back["status"], "published");
+
+    let (status, _) = send_json(
+        router,
+        "POST",
+        "/api/edges/lifecycle-edge/reported-config",
+        json!({
+            "desiredVersion": "v1.0.0",
+            "reportedVersion": "v1.0.0"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
 
     let reopened = app(AppState::with_sqlite(&database_url).await.unwrap());
     let (_, products) = get_json(reopened.clone(), "/api/products").await;
@@ -460,6 +549,7 @@ async fn product_versions_publish_and_rollback_atomically_across_reopen() {
         .find(|edge| edge.edge_id == "lifecycle-edge")
         .unwrap();
     assert_eq!(edge.desired_product_version.as_deref(), Some("v1.0.0"));
+    assert_eq!(edge.reported_product_version.as_deref(), Some("v1.0.0"));
     assert!(store.config_package("lifecycle-edge", "v1.0.0").is_some());
     assert!(store.config_package("lifecycle-edge", "v1.1.0").is_some());
     let releases = store
@@ -472,10 +562,12 @@ async fn product_versions_publish_and_rollback_atomically_across_reopen() {
             .iter()
             .filter(|release| release.status == ReleaseStatus::Pending)
             .count(),
-        1
+        0
     );
     assert!(releases.iter().any(|release| {
-        release.status == ReleaseStatus::Pending && release.desired_version == "v1.0.0"
+        release.status == ReleaseStatus::Applied
+            && release.desired_version == "v1.0.0"
+            && release.reported_version.as_deref() == Some("v1.0.0")
     }));
     assert_eq!(
         releases

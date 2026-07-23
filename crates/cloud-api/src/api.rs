@@ -9,9 +9,10 @@ use axum::{
 use chrono::Utc;
 use cloud_control::{
     AgentConversation, AgentConversationCitation, AgentConversationMessage, AgentConversationRole,
-    AgentProposal, AgentProposalKind, AgentProposalRisk, AgentProposalStatus, AuditAction,
-    AuditRecord, EdgeAccessCredential, EdgeNode, KnowledgeDocument, PointSet, PointSetPoint,
-    Product, ProductVersion, ProductVersionStatus, Project, ReleaseService, ReleaseStatus,
+    AgentProposal, AgentProposalKind, AgentProposalReviewError, AgentProposalRisk,
+    AgentProposalStatus, AuditAction, AuditRecord, EdgeAccessCredential, EdgeNode,
+    KnowledgeDocument, PointSet, PointSetPoint, Product, ProductVersion, ProductVersionStatus,
+    Project, ReleaseService, ReleaseStatus,
 };
 use edge_core::{
     validate_custom_serial_point_spec, validate_data_config_visual_graph, AlgorithmDsl,
@@ -1691,7 +1692,10 @@ async fn protocol_connections(
     let store = state.store.lock().expect("store mutex poisoned");
     let mut rows = Vec::new();
 
-    for package in store.config_packages() {
+    for package in store
+        .edge_nodes()
+        .filter_map(|edge| store.latest_config_package_for_edge(&edge.edge_id))
+    {
         let runtime = store.runtime_metrics(&package.edge_id);
         for connection in &package.protocol_connections {
             let runtime_connection = runtime.and_then(|snapshot| {
@@ -1788,7 +1792,10 @@ async fn collection_tasks(State(state): State<AppState>) -> Json<Vec<CollectionT
     let store = state.store.lock().expect("store mutex poisoned");
     let mut rows = Vec::new();
 
-    for package in store.config_packages() {
+    for package in store
+        .edge_nodes()
+        .filter_map(|edge| store.latest_config_package_for_edge(&edge.edge_id))
+    {
         for task in &package.collection_tasks {
             rows.push(collection_task_response(package, task));
         }
@@ -2013,7 +2020,10 @@ async fn algorithms(State(state): State<AppState>) -> Json<Vec<AlgorithmResponse
     let store = state.store.lock().expect("store mutex poisoned");
     let mut rows = Vec::new();
 
-    for package in store.config_packages() {
+    for package in store
+        .edge_nodes()
+        .filter_map(|edge| store.latest_config_package_for_edge(&edge.edge_id))
+    {
         for algorithm in &package.algorithms {
             rows.push(algorithm_response(package, algorithm));
         }
@@ -2146,25 +2156,76 @@ async fn edge_reported_config(
     Json(request): Json<EdgeReportedConfigRequest>,
 ) -> Result<Json<ReleaseListResponse>, (StatusCode, Json<ErrorResponse>)> {
     let reported_version = request.reported_version;
-    let (release_id, response) = {
+    let desired_version = request.desired_version;
+    let (release_id, reported_node, response) = {
         let mut store = state.store.lock().expect("store mutex poisoned");
-        let release_id = store
+        let pending = store
             .releases()
-            .filter(|release| release.edge_id == edge_id)
-            .max_by(|left, right| left.desired_version.cmp(&right.desired_version))
-            .map(|release| release.release_id)
-            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing release for edge"))?;
+            .filter(|release| {
+                release.edge_id == edge_id && release.status == ReleaseStatus::Pending
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let release_id = if let Some(desired_version) = desired_version.as_deref() {
+            pending
+                .iter()
+                .find(|release| release.desired_version == desired_version)
+                .map(|release| release.release_id)
+                .ok_or_else(|| {
+                    error(
+                        StatusCode::CONFLICT,
+                        "no pending release matches desired version",
+                    )
+                })?
+        } else if let Some(exact) = pending
+            .iter()
+            .find(|release| release.desired_version == reported_version)
+        {
+            exact.release_id
+        } else if pending.len() == 1 {
+            pending[0].release_id
+        } else if pending.is_empty() {
+            return Err(error(
+                StatusCode::NOT_FOUND,
+                "missing pending release for edge",
+            ));
+        } else {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "multiple pending releases require desiredVersion",
+            ));
+        };
 
-        ReleaseService::mark_reported(&mut store, release_id, reported_version.clone())
-            .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing release for edge"))?;
+        let updated =
+            ReleaseService::mark_reported(&mut store, release_id, reported_version.clone())
+                .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing release for edge"))?;
+        let reported_node = if updated.status == ReleaseStatus::Applied {
+            let mut node = store
+                .edge_nodes()
+                .find(|node| node.edge_id == edge_id)
+                .cloned();
+            if let Some(node) = node.as_mut() {
+                node.reported_product_version = Some(reported_version.clone());
+                store.register_edge(node.clone());
+            }
+            node
+        } else {
+            None
+        };
 
-        (release_id, release_list_response(&store))
+        (release_id, reported_node, release_list_response(&store))
     };
 
     state
         .persist_release_report(release_id, reported_version)
         .await
         .map_err(persistence_error)?;
+    if let Some(node) = reported_node {
+        state
+            .persist_edge_node(node)
+            .await
+            .map_err(persistence_error)?;
+    }
 
     Ok(Json(response))
 }
@@ -2732,7 +2793,7 @@ async fn review_agent_proposal(
     };
     proposal
         .review(decision, &reviewer, request.note)
-        .map_err(|review_error| error(StatusCode::CONFLICT, review_error.to_string()))?;
+        .map_err(agent_proposal_review_error)?;
     let action = match decision {
         AgentProposalStatus::Approved => AuditAction::ApproveAgentProposal,
         AgentProposalStatus::Rejected => AuditAction::RejectAgentProposal,
@@ -2747,6 +2808,21 @@ async fn review_agent_proposal(
     store.upsert_agent_proposal(proposal.clone());
     store.push_audit_record(audit);
     Ok(Json(proposal))
+}
+
+fn agent_proposal_review_error(
+    review_error: AgentProposalReviewError,
+) -> (StatusCode, Json<ErrorResponse>) {
+    let status = match review_error {
+        AgentProposalReviewError::AlreadyReviewed | AgentProposalReviewError::SelfReview => {
+            StatusCode::CONFLICT
+        }
+        AgentProposalReviewError::ReviewNoteTooLong => StatusCode::PAYLOAD_TOO_LARGE,
+        AgentProposalReviewError::InvalidDecision
+        | AgentProposalReviewError::MissingReviewer
+        | AgentProposalReviewError::ApprovalNoteRequired => StatusCode::BAD_REQUEST,
+    };
+    error(status, review_error.to_string())
 }
 
 async fn save_point_mapping(
@@ -3274,16 +3350,35 @@ fn runtime_status_response(store: &cloud_control::CloudControlStore) -> RuntimeS
         .runtime_metrics_snapshots()
         .cloned()
         .collect::<Vec<_>>();
+    let now = Utc::now();
+    for edge in &mut edges {
+        let heartbeat_age_seconds = now
+            .signed_duration_since(edge.timestamp)
+            .num_seconds()
+            .max(0) as u64;
+        edge.cloud_sync.last_sync_seconds_ago = heartbeat_age_seconds;
+        if heartbeat_age_seconds > 30 {
+            edge.health = EdgeHealth::Offline;
+            edge.cloud_sync.connected = false;
+            for protocol in &mut edge.protocols {
+                protocol.connected = false;
+            }
+        }
+    }
     edges.sort_by(|left, right| left.edge_id.cmp(&right.edge_id));
 
-    let average_collection_latency_ms = if edges.is_empty() {
+    let online_edges = edges
+        .iter()
+        .filter(|edge| edge.health != EdgeHealth::Offline)
+        .collect::<Vec<_>>();
+    let average_collection_latency_ms = if online_edges.is_empty() {
         0
     } else {
-        edges
+        online_edges
             .iter()
             .map(|edge| edge.collection.average_latency_ms)
             .sum::<u64>()
-            / edges.len() as u64
+            / online_edges.len() as u64
     };
 
     RuntimeStatusResponse {
@@ -3297,7 +3392,9 @@ fn runtime_status_response(store: &cloud_control::CloudControlStore) -> RuntimeS
             .count(),
         critical_edge_count: edges
             .iter()
-            .filter(|edge| edge.health == EdgeHealth::Critical)
+            .filter(|edge| {
+                edge.health == EdgeHealth::Critical || edge.health == EdgeHealth::Offline
+            })
             .count(),
         average_collection_latency_ms,
         edges,
@@ -3585,6 +3682,8 @@ pub struct DataConfigGraphNodeDto {
     pub kind: String,
     pub label: String,
     pub ref_id: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, serde_json::Value>,
     pub x: i32,
     pub y: i32,
 }
@@ -3731,6 +3830,8 @@ pub struct EdgeDesiredConfigResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgeReportedConfigRequest {
+    #[serde(default)]
+    pub desired_version: Option<String>,
     pub reported_version: String,
 }
 
@@ -3836,7 +3937,6 @@ pub struct CreateAlgorithmRequest {
     pub version: Option<String>,
     pub algorithm_kind: Option<AlgorithmKind>,
     pub dsl: Option<AlgorithmDsl>,
-    pub runtime: Option<AlgorithmRuntime>,
     #[serde(default)]
     pub input_ids: Vec<String>,
     #[serde(default)]
@@ -4348,6 +4448,7 @@ fn data_config_visual_graph_from_request(
             kind: parse_data_config_graph_node_kind(&node.kind)?,
             label: non_empty_field(node.label, "visualGraph.nodes.label")?,
             ref_id: non_empty_optional(node.ref_id),
+            params: node.params,
             x: node.x,
             y: node.y,
         });
@@ -4410,9 +4511,12 @@ fn build_algorithm_from_create_request(
     }
 
     let version = non_empty_optional(request.version).unwrap_or_else(|| "0.1.0".to_string());
-    let mut algorithm = AlgorithmSpec::dsl(algorithm_id, version, algorithm_kind, dsl);
-    algorithm.runtime = request.runtime.unwrap_or(AlgorithmRuntime::Rule);
-    Ok(algorithm)
+    Ok(AlgorithmSpec::dsl(
+        algorithm_id,
+        version,
+        algorithm_kind,
+        dsl,
+    ))
 }
 
 fn legacy_algorithm_dsl(
@@ -4485,6 +4589,11 @@ fn validate_algorithm_dsl(
         let source = match step {
             AlgorithmStep::ChangeFilter { source, .. }
             | AlgorithmStep::WindowAggregate { source, .. }
+            | AlgorithmStep::Scale { source, .. }
+            | AlgorithmStep::Clamp { source, .. }
+            | AlgorithmStep::RateOfChange { source, .. }
+            | AlgorithmStep::Debounce { source, .. }
+            | AlgorithmStep::ConditionalRoute { source, .. }
             | AlgorithmStep::ThresholdRule { source, .. } => Some(source.as_str()),
             AlgorithmStep::Expression { .. } => None,
         };
@@ -4940,6 +5049,7 @@ fn data_config_visual_graph_response(graph: &DataConfigVisualGraph) -> DataConfi
                 kind: format_data_config_graph_node_kind(node.kind).to_string(),
                 label: node.label.clone(),
                 ref_id: node.ref_id.clone(),
+                params: node.params.clone(),
                 x: node.x,
                 y: node.y,
             })

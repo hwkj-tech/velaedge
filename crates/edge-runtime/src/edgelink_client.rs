@@ -1,9 +1,10 @@
-use std::{io::Cursor, sync::Arc};
+use std::{io::Cursor, sync::Arc, time::Instant};
 
 use anyhow::{bail, Context, Result};
 use edge_core::{
-    decode_edgelink_frame, encode_edgelink_frame, EdgeLinkMessage, EdgeLinkPayload,
-    EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, EDGELINK_MAX_FRAME_BYTES,
+    decode_edgelink_frame, encode_edgelink_frame, AlgorithmRuntimeMetrics,
+    CollectionRuntimeMetrics, EdgeLinkMessage, EdgeLinkPayload, EdgeRuntimeEvent,
+    EdgeRuntimeMetricsSnapshot, ProtocolRuntimeMetrics, EDGELINK_MAX_FRAME_BYTES,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -18,9 +19,9 @@ use tokio_rustls::{
 };
 
 use crate::{
-    run_modbus_discovery_request, AppliedEdgeConfig, ConfiguredEdgeRuntime,
-    ConfiguredMqttCollectionReport, ConfiguredSimulatedRuntime, MqttPublisher,
-    MultiBrokerMqttPublisher, RocksEdgeRuntimeStore, SerialBusFactory, TokioSerialBusFactory,
+    metrics::evaluate_runtime_health, run_modbus_discovery_request, AppliedEdgeConfig,
+    ConfiguredEdgeRuntime, ConfiguredMqttCollectionReport, MqttPublisher, MultiBrokerMqttPublisher,
+    RocksEdgeRuntimeStore, SerialBusFactory, TokioSerialBusFactory,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -505,6 +506,20 @@ where
         snapshot.cloud_sync.desired_version = applied_version.clone();
         snapshot.cloud_sync.reported_version = applied_version.clone();
     }
+    if let Some(collection) = config_apply.collection_metrics.as_ref() {
+        snapshot.collection = collection.clone();
+        snapshot.protocols = config_apply.protocol_metrics.clone();
+        snapshot.algorithms = config_apply.algorithm_metrics.clone();
+        snapshot.health = evaluate_runtime_health(
+            &snapshot.collection,
+            &snapshot.protocols,
+            &snapshot.algorithms,
+            snapshot.local_store.buffered_records,
+            true,
+        );
+    }
+    snapshot.timestamp = chrono::Utc::now();
+    snapshot.cloud_sync.last_sync_seconds_ago = 0;
     let mut acked_message_count = 0;
     let metrics =
         EdgeLinkMessage::runtime_metrics(edge_id, runtime_id, config_apply.next_sequence, snapshot);
@@ -659,12 +674,22 @@ where
     write_edgelink_message(stream, &nack).await
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 struct EdgeLinkOptionalConfigApply {
     applied_config_version: Option<String>,
     next_sequence: u64,
     samples_collected: usize,
     mqtt_messages_published: usize,
+    collection_metrics: Option<CollectionRuntimeMetrics>,
+    protocol_metrics: Vec<ProtocolRuntimeMetrics>,
+    algorithm_metrics: Vec<AlgorithmRuntimeMetrics>,
+}
+
+struct EdgeLinkCollectionObservation {
+    report: ConfiguredMqttCollectionReport,
+    collection_metrics: CollectionRuntimeMetrics,
+    protocol_metrics: Vec<ProtocolRuntimeMetrics>,
+    algorithm_metrics: Vec<AlgorithmRuntimeMetrics>,
 }
 
 enum EdgeLinkMqttMode<'a> {
@@ -741,16 +766,17 @@ where
                     .context("failed to recover active EdgeLink config")?
                 {
                     let applied_config_version = applied.version().to_string();
-                    let mut runtime = ConfiguredSimulatedRuntime::new(applied.clone());
-                    let collection =
-                        collect_after_config_deploy(&mut runtime, applied, Some(store), mqtt_mode)
-                            .await
-                            .context("failed to collect with recovered EdgeLink config")?;
+                    let collection = collect_after_config_deploy(applied, Some(store), mqtt_mode)
+                        .await
+                        .context("failed to collect with recovered EdgeLink config")?;
                     return Ok(EdgeLinkOptionalConfigApply {
                         applied_config_version: Some(applied_config_version),
                         next_sequence: 2,
-                        samples_collected: collection.collection.samples_collected,
-                        mqtt_messages_published: collection.mqtt_messages_published,
+                        samples_collected: collection.report.collection.samples_collected,
+                        mqtt_messages_published: collection.report.mqtt_messages_published,
+                        collection_metrics: Some(collection.collection_metrics),
+                        protocol_metrics: collection.protocol_metrics,
+                        algorithm_metrics: collection.algorithm_metrics,
                     });
                 }
             }
@@ -759,6 +785,9 @@ where
                 next_sequence: 2,
                 samples_collected: 0,
                 mqtt_messages_published: 0,
+                collection_metrics: None,
+                protocol_metrics: Vec::new(),
+                algorithm_metrics: Vec::new(),
             });
         }
         Ok(result) => result.context("failed to read optional EdgeLink config deploy")?,
@@ -806,11 +835,10 @@ where
             return Err(error).context("failed to apply EdgeLink config deploy");
         }
     };
-    let mut runtime = ConfiguredSimulatedRuntime::new(applied.clone());
-    let collection = collect_after_config_deploy(&mut runtime, applied, store, mqtt_mode)
+    let collection = collect_after_config_deploy(applied.clone(), store, mqtt_mode)
         .await
         .context("failed to run collection after EdgeLink config deploy")?;
-    let applied_version = runtime.reported_version().to_string();
+    let applied_version = applied.version().to_string();
     if let Some(store) = store {
         store
             .promote_active_config(edge_id, &applied_version)
@@ -831,84 +859,149 @@ where
     Ok(EdgeLinkOptionalConfigApply {
         applied_config_version: Some(applied_version),
         next_sequence: report_sequence + 1,
-        samples_collected: collection.collection.samples_collected,
-        mqtt_messages_published: collection.mqtt_messages_published,
+        samples_collected: collection.report.collection.samples_collected,
+        mqtt_messages_published: collection.report.mqtt_messages_published,
+        collection_metrics: Some(collection.collection_metrics),
+        protocol_metrics: collection.protocol_metrics,
+        algorithm_metrics: collection.algorithm_metrics,
     })
 }
 
 async fn collect_after_config_deploy(
-    runtime: &mut ConfiguredSimulatedRuntime,
     applied: AppliedEdgeConfig,
     store: Option<&RocksEdgeRuntimeStore>,
     mqtt_mode: EdgeLinkMqttMode<'_>,
-) -> Result<ConfiguredMqttCollectionReport> {
-    match mqtt_mode {
-        EdgeLinkMqttMode::Provided(publisher) => {
-            if let Some(store) = store {
-                if applied.package().data_configs.is_empty() {
-                    runtime
-                        .collect_once_and_publish_mqtt_with_outbox(store, publisher)
-                        .await
-                } else {
-                    runtime
-                        .collect_data_configs_once_and_publish_mqtt_with_outbox(store, publisher)
-                        .await
-                }
-            } else if applied.package().data_configs.is_empty() {
-                runtime.collect_once_and_publish_mqtt(publisher).await
-            } else {
-                runtime
-                    .collect_data_configs_once_and_publish_mqtt(publisher)
-                    .await
-            }
-        }
-        EdgeLinkMqttMode::ConfiguredUplink => {
-            if !applied.package().mqtt_uplinks.is_empty() {
-                let mut publisher = MultiBrokerMqttPublisher::connect_from_uplinks(
-                    &applied.package().mqtt_uplinks,
-                )?;
-                let mut configured_runtime =
-                    ConfiguredEdgeRuntime::new(applied.package().clone(), TokioSerialBusFactory)?;
-                if applied.package().data_configs.is_empty() {
-                    if let Some(store) = store {
-                        configured_runtime
-                            .collect_once_and_publish_mqtt_with_outbox(store, &mut publisher)
+) -> Result<EdgeLinkCollectionObservation> {
+    let active_task_count = if applied.package().data_configs.is_empty() {
+        applied
+            .package()
+            .collection_tasks
+            .iter()
+            .filter(|task| task.enabled)
+            .count()
+    } else {
+        applied
+            .package()
+            .data_configs
+            .iter()
+            .filter(|config| config.enabled)
+            .count()
+    };
+    let mut runtime = ConfiguredEdgeRuntime::new(applied.package().clone(), TokioSerialBusFactory)?;
+    let started = Instant::now();
+    let report_result = async {
+        match mqtt_mode {
+            EdgeLinkMqttMode::Provided(publisher) => {
+                if let Some(store) = store {
+                    if applied.package().data_configs.is_empty() {
+                        runtime
+                            .collect_once_and_publish_mqtt_with_outbox(store, publisher)
                             .await
                     } else {
-                        configured_runtime
-                            .collect_once_and_publish_mqtt(&mut publisher)
-                            .await
-                    }
-                } else {
-                    if let Some(store) = store {
-                        configured_runtime
+                        runtime
                             .collect_data_configs_once_and_publish_mqtt_with_outbox(
-                                store,
-                                &mut publisher,
+                                store, publisher,
                             )
                             .await
-                    } else {
-                        configured_runtime
-                            .collect_data_configs_once_and_publish_mqtt(&mut publisher)
-                            .await
                     }
+                } else if applied.package().data_configs.is_empty() {
+                    runtime.collect_once_and_publish_mqtt(publisher).await
+                } else {
+                    runtime
+                        .collect_data_configs_once_and_publish_mqtt(publisher)
+                        .await
                 }
-            } else {
-                collect_without_mqtt(runtime).await
             }
+            EdgeLinkMqttMode::ConfiguredUplink => {
+                if !applied.package().mqtt_uplinks.is_empty() {
+                    let mut publisher = MultiBrokerMqttPublisher::connect_from_uplinks(
+                        &applied.package().mqtt_uplinks,
+                    )?;
+                    if applied.package().data_configs.is_empty() {
+                        if let Some(store) = store {
+                            runtime
+                                .collect_once_and_publish_mqtt_with_outbox(store, &mut publisher)
+                                .await
+                        } else {
+                            runtime.collect_once_and_publish_mqtt(&mut publisher).await
+                        }
+                    } else {
+                        if let Some(store) = store {
+                            runtime
+                                .collect_data_configs_once_and_publish_mqtt_with_outbox(
+                                    store,
+                                    &mut publisher,
+                                )
+                                .await
+                        } else {
+                            runtime
+                                .collect_data_configs_once_and_publish_mqtt(&mut publisher)
+                                .await
+                        }
+                    }
+                } else {
+                    collect_without_mqtt(&mut runtime).await
+                }
+            }
+            EdgeLinkMqttMode::Disabled => collect_without_mqtt(&mut runtime).await,
         }
-        EdgeLinkMqttMode::Disabled => collect_without_mqtt(runtime).await,
     }
+    .await;
+    let latency_ms = elapsed_millis(started.elapsed());
+    let protocol_metrics = runtime.protocol_runtime_metrics();
+    let algorithm_metrics = runtime.algorithm_runtime_metrics();
+
+    let (report, success_rate, bad_point_count) = match report_result {
+        Ok(report) => (report, 1.0, 0),
+        Err(error) => {
+            tracing::debug!(
+                edge_id = %applied.package().edge_id,
+                config_version = %applied.package().version,
+                error = %error,
+                "collection cycle failed while EdgeLink control session remains online"
+            );
+            (
+                ConfiguredMqttCollectionReport {
+                    collection: crate::CollectionReport {
+                        samples_collected: 0,
+                    },
+                    mqtt_messages_published: 0,
+                },
+                0.0,
+                1,
+            )
+        }
+    };
+
+    Ok(EdgeLinkCollectionObservation {
+        report,
+        collection_metrics: CollectionRuntimeMetrics {
+            active_task_count,
+            success_rate,
+            average_latency_ms: latency_ms,
+            bad_point_count,
+        },
+        protocol_metrics,
+        algorithm_metrics,
+    })
 }
 
 async fn collect_without_mqtt(
-    runtime: &mut ConfiguredSimulatedRuntime,
+    runtime: &mut ConfiguredEdgeRuntime<TokioSerialBusFactory>,
 ) -> Result<ConfiguredMqttCollectionReport> {
     let collection = runtime.collect_once().await?;
     Ok(ConfiguredMqttCollectionReport {
         collection,
         mqtt_messages_published: 0,
     })
+}
+
+fn elapsed_millis(duration: std::time::Duration) -> u64 {
+    if duration.is_zero() {
+        0
+    } else {
+        duration.as_millis().max(1).min(u128::from(u64::MAX)) as u64
+    }
 }
 
 async fn write_edgelink_message_and_expect_ack<S>(

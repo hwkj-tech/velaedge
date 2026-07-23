@@ -12,6 +12,9 @@ const DESIRED_CONFIG_PREFIX: &str = "desired-config";
 const ACTIVE_CONFIG_PREFIX: &str = "active-config";
 const MQTT_OUTBOX_PREFIX: &str = "mqtt-outbox/";
 const MQTT_OUTBOX_SEQUENCE_KEY: &str = "mqtt-outbox-sequence";
+const MQTT_ACK_PREFIX: &str = "mqtt-ack/";
+const MQTT_ACK_COUNT_KEY: &str = "mqtt-ack-count";
+const MQTT_ACK_RETENTION: usize = 1_000;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct MqttOutboxEntry {
@@ -20,6 +23,19 @@ pub struct MqttOutboxEntry {
     pub attempts: u32,
     pub last_error: Option<String>,
     pub message: MqttPublishMessage,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MqttPublishAcknowledgement {
+    pub sequence: u64,
+    pub acknowledged_at: DateTime<Utc>,
+    pub sink_id: String,
+    pub broker: String,
+    pub client_id: String,
+    pub topic: String,
+    pub qos: u8,
+    pub payload_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -163,10 +179,121 @@ impl RocksEdgeRuntimeStore {
         Ok(entries)
     }
 
-    pub fn acknowledge_mqtt_message(&self, sequence: u64) -> Result<()> {
+    pub fn acknowledge_mqtt_message(&self, sequence: u64) -> Result<MqttPublishAcknowledgement> {
+        let _guard = self
+            .outbox_write_lock
+            .lock()
+            .map_err(|_| anyhow!("mqtt outbox write lock is poisoned"))?;
+        let outbox_key = mqtt_outbox_key(sequence);
+        let Some(payload) = self
+            .db
+            .get(&outbox_key)
+            .context("failed to read acknowledged mqtt outbox entry")?
+        else {
+            bail!("mqtt outbox entry {sequence} does not exist");
+        };
+        let entry: MqttOutboxEntry =
+            serde_json::from_slice(&payload).context("failed to decode mqtt outbox entry")?;
+        let acknowledgement = MqttPublishAcknowledgement {
+            sequence,
+            acknowledged_at: Utc::now(),
+            sink_id: entry.message.sink_id,
+            broker: entry.message.broker,
+            client_id: entry.message.client_id,
+            topic: entry.message.topic,
+            qos: entry.message.qos,
+            payload_bytes: entry.message.payload.len(),
+        };
+        let acknowledgement_payload = serde_json::to_vec(&acknowledgement)
+            .context("failed to encode mqtt acknowledgement")?;
+        let acknowledgement_count = self.mqtt_acknowledgement_count()?;
+
+        let mut batch = WriteBatch::default();
+        batch.delete(outbox_key);
+        batch.put(mqtt_ack_key(sequence), acknowledgement_payload);
+        let retained_count = if acknowledgement_count >= MQTT_ACK_RETENTION as u64 {
+            if let Some(oldest_key) = self.oldest_mqtt_acknowledgement_key()? {
+                batch.delete(oldest_key);
+            }
+            acknowledgement_count
+        } else {
+            acknowledgement_count.saturating_add(1)
+        };
+        batch.put(MQTT_ACK_COUNT_KEY, retained_count.to_be_bytes());
         self.db
-            .delete(mqtt_outbox_key(sequence))
-            .context("failed to acknowledge mqtt outbox entry")
+            .write(batch)
+            .context("failed to persist mqtt acknowledgement")?;
+        Ok(acknowledgement)
+    }
+
+    fn mqtt_acknowledgement_count(&self) -> Result<u64> {
+        if let Some(value) = self
+            .db
+            .get(MQTT_ACK_COUNT_KEY)
+            .context("failed to read mqtt acknowledgement count")?
+        {
+            return value
+                .as_slice()
+                .try_into()
+                .map(u64::from_be_bytes)
+                .map_err(|_| anyhow!("mqtt acknowledgement count is invalid"));
+        }
+
+        // Existing stores created before the count key was introduced are migrated lazily once.
+        let mut count = 0_u64;
+        for item in self.db.iterator(IteratorMode::From(
+            MQTT_ACK_PREFIX.as_bytes(),
+            Direction::Forward,
+        )) {
+            let (key, _) = item.context("failed to count mqtt acknowledgements")?;
+            if !key.starts_with(MQTT_ACK_PREFIX.as_bytes()) {
+                break;
+            }
+            count = count.saturating_add(1);
+        }
+        Ok(count)
+    }
+
+    fn oldest_mqtt_acknowledgement_key(&self) -> Result<Option<Box<[u8]>>> {
+        let Some(item) = self
+            .db
+            .iterator(IteratorMode::From(
+                MQTT_ACK_PREFIX.as_bytes(),
+                Direction::Forward,
+            ))
+            .next()
+        else {
+            return Ok(None);
+        };
+        let (key, _) = item.context("failed to read oldest mqtt acknowledgement")?;
+        Ok(key.starts_with(MQTT_ACK_PREFIX.as_bytes()).then_some(key))
+    }
+
+    pub fn mqtt_publish_acknowledgements(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<MqttPublishAcknowledgement>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut acknowledgements = Vec::new();
+        for item in self.db.iterator(IteratorMode::From(
+            MQTT_ACK_PREFIX.as_bytes(),
+            Direction::Forward,
+        )) {
+            let (key, payload) = item.context("failed to iterate mqtt acknowledgements")?;
+            if !key.starts_with(MQTT_ACK_PREFIX.as_bytes()) {
+                break;
+            }
+            acknowledgements.push(
+                serde_json::from_slice(&payload)
+                    .context("failed to decode mqtt acknowledgement")?,
+            );
+        }
+        if acknowledgements.len() > limit {
+            acknowledgements.drain(..acknowledgements.len() - limit);
+        }
+        Ok(acknowledgements)
     }
 
     pub fn mark_mqtt_message_failed(&self, sequence: u64, error: &str) -> Result<()> {
@@ -242,4 +369,8 @@ fn active_config_key(edge_id: &str) -> String {
 
 fn mqtt_outbox_key(sequence: u64) -> String {
     format!("{MQTT_OUTBOX_PREFIX}{sequence:020}")
+}
+
+fn mqtt_ack_key(sequence: u64) -> String {
+    format!("{MQTT_ACK_PREFIX}{sequence:020}")
 }

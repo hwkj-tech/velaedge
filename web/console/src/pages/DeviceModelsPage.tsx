@@ -12,35 +12,16 @@ import { PaginationBar } from '../components/PaginationBar';
 import { displayError } from '../utils/errors';
 import './PointMappingsPage.css';
 
-const fallbackDeviceModels: DeviceModelResponse[] = [
-  {
-    deviceType: 'pump',
-    version: 'v1',
-    commandCount: 1,
-    eventCount: 1,
-    telemetry: [
-      {
-        telemetryId: 'pressure',
-        name: 'pressure',
-        valueType: 'float32',
-        unit: 'MPa',
-        range: '0-20',
-        description: '泵出口压力',
-      },
-      {
-        telemetryId: 'running',
-        name: 'running',
-        valueType: 'bool',
-        unit: '-',
-        range: '-',
-        description: '设备运行布尔量',
-      },
-    ],
-  },
-];
+const emptyDeviceModel: DeviceModelResponse = {
+  deviceType: '',
+  version: 'v1',
+  commandCount: 0,
+  eventCount: 0,
+  telemetry: [],
+};
 
 export function DeviceModelsPage({
-  deviceModels = fallbackDeviceModels,
+  deviceModels = [],
   onCreateDeviceModel,
   onDeleteDeviceModel,
   onSaveDeviceModel,
@@ -56,13 +37,13 @@ export function DeviceModelsPage({
   ) => Promise<DeviceModelResponse> | DeviceModelResponse;
 }) {
   const [selectedDeviceType, setSelectedDeviceType] = useState(
-    () => deviceModels[0]?.deviceType ?? fallbackDeviceModels[0].deviceType,
+    () => deviceModels[0]?.deviceType ?? '',
   );
   const [page, setPage] = useState(1);
   const activeModel =
     deviceModels.find((model) => model.deviceType === selectedDeviceType) ??
     deviceModels[0] ??
-    fallbackDeviceModels[0];
+    emptyDeviceModel;
   const [toolbarMessage, setToolbarMessage] = useState('');
   const [createState, setCreateState] = useState<'idle' | 'creating'>('idle');
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>(
@@ -204,6 +185,11 @@ export function DeviceModelsPage({
                 </tr>
               </thead>
               <tbody>
+                {visibleDeviceModels.length === 0 ? (
+                  <tr>
+                    <td className="table-empty-cell" colSpan={5}>暂无设备模型</td>
+                  </tr>
+                ) : null}
                 {visibleDeviceModels.map((model) => (
                   <tr key={`${model.deviceType}:${model.version}`}>
                     <td>

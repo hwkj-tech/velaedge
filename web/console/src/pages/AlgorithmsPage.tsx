@@ -17,44 +17,40 @@ import { PaginationBar } from '../components/PaginationBar';
 import { displayError } from '../utils/errors';
 import './PointMappingsPage.css';
 
-const fallbackDsl: AlgorithmDsl = {
-  inputs: [{ alias: 'p', pointId: 'pressure' }],
+const emptyDsl: AlgorithmDsl = {
+  inputs: [],
   trigger: { type: 'onSample' },
-  steps: [{ type: 'changeFilter', source: 'p', threshold: 0.2 }],
-  outputs: [{ name: 'p', pointId: 'pressure.reported' }],
-  report: { mode: 'OnChange', sink: 'velamq-main' },
+  steps: [],
+  outputs: [],
+  report: { mode: 'OnOutput', sink: '' },
 };
 
-const fallbackAlgorithms: AlgorithmResponse[] = [
-  {
-    edgeId: 'edge-dev',
-    algorithmId: 'pressure-change-report',
+const emptyAlgorithm: AlgorithmResponse = {
+    edgeId: '',
+    algorithmId: '',
     version: '1.0.0',
     algorithmKind: 'ChangeReport',
-    dsl: fallbackDsl,
+    dsl: emptyDsl,
     runtime: 'Rule',
     kind: '变化上报',
-    inputIds: ['pressure'],
-    outputIds: ['pressure.reported'],
-    inputs: 'pressure',
-    outputs: 'pressure.reported',
+    inputIds: [],
+    outputIds: [],
+    inputs: '',
+    outputs: '',
     execution: '边端本地执行',
-    validation: '已通过',
-  },
-];
+    validation: '未校验',
+};
 
-const fallbackEdges: EdgeNodeResponse[] = [
-  {
-    edgeId: 'edge-dev',
-    displayName: '研发实验室边端',
-    site: '研发/实验室',
-    runtimeId: 'runtime-dev',
-    status: '健康',
-    resources: '18.5% / 42% / 61%',
-    heartbeat: '8 秒前',
-    capabilities: ['algorithm:dsl'],
-  },
-];
+const emptyEdge: EdgeNodeResponse = {
+  edgeId: '',
+  displayName: '未选择边端',
+  site: '-',
+  runtimeId: '-',
+  status: '未接入',
+  resources: '-',
+  heartbeat: '-',
+  capabilities: [],
+};
 
 const algorithmKindOptions: Array<[AlgorithmKind, string]> = [
   ['ChangeReport', '变化上报'],
@@ -75,15 +71,15 @@ const reportModes: Array<[AlgorithmReportPolicy['mode'], string]> = [
 ];
 
 export function AlgorithmsPage({
-  algorithms = fallbackAlgorithms,
-  edges = fallbackEdges,
+  algorithms = [],
+  edges = [],
   embedded = false,
   mode = 'configure',
   onAssessRisk,
   onCreateAlgorithm,
   onDeleteAlgorithm,
   onSaveAlgorithm,
-  selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
+  selectedEdgeId = edges[0]?.edgeId ?? '',
 }: {
   algorithms?: AlgorithmResponse[];
   edges?: EdgeNodeResponse[];
@@ -108,13 +104,13 @@ export function AlgorithmsPage({
   selectedEdgeId?: string;
 }) {
   const [selectedAlgorithmId, setSelectedAlgorithmId] = useState(
-    () => algorithms[0]?.algorithmId ?? fallbackAlgorithms[0].algorithmId,
+    () => algorithms[0]?.algorithmId ?? '',
   );
   const [page, setPage] = useState(1);
   const selectedAlgorithm =
     algorithms.find((algorithm) => algorithm.algorithmId === selectedAlgorithmId) ??
     algorithms[0] ??
-    fallbackAlgorithms[0];
+    emptyAlgorithm;
   const [form, setForm] = useState(() => algorithmToEditorForm(selectedAlgorithm));
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>(
     'idle',
@@ -125,7 +121,7 @@ export function AlgorithmsPage({
   const [createForm, setCreateForm] = useState<EditorForm>(() => ({
     algorithmKind: 'ChangeReport',
     expression: 'a + b + c',
-    inputPoints: fallbackAlgorithms[0].inputIds.join(', '),
+    inputPoints: '',
     outputPoint: 'algorithm.output',
     reportMode: 'OnChange',
     sink: 'velamq-main',
@@ -146,7 +142,7 @@ export function AlgorithmsPage({
     currentPage * pageSize,
   );
   const activeEdge =
-    edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
+    edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? emptyEdge;
   const dslPreview = useMemo(() => buildAlgorithmDsl(form), [form]);
   const createDslPreview = useMemo(() => buildAlgorithmDsl(createForm), [createForm]);
 
@@ -251,7 +247,7 @@ export function AlgorithmsPage({
             <>
               <button
                 className="secondary-button"
-                disabled={actionState === 'assessing'}
+                disabled={actionState === 'assessing' || !selectedEdgeId}
                 onClick={() => {
                   void handleAssessRisk();
                 }}
@@ -262,7 +258,7 @@ export function AlgorithmsPage({
               </button>
               <button
                 className="primary-button"
-                disabled={actionState === 'creating'}
+                disabled={actionState === 'creating' || !selectedEdgeId}
                 onClick={() => setCreateDialogOpen(true)}
                 type="button"
               >
@@ -310,6 +306,13 @@ export function AlgorithmsPage({
                 </tr>
               </thead>
               <tbody>
+                {visibleAlgorithms.length === 0 ? (
+                  <tr>
+                    <td className="table-empty-cell" colSpan={isConfigureMode ? 6 : 5}>
+                      暂无算法配置
+                    </td>
+                  </tr>
+                ) : null}
                 {visibleAlgorithms.map((algorithm) => (
                   <tr key={`${algorithm.edgeId}:${algorithm.algorithmId}`}>
                     <td>

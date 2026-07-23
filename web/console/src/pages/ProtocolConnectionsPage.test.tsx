@@ -3,9 +3,15 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { ProtocolConnectionsPage } from './ProtocolConnectionsPage';
 
+const connectionFixture = {
+  edgeId: 'edge-dev', connectionId: 'modbus-line-a', protocol: 'Modbus TCP',
+  protocolType: 'ModbusTcp' as const, endpoint: '10.12.0.20:502', status: '启用',
+  policy: '1000ms timeout / 3 retry',
+};
+
 describe('ProtocolConnectionsPage', () => {
   it('shows protocol connection table and editor fields', () => {
-    render(<ProtocolConnectionsPage selectedEdgeId="edge-dev" />);
+    render(<ProtocolConnectionsPage connections={[connectionFixture]} selectedEdgeId="edge-dev" />);
 
     expect(screen.getByText('连接清单')).toBeInTheDocument();
     expect(
@@ -17,7 +23,7 @@ describe('ProtocolConnectionsPage', () => {
   });
 
   it('shows an explicit row action for editing protocol connections', () => {
-    render(<ProtocolConnectionsPage selectedEdgeId="edge-dev" />);
+    render(<ProtocolConnectionsPage connections={[connectionFixture]} selectedEdgeId="edge-dev" />);
 
     expect(screen.getByRole('columnheader', { name: '操作' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '修改连接 modbus-line-a' }));
@@ -31,6 +37,7 @@ describe('ProtocolConnectionsPage', () => {
 
     render(
       <ProtocolConnectionsPage
+        connections={[connectionFixture]}
         selectedEdgeId="edge-dev"
         onSaveConnection={onSaveConnection}
       />,

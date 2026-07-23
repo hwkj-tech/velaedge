@@ -88,6 +88,7 @@ impl EdgeConfigSyncClient for HttpEdgeConfigSyncClient {
         self.client
             .post(self.endpoint(edge_id, "reported-config")?)
             .json(&EdgeReportedConfigRequest {
+                desired_version: version.to_string(),
                 reported_version: version.to_string(),
             })
             .send()
@@ -110,6 +111,7 @@ struct EdgeDesiredConfigResponse {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EdgeReportedConfigRequest {
+    desired_version: String,
     reported_version: String,
 }
 

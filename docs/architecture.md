@@ -1,4 +1,4 @@
-# Architecture
+# VelaEdge Architecture
 
 ## System Boundaries
 
@@ -23,7 +23,7 @@ Shared contracts used by both edge and cloud:
 - `DeviceShadow`: latest known local device state.
 - `CloudEnvelope`: versioned message wrapper for edge-cloud communication.
 - `EdgeLinkMessage`: private runtime-cloud message contract carried over a runtime-initiated TCP session.
-- `AlgorithmSpec`: deterministic point-driven DSL for window, change, deadband, expression, merge, and threshold computation nodes.
+- `AlgorithmSpec`: deterministic point-driven DSL for window, change, deadband, expression, merge, and threshold computation nodes. The only executable engine is `Rule`; legacy `Wasm`, `Onnx`, and `Python` values are accepted solely while reading older persisted packages and normalize to `Rule` on the next write.
 - `EdgeConfigPackage`: edge-targeted configuration bundle with devices, protocol connections, MQTT uplinks, point mappings, collection tasks, algorithms, data configs, and their visual graph.
 
 ### `crates/edge-runtime`
@@ -101,8 +101,9 @@ Built-in management UI:
 10. Cloud creates a versioned `EdgeConfigPackage`.
 11. Release validation checks references, duplicate ids, graph topology, and edge target consistency.
 12. Cloud Edge Gateway sends the desired version through EdgeLink after the runtime connects.
-13. Edge runtime validates locally, persists desired/applied state, and reports the applied version.
-14. Cloud compares desired and reported versions and records audit events.
+13. Edge runtime validates locally, persists desired/applied state, and reports both the desired version being acknowledged and the applied result.
+14. Cloud correlates the report with the exact pending release. A successful report advances the edge's reported product version; a rejected or failed report records the failure without replacing the last successfully applied version.
+15. Cloud compares desired and reported versions and records audit events. Rollback uses the same exact-version acknowledgement path, so an older target version cannot be confused with a newer superseded release.
 
 The cloud console owns authoring, validation, release planning, and auditability. The edge runtime owns real protocol execution, local storage, policy checks, and offline behavior.
 
@@ -129,7 +130,7 @@ client actor fields cannot spoof ownership or attribution.
 Storage is split by side:
 
 - Cloud uses SQLite for projects, products, point sets, product bindings, fleet metadata, edge config versions, audit records, latest runtime status, MQTT uplinks, discovery evidence, and release state.
-- Edge runtime uses RocksDB for desired/applied config, active runtime version, and an ordered MQTT outbox. Failed messages survive restart and are replayed in sequence. QoS 1 entries are removed after matching PUBACK and QoS 2 entries after matching PUBCOMP. Multi-broker routing is implemented per `sink_id`; `mqtt-acceptance` performs a deployment-level SUBACK, publish ACK, and payload readback check against the target velaMQ environment.
+- Edge runtime uses RocksDB for desired/applied config, active runtime version, and an ordered MQTT outbox. Failed messages survive restart and are replayed in sequence. QoS 1 entries are removed after matching PUBACK and QoS 2 entries after matching PUBCOMP. Each acknowledgement atomically replaces its outbox entry with a bounded route receipt containing `sink_id`, broker, client id, topic, QoS, timestamp, and payload size; the latest 1,000 receipts are retained without payload bytes or credentials. Multi-broker routing is implemented per `sink_id`; `mqtt-acceptance` performs a deployment-level SUBACK, publish ACK, and payload readback check against the target velaMQ environment.
 - JSONL can remain as a development adapter behind `LocalStore`.
 - Parquet for batch-friendly history.
 - Hybrid RocksDB plus object upload for low-cost offline capture.
@@ -148,8 +149,11 @@ edge runtime -> EdgeLink TCP session -> Cloud Edge Gateway -> Cloud Control / Ag
 - Production transport is EdgeLink over TCP + TLS 1.3 with mTLS certificates.
 - `cloud-api` enables mTLS when `EDGEOPS_GATEWAY_TLS_CERT`, `EDGEOPS_GATEWAY_TLS_KEY`, and `EDGEOPS_GATEWAY_TLS_CLIENT_CA` are configured together; partial configuration fails closed.
 - Runtime uses the same fail-closed rule for `--edgelink-tls-ca`, `--edgelink-tls-cert`, and `--edgelink-tls-key`; metrics, events, config deployment reports, and optional MQTT collection all remain inside that TLS session.
+- Runtime keeps a host-system sampler alive across heartbeats and reports current global CPU usage, used/total memory, matching-filesystem usage, and process uptime. These values come from the operating system even when the southbound protocol adapter is configured in simulated mode.
+- Collection success rate and latency come from the completed collection cycle. Protocol entries become connected only after that connection has completed a read, and DSL algorithm entries appear only after actual execution; configured but unused connections and nodes are not reported as healthy observations. The Runtime also reports the RocksDB filesystem usage instead of a fixed local-store percentage.
+- A southbound collection failure does not tear down the EdgeLink control session or roll back an otherwise valid configuration. Runtime reports the failed cycle, protocol error counters, and a degraded or critical health state while continuing heartbeats and accepting cloud commands.
 - The EdgeLink frame is a 4-byte big-endian length prefix followed by a versioned JSON message.
-- HTTP is retained for the management console/admin API and temporary development compatibility only.
+- HTTP is retained for the management console/admin API and temporary development compatibility only. The compatibility Runtime report sends both `desiredVersion` and `reportedVersion`; Cloud rejects ambiguous pending releases instead of guessing by ordering, matching the EdgeLink acknowledgement semantics.
 - Cloud Edge Gateway and Cloud Agent Service may run in one cloud process for the MVP, but their code responsibilities stay separate.
 
 Each real device protocol adapter should keep low-level driver details isolated:
@@ -171,7 +175,8 @@ Recommended first adapters:
 - DL/T645 for electric meters.
 - IEC 101 for power and telemetry devices.
 - Custom serial framing for project-specific instruments.
-- Modbus TCP and OPC UA can remain future adapters when Ethernet devices enter scope.
+- Modbus TCP is implemented with bounded connect/request timeouts, MBAP transaction validation,
+  exception handling, and function 01/03/04 reads. OPC UA remains future adapter work.
 - Siemens S7 for PLC integration.
 - Omron FINS for Omron PLCs.
 - BACnet for building automation.
@@ -186,10 +191,12 @@ Acceptance requires private-CA validation, unauthenticated-client rejection, QoS
 and exact subscriber payload readback. Evidence is retained under
 `target/velamq-acceptance-*`; broker unit mocks are not accepted as deployment evidence.
 
-The automated serial transport gate uses a Unix PTY to exercise the production tokio-serial
-factory, RAW binary mode, timeout behavior, and complete Modbus RTU frame exchange. Hardware
-acceptance still verifies the USB/RS-485 adapter, line termination, direction control, configured
-baud/parity, slave timing, and representative field devices.
+The automated serial protocol gate uses Unix PTYs to exercise the production tokio-serial factory,
+RAW binary mode, timeout behavior, and complete Modbus RTU, DL/T 645, and IEC 101 exchanges. The
+same tests execute `ConfiguredEdgeRuntime`, build the configured JSON payload, publish through the
+production MQTT client, and require a QoS 1 PUBACK. Hardware acceptance still verifies the
+USB/RS-485 adapter, line termination, direction control, configured baud/parity, slave timing, and
+representative field devices.
 
 ## Agent Direction
 

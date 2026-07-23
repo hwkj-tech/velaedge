@@ -341,6 +341,7 @@ async fn runtime_client_publishes_mqtt_after_edgelink_config_deploy() {
 
         let metrics = read_one_message(&mut stream).await;
         write_ack_for(&mut stream, &metrics).await;
+        metrics
     });
 
     let mut mqtt = RecordingMqttPublisher::default();
@@ -364,7 +365,16 @@ async fn runtime_client_publishes_mqtt_after_edgelink_config_deploy() {
     assert_eq!(report.mqtt_messages_published, 1);
     assert_eq!(mqtt.messages().len(), 1);
     assert_eq!(mqtt.messages()[0].topic, "velamq/edge-dev/pump-1/pressure");
-    gateway.await.expect("gateway task should finish");
+    let metrics = gateway.await.expect("gateway task should finish");
+    let EdgeLinkPayload::RuntimeMetrics(snapshot) = metrics.payload else {
+        panic!("expected runtime metrics");
+    };
+    assert_eq!(snapshot.collection.success_rate, 1.0);
+    assert!(snapshot.collection.average_latency_ms >= 1);
+    assert_eq!(snapshot.protocols.len(), 1);
+    assert_eq!(snapshot.protocols[0].connection_id, "sim-main");
+    assert!(snapshot.protocols[0].connected);
+    assert!(snapshot.protocols[0].latency_ms >= 1);
 }
 
 #[tokio::test]
@@ -422,8 +432,75 @@ async fn runtime_client_publishes_data_config_json_after_edgelink_config_deploy(
     assert_eq!(mqtt.messages()[0].topic, "factory/edge-dev/pump-1/status");
     let payload: serde_json::Value = serde_json::from_slice(&mqtt.messages()[0].payload).unwrap();
     assert_eq!(payload["config_id"], "pump_status");
-    assert_eq!(payload["values"]["pressure"], 1.0);
+    let pressure = payload["values"]["pressure"]
+        .as_f64()
+        .expect("simulated pressure should be numeric");
+    assert!((2.22..=2.58).contains(&pressure));
     gateway.await.expect("gateway task should finish");
+}
+
+#[tokio::test]
+async fn runtime_keeps_edgelink_online_when_an_active_protocol_is_unavailable() {
+    let directory = tempdir().expect("temp directory should be created");
+    let store = RocksEdgeRuntimeStore::open(directory.path()).expect("store should open");
+    let package = EdgeConfigPackage::new("edge-dev", "2026.07.23-unavailable-serial")
+        .with_device(DeviceInstance::new("meter-1", "meter"))
+        .with_protocol_connection(ProtocolConnection::modbus_rtu_serial(
+            "serial-offline",
+            SerialConnectionSettings::new("/dev/edgeops-device-does-not-exist", 9600),
+        ))
+        .with_point_mapping(TelemetryPointMapping::new(
+            "voltage",
+            "meter-1",
+            "voltage",
+            "serial-offline",
+            PointAddress::modbus_holding_register(40001),
+            TelemetryType::Float,
+        ));
+    store
+        .put_desired_config(&package)
+        .expect("desired config should persist");
+    store
+        .promote_active_config("edge-dev", &package.version)
+        .expect("config should become active");
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let gateway_addr = listener.local_addr().expect("listener should expose addr");
+    let gateway = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("runtime should connect");
+        let hello = read_one_message(&mut stream).await;
+        write_ack_for(&mut stream, &hello).await;
+        let metrics = read_one_message(&mut stream).await;
+        write_ack_for(&mut stream, &metrics).await;
+        metrics
+    });
+
+    let report = publish_edgelink_runtime_status_with_store_once(
+        &gateway_addr.to_string(),
+        "edge-dev",
+        "runtime-dev",
+        "0.1.0",
+        runtime_metrics("edge-dev", "runtime-dev"),
+        Vec::new(),
+        &store,
+    )
+    .await
+    .expect("protocol failure should not terminate the EdgeLink control session");
+
+    assert_eq!(report.acked_message_count, 1);
+    assert_eq!(report.samples_collected, 0);
+    let metrics = gateway.await.expect("gateway task should finish");
+    let EdgeLinkPayload::RuntimeMetrics(snapshot) = metrics.payload else {
+        panic!("expected runtime metrics");
+    };
+    assert_eq!(snapshot.collection.success_rate, 0.0);
+    assert_eq!(snapshot.collection.bad_point_count, 1);
+    assert_eq!(snapshot.health, EdgeHealth::Degraded);
+    assert_eq!(snapshot.protocols.len(), 1);
+    assert!(!snapshot.protocols[0].connected);
+    assert_eq!(snapshot.protocols[0].error_count, 1);
 }
 
 #[tokio::test]

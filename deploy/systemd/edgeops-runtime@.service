@@ -1,0 +1,37 @@
+[Unit]
+Description=VelaEdge Runtime (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=edgeops-runtime
+Group=edgeops-runtime
+WorkingDirectory=/var/lib/edgeops-runtime/%i
+EnvironmentFile=/etc/edgeops/runtime/%i.env
+ExecStart=/opt/edgeops/bin/edge-runtime \
+  --edge-id ${EDGEOPS_EDGE_ID} \
+  --device-id ${EDGEOPS_DEVICE_ID} \
+  --runtime-id ${EDGEOPS_RUNTIME_ID} \
+  --storage /var/lib/edgeops-runtime/%i/telemetry.jsonl \
+  --runtime-db /var/lib/edgeops-runtime/%i/runtime.rocksdb \
+  --cloud-gateway-addr ${EDGEOPS_GATEWAY_ADDR} \
+  --edgelink-tls-ca ${EDGEOPS_EDGELINK_CA} \
+  --edgelink-tls-cert ${EDGEOPS_EDGELINK_CERT} \
+  --edgelink-tls-key ${EDGEOPS_EDGELINK_KEY} \
+  --edgelink-tls-server-name ${EDGEOPS_EDGELINK_SERVER_NAME} \
+  --access-token-env EDGEOPS_EDGE_TOKEN \
+  --mqtt-uplink \
+  --edgelink-daemon
+Restart=always
+RestartSec=3s
+TimeoutStopSec=30s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/edgeops-runtime/%i
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

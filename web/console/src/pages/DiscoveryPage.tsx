@@ -10,7 +10,7 @@ import { displayError } from '../utils/errors';
 
 export function DiscoveryPage({
   onRunDiscovery,
-  selectedEdgeId = 'edge-dev',
+  selectedEdgeId = '',
   suggestions = [],
 }: {
   onRunDiscovery?: (
@@ -20,7 +20,7 @@ export function DiscoveryPage({
   selectedEdgeId?: string;
   suggestions?: PointMappingSuggestionResponse[];
 }) {
-  const [connectionId, setConnectionId] = useState('modbus-line-a');
+  const [connectionId, setConnectionId] = useState('');
   const [addressRange, setAddressRange] = useState('holding_register:40001-40002');
   const [rows, setRows] = useState(suggestions);
   const [status, setStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
@@ -55,7 +55,7 @@ export function DiscoveryPage({
           </span>
           <button
             className="primary-button"
-            disabled={status === 'running'}
+            disabled={status === 'running' || !selectedEdgeId || !connectionId.trim()}
             onClick={() => {
               void handleRun();
             }}

@@ -185,7 +185,8 @@ async fn authenticated_agent_uses_server_principal_for_ownership_and_audit() {
     assert_eq!(proposal["createdBy"], "config-operator");
     let proposal_id = proposal["proposalId"].as_str().unwrap();
 
-    let reviewed = router
+    let operator_review = router
+        .clone()
         .oneshot(
             Request::post(format!("/api/agent/proposals/{proposal_id}/approve"))
                 .header("authorization", bearer(OPERATOR_TOKEN))
@@ -201,10 +202,72 @@ async fn authenticated_agent_uses_server_principal_for_ownership_and_audit() {
         )
         .await
         .unwrap();
+    assert_eq!(operator_review.status(), StatusCode::FORBIDDEN);
+
+    let reviewed = router
+        .oneshot(
+            Request::post(format!("/api/agent/proposals/{proposal_id}/approve"))
+                .header("authorization", bearer(ADMIN_TOKEN))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "reviewer": "spoofed-reviewer",
+                        "note": "进入人工发布流程"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(reviewed.status(), StatusCode::OK);
     let body = to_bytes(reviewed.into_body(), usize::MAX).await.unwrap();
     let reviewed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(reviewed["reviewedBy"], "config-operator");
+    assert_eq!(reviewed["reviewedBy"], "platform-admin");
+}
+
+#[tokio::test]
+async fn authenticated_admin_cannot_review_own_agent_proposal() {
+    let router = rbac_router();
+    let created = router
+        .clone()
+        .oneshot(
+            Request::post("/api/agent/proposals")
+                .header("authorization", bearer(ADMIN_TOKEN))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "agentId": "edgeops-agent",
+                        "kind": "config_suggestion",
+                        "title": "调整采集周期",
+                        "summary": "将压力点采集周期调整为 2 秒",
+                        "risk": "low",
+                        "createdBy": "spoofed-admin"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let body = to_bytes(created.into_body(), usize::MAX).await.unwrap();
+    let proposal: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let proposal_id = proposal["proposalId"].as_str().unwrap();
+
+    let reviewed = router
+        .oneshot(
+            Request::post(format!("/api/agent/proposals/{proposal_id}/approve"))
+                .header("authorization", bearer(ADMIN_TOKEN))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"reviewer": "spoofed-reviewer", "note": "同意"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reviewed.status(), StatusCode::CONFLICT);
 }
 
 fn bearer(token: &str) -> String {
@@ -765,7 +828,6 @@ async fn data_config_endpoint_rejects_unknown_points_and_duplicate_json_fields()
                         "algorithmId": "pressure-field-collision",
                         "version": "1.0.0",
                         "algorithmKind": "ChangeReport",
-                        "runtime": "Rule",
                         "dsl": {
                             "inputs": [{"alias": "p", "pointId": "pressure"}],
                             "trigger": {"type": "onSample"},
@@ -930,7 +992,8 @@ async fn management_endpoints_return_seeded_control_plane_data() {
     let algorithms: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(algorithms[0]["algorithmId"], "pump-anomaly-v1");
     assert_eq!(algorithms[0]["execution"], "边端本地执行");
-    assert_eq!(algorithms[0]["runtime"], "Onnx");
+    assert_eq!(algorithms[0]["runtime"], "Rule");
+    assert_eq!(algorithms[0]["dsl"]["trigger"]["type"], "onAnyInput");
     assert_eq!(algorithms[0]["inputIds"], json!(["pressure", "running"]));
 
     let audit_response = router
@@ -948,6 +1011,48 @@ async fn management_endpoints_return_seeded_control_plane_data() {
     let audit_records: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(audit_records[0]["actor"], "system");
     assert!(audit_records[0]["action"].is_string());
+}
+
+#[tokio::test]
+async fn global_config_lists_only_expose_each_edges_latest_package() {
+    let state = AppState::default();
+    let (expected_connections, expected_tasks, expected_algorithms) = {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        let mut next = store
+            .latest_config_package_for_edge("edge-dev")
+            .cloned()
+            .expect("demo edge config exists");
+        next.version = "zzzz-latest-regression".to_string();
+        store.upsert_config_package(next);
+
+        store
+            .edge_nodes()
+            .filter_map(|edge| store.latest_config_package_for_edge(&edge.edge_id))
+            .fold((0, 0, 0), |totals, package| {
+                (
+                    totals.0 + package.protocol_connections.len(),
+                    totals.1 + package.collection_tasks.len(),
+                    totals.2 + package.algorithms.len(),
+                )
+            })
+    };
+    let router = app(state);
+
+    for (path, expected) in [
+        ("/api/protocol-connections", expected_connections),
+        ("/api/collection-tasks", expected_tasks),
+        ("/api/algorithms", expected_algorithms),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "path {path}");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let rows: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(rows.len(), expected, "path {path}");
+    }
 }
 
 #[tokio::test]
@@ -1346,7 +1451,7 @@ async fn edge_algorithms_endpoint_returns_selected_edge_algorithms() {
 
     assert_eq!(payload[0]["edgeId"], "edge-dev");
     assert_eq!(payload[0]["algorithmId"], "pump-anomaly-v1");
-    assert_eq!(payload[0]["runtime"], "Onnx");
+    assert_eq!(payload[0]["runtime"], "Rule");
     assert_eq!(payload[0]["inputIds"], json!(["pressure", "running"]));
     assert_eq!(payload[0]["outputIds"], json!(["pump.anomaly_score"]));
 }
@@ -1509,7 +1614,6 @@ async fn draft_create_endpoints_accept_user_defined_config_resources() {
                     json!({
                         "algorithmId": "thermal-rule",
                         "version": "1.0.0",
-                        "runtime": "Rule",
                         "inputIds": ["temperature"],
                         "outputIds": ["thermal.alert"]
                     })
@@ -1778,6 +1882,64 @@ async fn agent_proposal_review_is_persisted_governance_not_release_execution() {
         .audit_records()
         .iter()
         .any(|record| record.actor == "reviewer-a"));
+}
+
+#[tokio::test]
+async fn high_risk_agent_proposal_approval_requires_review_note() {
+    let router = app(AppState::default());
+    let created = router
+        .clone()
+        .oneshot(
+            Request::post("/api/agent/proposals")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "agentId": "fleet-agent",
+                        "kind": "command_candidate",
+                        "title": "调整生产泵速度",
+                        "summary": "建议调整生产泵运行速度",
+                        "risk": "high",
+                        "createdBy": "operator-a"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let body = to_bytes(created.into_body(), usize::MAX).await.unwrap();
+    let proposal: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let proposal_id = proposal["proposalId"].as_str().unwrap();
+
+    let missing_note = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/agent/proposals/{proposal_id}/approve"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"reviewer": "reviewer-a"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_note.status(), StatusCode::BAD_REQUEST);
+
+    let approved = router
+        .oneshot(
+            Request::post(format!("/api/agent/proposals/{proposal_id}/approve"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "reviewer": "reviewer-a",
+                        "note": "已核对联锁条件，仅允许进入人工配置流程"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approved.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -2982,7 +3144,7 @@ async fn runtime_metrics_endpoint_accepts_edge_snapshot_and_returns_status() {
         "edge_id": "edge-dev",
         "runtime_id": "runtime-dev",
         "config_version": "2026.06.26-002",
-        "timestamp": "2026-06-26T10:00:00Z",
+        "timestamp": chrono::Utc::now().to_rfc3339(),
         "health": "Degraded",
         "system": {
             "cpu_percent": 72.5,
@@ -3041,6 +3203,73 @@ async fn runtime_metrics_endpoint_accepts_edge_snapshot_and_returns_status() {
     assert_eq!(payload["averageCollectionLatencyMs"], 41);
     assert_eq!(payload["edges"][0]["health"], "Degraded");
     assert_eq!(payload["edges"][0]["system"]["cpu_percent"], 72.5);
+}
+
+#[tokio::test]
+async fn runtime_status_marks_stale_snapshots_offline() {
+    let router = app(AppState::default());
+    let snapshot = json!({
+        "edge_id": "edge-dev",
+        "runtime_id": "runtime-stale",
+        "config_version": "2026.06.26-002",
+        "timestamp": "2026-06-26T10:00:00Z",
+        "health": "Healthy",
+        "system": {
+            "cpu_percent": 21.0,
+            "memory_percent": 42.0,
+            "disk_percent": 61.0,
+            "process_uptime_seconds": 3600
+        },
+        "collection": {
+            "active_task_count": 1,
+            "success_rate": 1.0,
+            "average_latency_ms": 10,
+            "bad_point_count": 0
+        },
+        "protocols": [{
+            "connection_id": "modbus-line-a",
+            "protocol": "Modbus TCP",
+            "connected": true,
+            "latency_ms": 10,
+            "timeout_count": 0,
+            "error_count": 0,
+            "reconnect_count": 0
+        }],
+        "local_store": {
+            "backend": "rocksdb",
+            "buffered_records": 0,
+            "oldest_buffer_age_seconds": 0,
+            "disk_usage_percent": 61.0
+        },
+        "algorithms": [],
+        "cloud_sync": {
+            "connected": true,
+            "last_sync_seconds_ago": 0,
+            "pending_uploads": 0,
+            "desired_version": "2026.06.26-002",
+            "reported_version": "2026.06.26-002"
+        }
+    });
+
+    let response = router
+        .oneshot(
+            Request::post("/api/edges/edge-dev/runtime-metrics")
+                .header("content-type", "application/json")
+                .body(Body::from(snapshot.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["healthyEdgeCount"], 0);
+    assert_eq!(payload["criticalEdgeCount"], 1);
+    assert_eq!(payload["averageCollectionLatencyMs"], 0);
+    assert_eq!(payload["edges"][0]["health"], "Offline");
+    assert_eq!(payload["edges"][0]["cloud_sync"]["connected"], false);
+    assert_eq!(payload["edges"][0]["protocols"][0]["connected"], false);
 }
 
 #[tokio::test]
@@ -3373,4 +3602,97 @@ async fn edge_reported_config_endpoint_marks_release_applied() {
         "2026.06.26-010"
     );
     assert_eq!(payload["applyResults"][0]["result"], "已应用");
+}
+
+#[tokio::test]
+async fn edge_reported_config_requires_and_uses_exact_desired_version_when_pending_is_ambiguous() {
+    let router = app(AppState::default());
+    let package = |version: &str| {
+        json!({
+            "edge_id": "edge-dev",
+            "version": version,
+            "device_models": [],
+            "devices": [{"device_id": "pump-1", "device_type": "pump"}],
+            "protocol_connections": [{"connection_id": "sim-main", "protocol": "Simulated", "endpoint": null}],
+            "point_mappings": [{
+                "point_id": "pressure",
+                "device_id": "pump-1",
+                "semantic_id": "pressure",
+                "protocol_connection_id": "sim-main",
+                "address": {"kind": "simulated", "value": "pressure"},
+                "value_type": "Float",
+                "unit": "MPa",
+                "range": null,
+                "interval_ms": 1000
+            }],
+            "collection_tasks": [{
+                "task_id": "pump-main",
+                "device_id": "pump-1",
+                "point_ids": ["pressure"],
+                "interval_ms": 1000,
+                "enabled": true
+            }],
+            "algorithms": []
+        })
+    };
+
+    for version in ["2026.06.26-010", "2026.06.26-011"] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::post("/api/releases")
+                    .header("content-type", "application/json")
+                    .body(Body::from(package(version).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    let ambiguous = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/reported-config")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"reportedVersion": "not-a-pending-version"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ambiguous.status(), StatusCode::CONFLICT);
+    let body = to_bytes(ambiguous.into_body(), usize::MAX).await.unwrap();
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        error["message"],
+        "multiple pending releases require desiredVersion"
+    );
+
+    let exact = router
+        .oneshot(
+            Request::post("/api/edges/edge-dev/reported-config")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "desiredVersion": "2026.06.26-010",
+                        "reportedVersion": "2026.06.26-010"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(exact.status(), StatusCode::OK);
+    let body = to_bytes(exact.into_body(), usize::MAX).await.unwrap();
+    let releases: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let results = releases["applyResults"].as_array().unwrap();
+    assert!(results.iter().any(|release| {
+        release["desiredVersion"] == "2026.06.26-010" && release["result"] == "已应用"
+    }));
+    assert!(results.iter().any(|release| {
+        release["desiredVersion"] == "2026.06.26-011" && release["result"] == "等待下发"
+    }));
 }

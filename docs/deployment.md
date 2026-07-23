@@ -1,4 +1,4 @@
-# EdgeOps Deployment And Recovery
+# VelaEdge Deployment And Recovery
 
 ## Production Baseline
 
@@ -12,6 +12,7 @@ Required cloud settings:
 export EDGEOPS_CLOUD_DB='sqlite:///var/lib/edgeops/cloud-agent.sqlite?mode=rwc'
 export EDGEOPS_HTTP_ADDR='0.0.0.0:8080'
 export EDGEOPS_GATEWAY_ADDR='0.0.0.0:18080'
+export EDGEOPS_CONSOLE_DIST='/opt/edgeops/console'
 export EDGEOPS_API_AUTH_MODE='required'
 export EDGEOPS_BOOTSTRAP_MODE='empty'
 export EDGEOPS_VIEWER_TOKEN='replace-with-a-secret-of-at-least-24-characters'
@@ -21,6 +22,28 @@ export EDGEOPS_GATEWAY_TLS_CERT='/etc/edgeops/tls/current/server.pem'
 export EDGEOPS_GATEWAY_TLS_KEY='/etc/edgeops/tls/current/server-key.pem'
 export EDGEOPS_GATEWAY_TLS_CLIENT_CA='/etc/edgeops/tls/current/runtime-ca.pem'
 ```
+
+Reference systemd units and environment templates are provided under `deploy/systemd` and
+`deploy/env`. Install the two Rust binaries under `/opt/edgeops/bin`, copy the built console
+contents from `web/console/dist` to `/opt/edgeops/console`, and store populated environment files
+under `/etc/edgeops`. Environment files contain secrets and must be owned by the service account
+with mode `0600`; never install the example placeholder values unchanged.
+
+For Cloud:
+
+```bash
+install -m 0755 target/release/cloud-api /opt/edgeops/bin/cloud-api
+cp -R web/console/dist/. /opt/edgeops/console/
+install -m 0644 deploy/systemd/edgeops-cloud.service /etc/systemd/system/
+install -m 0600 deploy/env/cloud.env.example /etc/edgeops/cloud.env
+systemctl daemon-reload
+systemctl enable --now edgeops-cloud
+```
+
+For each Runtime, create `/etc/edgeops/runtime/EDGE_ID.env`, provision its mTLS identity and
+one-time edge token, ensure the `edgeops-runtime` account can open the selected serial device, then
+start `edgeops-runtime@EDGE_ID.service`. The service passes only the token variable name on the
+command line, so the secret itself is not exposed by the process list.
 
 `empty` is the production bootstrap mode: it preserves only records already stored in SQLite and
 does not create sample projects, products, edges, metrics, or configuration. When bootstrap mode is
@@ -77,7 +100,7 @@ Back up TLS keys and CA material through the organization's secret manager, not 
 
 ## Certificate Rotation
 
-Issue server and runtime certificates from a dedicated EdgeOps CA. Use short-lived runtime
+Issue server and runtime certificates from a dedicated VelaEdge CA. Use short-lived runtime
 certificates and a separate enrollment token for first registration. To rotate without downtime:
 
 1. Add the new CA to the trust bundle while retaining the old CA.
@@ -122,6 +145,8 @@ npm --prefix web/console run build
 scripts/run-edgelink-mtls-acceptance.sh
 scripts/run-certificate-lifecycle-acceptance.sh
 scripts/run-performance-gates.sh
+scripts/run-field-preflight-acceptance.sh
+scripts/run-deployment-smoke-acceptance.sh
 ```
 
 Run `scripts/run-real-velamq-acceptance.sh` against the target VelaMQ build when MQTT transport,
@@ -131,6 +156,14 @@ Before approving a site rollout, run `scripts/run-field-hardware-acceptance.sh` 
 host with the released package, production certificate chain, physical serial port, and target MQTT
 broker. Its preflight mode is suitable for deployment preparation but is not field evidence. The
 full procedure and pass criteria are in [`field-acceptance.md`](field-acceptance.md).
+
+The local release profile runs `run-field-preflight-acceptance.sh` automatically when no site
+package is supplied. This controlled fixture checks the field harness, package constraints, serial
+binding, QoS 1 route, and EdgeLink certificate chains. Its report intentionally records
+`physicalDeviceExercised: false`; it is deployment-preparation evidence, not site sign-off.
+The physical profile additionally requires device model/serial identity, explicit operator
+confirmation, a broker-side receipt, and a verifiable `evidence-manifest.json`. Validate retained
+site evidence with `scripts/verify-field-acceptance-report.sh --require-physical REPORT_JSON`.
 
 For the final site sign-off, export the field variables described there and use the strict profile:
 

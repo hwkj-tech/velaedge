@@ -1079,15 +1079,24 @@ fn persist_config_report(
         .applied_version
         .clone()
         .unwrap_or_else(|| "rejected".to_string());
-    ReleaseService::mark_reported(&mut store, release_id, reported_version.clone());
-    let mut reported_node = store
-        .edge_nodes()
-        .find(|node| node.edge_id == edge_id)
-        .cloned();
-    if let Some(node) = reported_node.as_mut() {
-        node.reported_product_version = Some(reported_version.clone());
-        store.register_edge(node.clone());
-    }
+    let updated_release =
+        ReleaseService::mark_reported(&mut store, release_id, reported_version.clone())
+            .ok_or_else(|| {
+                anyhow!("pending release disappeared before config report was applied")
+            })?;
+    let reported_node = if updated_release.status == ReleaseStatus::Applied {
+        let mut node = store
+            .edge_nodes()
+            .find(|node| node.edge_id == edge_id)
+            .cloned();
+        if let Some(node) = node.as_mut() {
+            node.reported_product_version = Some(reported_version.clone());
+            store.register_edge(node.clone());
+        }
+        node
+    } else {
+        None
+    };
     Ok(Some((release_id, reported_version, reported_node)))
 }
 

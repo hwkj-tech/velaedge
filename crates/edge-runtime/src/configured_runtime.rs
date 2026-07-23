@@ -1,10 +1,11 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Instant};
 
 use anyhow::{bail, Result};
 use edge_core::{
-    CollectionTask, DataConfig, DataQuality, DeviceShadow, EdgeConfigPackage, EdgeRuntimeEvent,
-    ProtocolConnection, ProtocolType, RuntimeEventCategory, RuntimeEventSeverity,
-    TelemetryPointMapping, TelemetrySample, TelemetryValue,
+    AlgorithmRuntimeMetrics, CollectionTask, DataConfig, DataQuality, DeviceShadow,
+    EdgeConfigPackage, EdgeRuntimeEvent, ProtocolConnection, ProtocolRuntimeMetrics, ProtocolType,
+    RuntimeEventCategory, RuntimeEventSeverity, TelemetryPointMapping, TelemetrySample,
+    TelemetryType, TelemetryValue,
 };
 
 use crate::{
@@ -12,7 +13,8 @@ use crate::{
     publish_data_config_mqtt_samples_with_outbox, publish_mqtt_samples,
     publish_mqtt_samples_with_outbox, AlgorithmEngine, CollectionReport,
     ConfiguredMqttCollectionReport, CustomSerialAdapter, Dlt645Adapter, Iec101Adapter,
-    ModbusRtuAdapter, MqttPublisher, ProtocolAdapter, RocksEdgeRuntimeStore, SerialBusFactory,
+    ModbusRtuAdapter, ModbusTcpAdapter, MqttPublisher, ProtocolAdapter, RocksEdgeRuntimeStore,
+    SerialBusFactory,
 };
 use crate::{CollectionSchedule, DataConfigSchedule};
 
@@ -93,6 +95,7 @@ pub struct ConfiguredEdgeRuntime<F> {
     serial_bus_factory: F,
     shadows: BTreeMap<String, DeviceShadow>,
     algorithm_engine: AlgorithmEngine,
+    protocol_metrics: BTreeMap<String, ProtocolRuntimeMetrics>,
 }
 
 impl<F> ConfiguredEdgeRuntime<F>
@@ -117,13 +120,40 @@ where
         }
 
         let algorithm_engine = AlgorithmEngine::new(package.algorithms.clone())?;
+        let protocol_metrics = package
+            .protocol_connections
+            .iter()
+            .map(|connection| {
+                (
+                    connection.connection_id.clone(),
+                    ProtocolRuntimeMetrics {
+                        connection_id: connection.connection_id.clone(),
+                        protocol: format_protocol(connection.protocol),
+                        connected: false,
+                        latency_ms: 0,
+                        timeout_count: 0,
+                        error_count: 0,
+                        reconnect_count: 0,
+                    },
+                )
+            })
+            .collect();
 
         Ok(Self {
             package,
             serial_bus_factory,
             shadows,
             algorithm_engine,
+            protocol_metrics,
         })
+    }
+
+    pub fn protocol_runtime_metrics(&self) -> Vec<ProtocolRuntimeMetrics> {
+        self.protocol_metrics.values().cloned().collect()
+    }
+
+    pub fn algorithm_runtime_metrics(&self) -> Vec<AlgorithmRuntimeMetrics> {
+        self.algorithm_engine.runtime_metrics()
     }
 
     pub async fn collect_once(&mut self) -> Result<CollectionReport> {
@@ -566,29 +596,78 @@ where
                 continue;
             }
 
-            let mut connection_samples = match connection.protocol {
-                ProtocolType::Simulated => collect_simulated_samples(&mappings),
+            let connection_id = connection.connection_id.clone();
+            let started = Instant::now();
+            let read_result = match connection.protocol {
+                ProtocolType::Simulated => Ok(collect_simulated_samples(&mappings)),
+                ProtocolType::ModbusTcp => {
+                    let mut adapter = ModbusTcpAdapter::new(connection, mappings);
+                    adapter.read_telemetry().await
+                }
                 ProtocolType::ModbusRtu => {
-                    let bus = self.serial_bus_factory.open(&connection)?;
-                    let mut adapter = ModbusRtuAdapter::new(connection, mappings, bus);
-                    adapter.read_telemetry().await?
+                    let bus = self.serial_bus_factory.open(&connection);
+                    match bus {
+                        Ok(bus) => {
+                            let mut adapter = ModbusRtuAdapter::new(connection, mappings, bus);
+                            adapter.read_telemetry().await
+                        }
+                        Err(error) => Err(error),
+                    }
                 }
                 ProtocolType::Dlt645 => {
-                    let bus = self.serial_bus_factory.open(&connection)?;
-                    let mut adapter = Dlt645Adapter::new(connection, mappings, bus);
-                    adapter.read_telemetry().await?
+                    let bus = self.serial_bus_factory.open(&connection);
+                    match bus {
+                        Ok(bus) => {
+                            let mut adapter = Dlt645Adapter::new(connection, mappings, bus);
+                            adapter.read_telemetry().await
+                        }
+                        Err(error) => Err(error),
+                    }
                 }
                 ProtocolType::Iec101 => {
-                    let bus = self.serial_bus_factory.open(&connection)?;
-                    let mut adapter = Iec101Adapter::new(connection, mappings, bus);
-                    adapter.read_telemetry().await?
+                    let bus = self.serial_bus_factory.open(&connection);
+                    match bus {
+                        Ok(bus) => {
+                            let mut adapter = Iec101Adapter::new(connection, mappings, bus);
+                            adapter.read_telemetry().await
+                        }
+                        Err(error) => Err(error),
+                    }
                 }
                 ProtocolType::CustomSerial => {
-                    let bus = self.serial_bus_factory.open(&connection)?;
-                    let mut adapter = CustomSerialAdapter::new(connection, mappings, bus);
-                    adapter.read_telemetry().await?
+                    let bus = self.serial_bus_factory.open(&connection);
+                    match bus {
+                        Ok(bus) => {
+                            let mut adapter = CustomSerialAdapter::new(connection, mappings, bus);
+                            adapter.read_telemetry().await
+                        }
+                        Err(error) => Err(error),
+                    }
                 }
-                unsupported => bail!("unsupported runtime protocol: {unsupported:?}"),
+                unsupported => Err(anyhow::anyhow!(
+                    "unsupported runtime protocol: {unsupported:?}"
+                )),
+            };
+            let latency_ms = elapsed_millis(started.elapsed());
+            let metric = self
+                .protocol_metrics
+                .get_mut(&connection_id)
+                .expect("configured connection must have a metric entry");
+            metric.latency_ms = latency_ms;
+            let mut connection_samples = match read_result {
+                Ok(samples) => {
+                    metric.connected = true;
+                    samples
+                }
+                Err(error) => {
+                    metric.connected = false;
+                    metric.error_count = metric.error_count.saturating_add(1);
+                    let message = error.to_string().to_ascii_lowercase();
+                    if message.contains("timeout") || message.contains("timed out") {
+                        metric.timeout_count = metric.timeout_count.saturating_add(1);
+                    }
+                    return Err(error);
+                }
             };
             for sample in &connection_samples {
                 if let Some(shadow) = self.shadows.get_mut(&sample.device_id) {
@@ -616,6 +695,28 @@ where
     }
 }
 
+fn elapsed_millis(duration: std::time::Duration) -> u64 {
+    if duration.is_zero() {
+        0
+    } else {
+        duration.as_millis().max(1).min(u128::from(u64::MAX)) as u64
+    }
+}
+
+fn format_protocol(protocol: ProtocolType) -> String {
+    match protocol {
+        ProtocolType::Simulated => "Simulated",
+        ProtocolType::ModbusTcp => "Modbus TCP",
+        ProtocolType::ModbusRtu => "Modbus RTU",
+        ProtocolType::Dlt645 => "DL/T645",
+        ProtocolType::Iec101 => "IEC-101",
+        ProtocolType::CustomSerial => "Custom Serial",
+        ProtocolType::OpcUa => "OPC UA",
+        ProtocolType::SiemensS7 => "Siemens S7",
+    }
+    .to_string()
+}
+
 fn mappings_for_connection(
     mappings: &[TelemetryPointMapping],
     connection: &ProtocolConnection,
@@ -628,16 +729,116 @@ fn mappings_for_connection(
 }
 
 fn collect_simulated_samples(mappings: &[TelemetryPointMapping]) -> Vec<TelemetrySample> {
+    let timestamp = chrono::Utc::now();
     mappings
         .iter()
         .map(|mapping| {
             TelemetrySample::new(
                 &mapping.device_id,
                 &mapping.point_id,
-                TelemetryValue::Float(1.0),
+                simulated_value(mapping, timestamp),
                 DataQuality::Good,
-                chrono::Utc::now(),
+                timestamp,
             )
         })
         .collect()
+}
+
+fn simulated_value(
+    mapping: &TelemetryPointMapping,
+    timestamp: chrono::DateTime<chrono::Utc>,
+) -> TelemetryValue {
+    let seed = mapping.point_id.bytes().fold(0_u64, |value, byte| {
+        value.wrapping_mul(31).wrapping_add(u64::from(byte))
+    });
+    let seconds = timestamp.timestamp_millis() as f64 / 1_000.0;
+    let wave = (seconds / 8.0 + (seed % 360) as f64).sin();
+    let semantic = mapping.semantic_id.to_ascii_lowercase();
+
+    match mapping.value_type {
+        TelemetryType::Boolean => {
+            TelemetryValue::Boolean(((timestamp.timestamp() / 30) + seed as i64) % 2 == 0)
+        }
+        TelemetryType::Integer => {
+            TelemetryValue::Integer((seed % 80) as i64 + timestamp.timestamp().rem_euclid(20))
+        }
+        TelemetryType::Text => TelemetryValue::Text("simulated-ok".to_string()),
+        TelemetryType::Float => {
+            let (base, amplitude) = if semantic.contains("pressure") {
+                (2.40, 0.18)
+            } else if semantic.contains("flow") {
+                (128.0, 6.0)
+            } else if semantic.contains("voltage") {
+                (220.0, 2.5)
+            } else if semantic.contains("current") {
+                (8.4, 0.6)
+            } else if semantic.contains("temperature") || semantic.contains("temp") {
+                (36.5, 1.8)
+            } else {
+                ((seed % 100) as f64, 1.0)
+            };
+            let mut value = base + wave * amplitude;
+            if let Some(range) = mapping.range {
+                value = value.clamp(range.min, range.max);
+            }
+            TelemetryValue::Float((value * 1_000.0).round() / 1_000.0)
+        }
+    }
+}
+
+#[cfg(test)]
+mod simulated_value_tests {
+    use chrono::{TimeZone, Utc};
+    use edge_core::{PointAddress, TelemetryPointMapping, TelemetryType, TelemetryValue};
+
+    use super::simulated_value;
+
+    fn mapping(
+        point_id: &str,
+        semantic_id: &str,
+        value_type: TelemetryType,
+    ) -> TelemetryPointMapping {
+        TelemetryPointMapping::new(
+            point_id,
+            "device-1",
+            semantic_id,
+            "simulated-main",
+            PointAddress::simulated(point_id),
+            value_type,
+        )
+    }
+
+    #[test]
+    fn simulated_values_preserve_declared_types_and_use_realistic_pressure_range() {
+        let timestamp = Utc.timestamp_opt(1_720_000_000, 0).single().unwrap();
+
+        let pressure = simulated_value(
+            &mapping("pressure", "pump.pressure", TelemetryType::Float),
+            timestamp,
+        );
+        let running = simulated_value(
+            &mapping("running", "pump.running", TelemetryType::Boolean),
+            timestamp,
+        );
+        let status = simulated_value(
+            &mapping("status", "pump.status", TelemetryType::Text),
+            timestamp,
+        );
+
+        assert!(matches!(pressure, TelemetryValue::Float(value) if (2.22..=2.58).contains(&value)));
+        assert!(matches!(running, TelemetryValue::Boolean(_)));
+        assert_eq!(status, TelemetryValue::Text("simulated-ok".to_string()));
+    }
+
+    #[test]
+    fn simulated_numeric_values_change_over_time() {
+        let pressure = mapping("pressure", "pump.pressure", TelemetryType::Float);
+        let first = Utc.timestamp_opt(1_720_000_000, 0).single().unwrap();
+        let second = Utc.timestamp_opt(1_720_000_004, 0).single().unwrap();
+
+        assert_ne!(
+            simulated_value(&pressure, first),
+            simulated_value(&pressure, second)
+        );
+    }
 }

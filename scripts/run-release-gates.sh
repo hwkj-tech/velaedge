@@ -15,7 +15,7 @@ case "$PROFILE" in
   *) echo "EDGEOPS_RELEASE_PROFILE must be local or site" >&2; exit 2 ;;
 esac
 
-for command in cargo curl git jq nc npm openssl sqlite3; do
+for command in cargo curl git jq nc npm openssl rg sqlite3; do
   command -v "$command" >/dev/null || {
     echo "missing required release-gate command: $command" >&2
     exit 2
@@ -112,10 +112,28 @@ write_report
 
 run_gate rust-workspace "cargo test --workspace" \
   cargo test --workspace
-run_gate console-tests "119+ component/API tests" \
+run_gate console-tests "complete component/API test suite" \
   npm --prefix web/console test -- --run
 run_gate console-build "web/console/dist" \
   npm --prefix web/console run build
+run_gate deployment-smoke "deployment-smoke/report.json" \
+  env \
+    EDGEOPS_DEPLOY_SMOKE_HTTP_PORT=18253 \
+    EDGEOPS_DEPLOY_SMOKE_GATEWAY_PORT=19253 \
+    EDGEOPS_DEPLOY_SMOKE_WORK_DIR="${WORK_DIR}/deployment-smoke" \
+    "${ROOT_DIR}/scripts/run-deployment-smoke-acceptance.sh"
+run_gate serial-protocol-lab "serial-lab/report.json" \
+  env \
+    EDGEOPS_SERIAL_LAB_WORK_DIR="${WORK_DIR}/serial-lab" \
+    "${ROOT_DIR}/scripts/run-lab-serial-acceptance.sh"
+run_gate modbus-tcp-lab "modbus-tcp-lab/report.json" \
+  env \
+    EDGEOPS_MODBUS_TCP_LAB_WORK_DIR="${WORK_DIR}/modbus-tcp-lab" \
+    "${ROOT_DIR}/scripts/run-lab-modbus-tcp-acceptance.sh"
+run_gate field-report-verifier "field-report-verifier/report.json" \
+  env \
+    EDGEOPS_FIELD_VERIFIER_TEST_WORK_DIR="${WORK_DIR}/field-report-verifier" \
+    "${ROOT_DIR}/scripts/test-field-acceptance-report-verifier.sh"
 
 run_gate edgelink-mtls "edgelink/report.json" \
   env \
@@ -182,7 +200,10 @@ elif [[ -n "${EDGEOPS_FIELD_CONFIG:-}" ]]; then
       EDGEOPS_FIELD_WORK_DIR="${WORK_DIR}/field-preflight" \
       "${ROOT_DIR}/scripts/run-field-hardware-acceptance.sh"
 else
-  skip_gate field-preflight false "set EDGEOPS_FIELD_CONFIG and certificate/serial inputs to run preflight"
+  run_gate field-preflight "field-preflight/report.json" \
+    env \
+      EDGEOPS_FIELD_PREFLIGHT_WORK_DIR="${WORK_DIR}/field-preflight" \
+      "${ROOT_DIR}/scripts/run-field-preflight-acceptance.sh"
 fi
 
 OVERALL_STATUS=passed

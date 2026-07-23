@@ -245,6 +245,7 @@ fn graph_node(node_id: &str, kind: DataConfigGraphNodeKind, ref_id: &str) -> Dat
         kind,
         label: node_id.to_string(),
         ref_id: Some(ref_id.to_string()),
+        params: Default::default(),
         x: 0,
         y: 0,
     }

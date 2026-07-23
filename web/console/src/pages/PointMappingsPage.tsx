@@ -14,59 +14,31 @@ import { Modal } from '../components/Modal';
 import { displayError } from '../utils/errors';
 import './PointMappingsPage.css';
 
-const fallbackPoints: PointMappingResponse[] = [
-  {
-    edgeId: 'edge-dev',
-    pointId: 'pressure',
-    pointName: '泵出口压力',
-    deviceId: 'pump-1',
-    deviceModel: 'pump@v1',
-    semanticTelemetry: 'pump.pressure',
-    protocol: 'Modbus TCP',
-    connection: 'modbus-line-a',
-    address: 'holding_register:40001',
+const emptyPoint: PointMappingResponse = {
+    edgeId: '',
+    pointId: '',
+    pointName: '',
+    deviceId: '',
+    deviceModel: '',
+    semanticTelemetry: '',
+    protocol: '',
+    connection: '',
+    address: 'holding_register:0',
     valueType: 'float32',
-    readWrite: 'read',
-    unit: 'MPa',
-    scale: '0.1',
-    interval: '1000ms',
-    range: '0-20',
-    qualityRule: 'timeout->bad',
-    status: '启用',
-  },
-  {
-    edgeId: 'edge-dev',
-    pointId: 'running',
-    pointName: '运行状态',
-    deviceId: 'pump-1',
-    deviceModel: 'pump@v1',
-    semanticTelemetry: 'pump.running',
-    protocol: 'Modbus TCP',
-    connection: 'modbus-line-a',
-    address: 'coil:00001',
-    valueType: 'bool',
     readWrite: 'read',
     unit: '-',
     scale: '1',
     interval: '1000ms',
     range: '-',
-    qualityRule: 'stale->bad',
-    status: '启用',
-  },
-];
+    qualityRule: '',
+    status: '停用',
+};
 
-const fallbackEdges: EdgeNodeResponse[] = [
-  {
-    edgeId: 'edge-dev',
-    displayName: '研发实验室边端',
-    site: '研发/实验室',
-    runtimeId: 'runtime-dev',
-    status: '健康',
-    resources: '18.5% / 42% / 61%',
-    heartbeat: '8 秒前',
-    capabilities: ['protocol:modbus-tcp'],
-  },
-];
+const emptyPointSet = buildPointSets([emptyPoint])[0];
+const emptyEdge: EdgeNodeResponse = {
+  edgeId: '', displayName: '未选择边端', site: '-', runtimeId: '-', status: '未接入',
+  resources: '-', heartbeat: '-', capabilities: [],
+};
 
 interface PointSet {
   connection: string;
@@ -98,7 +70,7 @@ interface CreatePointSetForm {
 }
 
 export function PointMappingsPage({
-  edges = fallbackEdges,
+  edges = [],
   embedded = false,
   mode = 'configure',
   onCreatePoint,
@@ -106,8 +78,8 @@ export function PointMappingsPage({
   onImportPoints,
   onSavePoint,
   onValidateDraft,
-  points = fallbackPoints,
-  selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
+  points = [],
+  selectedEdgeId = edges[0]?.edgeId ?? '',
 }: {
   edges?: EdgeNodeResponse[];
   embedded?: boolean;
@@ -133,19 +105,19 @@ export function PointMappingsPage({
 }) {
   const pointSets = useMemo(() => buildPointSets(points), [points]);
   const [selectedPointSetId, setSelectedPointSetId] = useState(
-    () => pointSets[0]?.setId ?? buildPointSets(fallbackPoints)[0].setId,
+    () => pointSets[0]?.setId ?? '',
   );
   const selectedPointSet =
     pointSets.find((set) => set.setId === selectedPointSetId) ??
     pointSets[0] ??
-    buildPointSets(fallbackPoints)[0];
+    emptyPointSet;
   const [selectedPointId, setSelectedPointId] = useState(
-    () => selectedPointSet.points[0]?.pointId ?? fallbackPoints[0].pointId,
+    () => selectedPointSet.points[0]?.pointId ?? '',
   );
   const selectedPoint =
     selectedPointSet.points.find((point) => point.pointId === selectedPointId) ??
     selectedPointSet.points[0] ??
-    fallbackPoints[0];
+    emptyPoint;
   const [form, setForm] = useState(() => pointToEditorForm(selectedPoint));
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>(
     'idle',
@@ -154,8 +126,8 @@ export function PointMappingsPage({
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreatePointSetForm>({
-    connectionId: fallbackPoints[0].connection,
-    deviceId: fallbackPoints[0].deviceId,
+    connectionId: '',
+    deviceId: '',
     intervalMs: 1000,
     points: [
       {
@@ -184,7 +156,7 @@ export function PointMappingsPage({
   >('idle');
   const isConfigureMode = mode === 'configure';
   const activeEdge =
-    edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
+    edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? emptyEdge;
 
   useEffect(() => {
     setForm(pointToEditorForm(selectedPoint));
@@ -199,7 +171,7 @@ export function PointMappingsPage({
       !pointSets.some((pointSet) => pointSet.setId === selectedPointSetId)
     ) {
       setSelectedPointSetId(pointSets[0].setId);
-      setSelectedPointId(pointSets[0].points[0]?.pointId ?? fallbackPoints[0].pointId);
+      setSelectedPointId(pointSets[0].points[0]?.pointId ?? '');
     }
   }, [pointSets, selectedPointSetId]);
 
@@ -303,7 +275,7 @@ export function PointMappingsPage({
     (pointSetId) => {
       const pointSet = pointSets.find((item) => item.setId === pointSetId);
       setSelectedPointSetId(pointSetId);
-      setSelectedPointId(pointSet?.points[0]?.pointId ?? fallbackPoints[0].pointId);
+      setSelectedPointId(pointSet?.points[0]?.pointId ?? '');
       setEditDialogOpen(true);
     },
     (pointSetId) => {
@@ -332,7 +304,7 @@ export function PointMappingsPage({
             <>
               <button
                 className="secondary-button"
-                disabled={actionState === 'importing'}
+                disabled={actionState === 'importing' || !selectedEdgeId}
                 onClick={() => {
                   void handleImportPoints();
                 }}
@@ -343,7 +315,7 @@ export function PointMappingsPage({
               </button>
               <button
                 className="secondary-button"
-                disabled={actionState === 'validating'}
+                disabled={actionState === 'validating' || !selectedEdgeId}
                 onClick={() => {
                   void handleValidateDraft();
                 }}
@@ -354,7 +326,7 @@ export function PointMappingsPage({
               </button>
               <button
                 className="primary-button"
-                disabled={actionState === 'creating'}
+                disabled={actionState === 'creating' || !selectedEdgeId}
                 onClick={() => setCreateDialogOpen(true)}
                 type="button"
               >

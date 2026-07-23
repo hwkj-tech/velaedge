@@ -1,0 +1,24 @@
+[Unit]
+Description=VelaEdge Cloud Control Plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=edgeops-cloud
+Group=edgeops-cloud
+WorkingDirectory=/var/lib/edgeops
+EnvironmentFile=/etc/edgeops/cloud.env
+ExecStart=/opt/edgeops/bin/cloud-api
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=30s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/edgeops
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

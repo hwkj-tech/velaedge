@@ -145,7 +145,7 @@ printf '%s' "$RUNTIME_STATUS" | jq -e \
   --arg edge "$EDGE_ID" \
   --arg runtime "$RUNTIME_ID" \
   --arg version "$DESIRED_VERSION" \
-  '.healthyEdgeCount >= 1 and any(.edges[]; .edge_id == $edge and .runtime_id == $runtime and .config_version == $version and .cloud_sync.connected == true and .cloud_sync.reported_version == $version and (.local_store.backend | startswith("rocksdb")))' \
+  '((.healthyEdgeCount + .degradedEdgeCount + .criticalEdgeCount) >= 1) and any(.edges[]; .edge_id == $edge and .runtime_id == $runtime and .config_version == $version and .cloud_sync.connected == true and .cloud_sync.reported_version == $version and (.local_store.backend | startswith("rocksdb")) and (.health == "Healthy" or .health == "Degraded" or .health == "Critical"))' \
   >/dev/null
 printf '%s' "$RELEASES" | jq -e \
   --arg edge "$EDGE_ID" \
@@ -174,6 +174,7 @@ jq -n \
     runtimeId: $runtimeId,
     desiredVersion: $desiredVersion,
     unauthenticatedRuntimeRejected: $unauthenticatedRuntimeRejected,
+    acceptanceScope: "EdgeLink mTLS identity, token authorization, config deployment, RocksDB apply, acknowledgement, capability registration, and runtime metric delivery. Southbound device health is verified by protocol-specific gates.",
     runtimeStatus: $runtimeStatus,
     releases: $releases,
     edgeNodes: $edgeNodes

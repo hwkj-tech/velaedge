@@ -14,43 +14,33 @@ import { PaginationBar } from '../components/PaginationBar';
 import { displayError } from '../utils/errors';
 import './PointMappingsPage.css';
 
-const fallbackTasks: CollectionTaskResponse[] = [
-  {
-    edgeId: 'edge-dev',
-    taskId: 'pump-main',
-    deviceId: 'pump-1',
-    pointIds: ['pressure', 'running'],
-    pointList: 'pressure, running',
+const emptyTask: CollectionTaskResponse = {
+    edgeId: '',
+    taskId: '',
+    deviceId: '',
+    pointIds: [],
+    pointList: '',
     intervalMs: 1000,
     interval: '1000ms',
-    enabled: true,
-    status: '启用',
-  },
-];
+    enabled: false,
+    status: '停用',
+};
 
-const fallbackEdges: EdgeNodeResponse[] = [
-  {
-    edgeId: 'edge-dev',
-    displayName: '研发实验室边端',
-    site: '研发/实验室',
-    runtimeId: 'runtime-dev',
-    status: '健康',
-    resources: '18.5% / 42% / 61%',
-    heartbeat: '8 秒前',
-    capabilities: ['protocol:modbus-tcp'],
-  },
-];
+const emptyEdge: EdgeNodeResponse = {
+  edgeId: '', displayName: '未选择边端', site: '-', runtimeId: '-', status: '未接入',
+  resources: '-', heartbeat: '-', capabilities: [],
+};
 
 export function CollectionTasksPage({
-  edges = fallbackEdges,
+  edges = [],
   embedded = false,
   mode = 'configure',
   onCreateTask,
   onDeleteTask,
   onGenerateSchedule,
   onSaveTask,
-  selectedEdgeId = edges[0]?.edgeId ?? 'edge-dev',
-  tasks = fallbackTasks,
+  selectedEdgeId = edges[0]?.edgeId ?? '',
+  tasks = [],
 }: {
   edges?: EdgeNodeResponse[];
   embedded?: boolean;
@@ -72,11 +62,11 @@ export function CollectionTasksPage({
   tasks?: CollectionTaskResponse[];
 }) {
   const [selectedTaskId, setSelectedTaskId] = useState(
-    () => tasks[0]?.taskId ?? fallbackTasks[0].taskId,
+    () => tasks[0]?.taskId ?? '',
   );
   const [page, setPage] = useState(1);
   const selectedTask =
-    tasks.find((task) => task.taskId === selectedTaskId) ?? tasks[0] ?? fallbackTasks[0];
+    tasks.find((task) => task.taskId === selectedTaskId) ?? tasks[0] ?? emptyTask;
   const [form, setForm] = useState(() => taskToEditorForm(selectedTask));
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>(
     'idle',
@@ -85,10 +75,10 @@ export function CollectionTasksPage({
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [createForm, setCreateForm] = useState({
-    deviceId: fallbackTasks[0].deviceId,
+    deviceId: '',
     enabled: true,
     intervalMs: '1000',
-    pointIds: fallbackTasks[0].pointIds.join(', '),
+    pointIds: '',
     taskId: '',
   });
   const [actionState, setActionState] = useState<
@@ -100,7 +90,7 @@ export function CollectionTasksPage({
   const currentPage = Math.min(page, totalPages);
   const visibleTasks = tasks.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const activeEdge =
-    edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? fallbackEdges[0];
+    edges.find((edge) => edge.edgeId === selectedEdgeId) ?? edges[0] ?? emptyEdge;
 
   useEffect(() => {
     setForm(taskToEditorForm(selectedTask));
@@ -198,7 +188,7 @@ export function CollectionTasksPage({
             <>
               <button
                 className="secondary-button"
-                disabled={actionState === 'scheduling'}
+                disabled={actionState === 'scheduling' || !selectedEdgeId}
                 onClick={() => {
                   void handleGenerateSchedule();
                 }}
@@ -209,7 +199,7 @@ export function CollectionTasksPage({
               </button>
               <button
                 className="primary-button"
-                disabled={actionState === 'creating'}
+                disabled={actionState === 'creating' || !selectedEdgeId}
                 onClick={() => setCreateDialogOpen(true)}
                 type="button"
               >
@@ -358,6 +348,13 @@ export function CollectionTasksPage({
                 </tr>
               </thead>
               <tbody>
+                {visibleTasks.length === 0 ? (
+                  <tr>
+                    <td className="table-empty-cell" colSpan={isConfigureMode ? 6 : 5}>
+                      暂无采集任务
+                    </td>
+                  </tr>
+                ) : null}
                 {visibleTasks.map((task) => (
                   <tr key={`${task.edgeId}:${task.taskId}`}>
                     <td>

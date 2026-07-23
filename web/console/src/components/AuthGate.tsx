@@ -47,7 +47,7 @@ export function AuthGate({
         <header className="auth-header">
           <span className="auth-mark" aria-hidden="true"><ShieldCheck size={22} /></span>
           <div>
-            <span className="auth-kicker">EDGE AGENT CONTROL CENTER</span>
+            <span className="auth-kicker">VELAEDGE CONTROL CENTER</span>
             <h1 id="auth-title">管理控制台认证</h1>
           </div>
         </header>

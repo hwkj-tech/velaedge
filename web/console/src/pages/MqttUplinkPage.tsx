@@ -4,10 +4,10 @@ import { Save } from 'lucide-react';
 import type { MqttUplinkResponse } from '../api/types';
 import { displayError } from '../utils/errors';
 
-const fallbackUplink: MqttUplinkResponse = {
-  sinkId: 'velamq-main',
-  broker: 'mqtts://velamq.local:8883',
-  clientId: 'edge-dev-runtime-dev',
+const emptyUplink: MqttUplinkResponse = {
+  sinkId: '',
+  broker: '',
+  clientId: '',
   topicTemplate: 'edge/{edge_id}/device/{device_id}/telemetry',
   qos: 1,
   batchSize: 100,
@@ -16,8 +16,8 @@ const fallbackUplink: MqttUplinkResponse = {
 
 export function MqttUplinkPage({
   onSave,
-  selectedEdgeId = 'edge-dev',
-  uplink = fallbackUplink,
+  selectedEdgeId = '',
+  uplink = emptyUplink,
 }: {
   onSave?: (
     edgeId: string,
@@ -66,7 +66,7 @@ export function MqttUplinkPage({
           </span>
           <button
             className="primary-button"
-            disabled={saveState === 'saving'}
+            disabled={saveState === 'saving' || !selectedEdgeId}
             onClick={() => {
               void handleSave();
             }}

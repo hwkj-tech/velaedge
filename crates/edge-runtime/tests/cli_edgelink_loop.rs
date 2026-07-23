@@ -48,7 +48,11 @@ fn edge_runtime_cli_reports_metrics_over_edgelink_once() {
     assert!(hello
         .capabilities
         .contains(&"protocol:modbus-rtu".to_string()));
+    assert!(hello
+        .capabilities
+        .contains(&"protocol:modbus-tcp".to_string()));
     assert!(hello.capabilities.contains(&"transport:serial".to_string()));
+    assert!(hello.capabilities.contains(&"transport:tcp".to_string()));
     assert!(hello.capabilities.contains(&"uplink:mqtt".to_string()));
 
     let EdgeLinkPayload::RuntimeMetrics(metrics) = &messages[1].payload else {

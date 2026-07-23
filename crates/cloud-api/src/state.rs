@@ -11,7 +11,8 @@ use cloud_control::{
     ProductVersionStatus, Project, ReleaseRecord, ReleaseService, SqliteCloudStore,
 };
 use edge_core::{
-    AlgorithmDsl, AlgorithmKind, AlgorithmRuntime, AlgorithmSpec, CloudSyncMetrics,
+    AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
+    AlgorithmReportPolicy, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger, CloudSyncMetrics,
     CollectionRuntimeMetrics, CollectionTask, CommandRisk, CommandSpec, DataConfig,
     DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish, DeviceInstance,
     DeviceSpec, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot,
@@ -475,15 +476,24 @@ fn demo_store() -> CloudControlStore {
             .with_algorithm("pump-anomaly-v1"),
         );
     package.device_models.push(pump_model.clone());
-    package.algorithms.push(AlgorithmSpec {
-        id: "pump-anomaly-v1".to_string(),
-        version: "1.0.0".to_string(),
-        kind: AlgorithmKind::ChangeReport,
-        dsl: AlgorithmDsl::default(),
-        runtime: AlgorithmRuntime::Onnx,
-        inputs: vec!["pressure".to_string(), "running".to_string()],
-        outputs: vec!["pump.anomaly_score".to_string()],
-    });
+    package.algorithms.push(AlgorithmSpec::dsl(
+        "pump-anomaly-v1",
+        "1.0.0",
+        AlgorithmKind::ChangeReport,
+        AlgorithmDsl {
+            inputs: vec![
+                AlgorithmInputBinding::new("pressure", "pressure"),
+                AlgorithmInputBinding::new("running", "running"),
+            ],
+            trigger: AlgorithmTrigger::on_any_input(),
+            steps: vec![AlgorithmStep::change_filter("pressure", 0.05)],
+            outputs: vec![AlgorithmOutput::virtual_point(
+                "pressure",
+                "pump.anomaly_score",
+            )],
+            report: AlgorithmReportPolicy::new(AlgorithmReportMode::OnChange, "velamq-main"),
+        },
+    ));
     store.upsert_device_model(pump_model);
     store.upsert_mqtt_uplink("edge-dev", default_mqtt_uplink("edge-dev"));
 

@@ -34,6 +34,9 @@ describe('DiscoveryPage', () => {
 
     render(<DiscoveryPage onRunDiscovery={onRunDiscovery} selectedEdgeId="edge-dev" />);
 
+    fireEvent.change(screen.getByLabelText('连接 ID'), {
+      target: { value: 'modbus-line-a' },
+    });
     fireEvent.click(screen.getByRole('button', { name: '启动探测' }));
 
     await waitFor(() => {

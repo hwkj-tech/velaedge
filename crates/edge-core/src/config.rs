@@ -118,6 +118,15 @@ impl ProtocolConnection {
         }
     }
 
+    pub fn modbus_tcp(connection_id: impl Into<String>, endpoint: impl Into<String>) -> Self {
+        Self {
+            connection_id: connection_id.into(),
+            protocol: ProtocolType::ModbusTcp,
+            endpoint: Some(endpoint.into()),
+            serial: None,
+        }
+    }
+
     pub fn dlt645_serial(
         connection_id: impl Into<String>,
         serial: SerialConnectionSettings,
@@ -323,6 +332,8 @@ pub struct DataConfigGraphNode {
     pub kind: DataConfigGraphNodeKind,
     pub label: String,
     pub ref_id: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, serde_json::Value>,
     pub x: i32,
     pub y: i32,
 }

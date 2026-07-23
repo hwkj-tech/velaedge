@@ -12,12 +12,14 @@ export interface DataTableColumn<T> {
 export function DataTable<T>({
   ariaLabel = '列表分页',
   columns,
+  emptyMessage = '暂无数据',
   getRowKey,
   pageSize,
   rows,
 }: {
   ariaLabel?: string;
   columns: Array<DataTableColumn<T>>;
+  emptyMessage?: string;
   getRowKey: (row: T) => string;
   pageSize?: number;
   rows: T[];
@@ -50,6 +52,13 @@ export function DataTable<T>({
             </tr>
           </thead>
           <tbody>
+            {visibleRows.length === 0 ? (
+              <tr>
+                <td className="table-empty-cell" colSpan={columns.length}>
+                  {emptyMessage}
+                </td>
+              </tr>
+            ) : null}
             {visibleRows.map((row) => (
               <tr key={getRowKey(row)}>
                 {columns.map((column) => (

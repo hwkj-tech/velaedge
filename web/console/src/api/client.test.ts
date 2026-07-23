@@ -596,7 +596,7 @@ describe('management data clients', () => {
       ],
       '/api/collection-tasks': [{ taskId: 'pump-main' }],
       '/api/algorithms': [
-        { algorithmId: 'pump-anomaly-v1', runtime: 'Onnx', inputIds: ['pressure'] },
+        { algorithmId: 'pump-anomaly-v1', runtime: 'Rule', inputIds: ['pressure'] },
       ],
       '/api/audit-records': [{ action: 'create_release' }],
     };

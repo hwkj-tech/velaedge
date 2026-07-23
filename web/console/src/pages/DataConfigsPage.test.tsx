@@ -77,6 +77,9 @@ describe('DataConfigsPage', () => {
     fireEvent.change(within(dialog).getByLabelText('配置名称'), {
       target: { value: '泵运行状态上报' },
     });
+    fireEvent.change(within(dialog).getByLabelText('设备 ID'), {
+      target: { value: 'pump-1' },
+    });
     expect(within(dialog).getAllByText('1 个')).toHaveLength(2);
     expect(within(dialog).getByText('velamq-main')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: '下一步' }));

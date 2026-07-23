@@ -52,6 +52,11 @@ async fn configured_runtime_collects_modbus_rtu_points_from_cloud_package() {
         Some(&TelemetryValue::Integer(220))
     );
     assert_eq!(&observed_bus.requests()[0][..6], &[1, 0x03, 0, 0, 0, 1]);
+    let protocol = runtime.protocol_runtime_metrics();
+    assert_eq!(protocol.len(), 1);
+    assert!(protocol[0].connected);
+    assert!(protocol[0].latency_ms >= 1);
+    assert_eq!(protocol[0].error_count, 0);
 }
 
 #[test]
@@ -184,6 +189,11 @@ async fn configured_runtime_publishes_algorithm_virtual_points_to_mqtt_uplink() 
         publisher.messages()[1].topic,
         "velamq/edge-dev/pump-1/pressure.reported"
     );
+    let algorithms = runtime.algorithm_runtime_metrics();
+    assert_eq!(algorithms.len(), 1);
+    assert_eq!(algorithms[0].algorithm_id, "pressure-change");
+    assert!(algorithms[0].healthy);
+    assert!(algorithms[0].last_run_latency_ms >= 1);
 }
 
 #[tokio::test]
@@ -253,8 +263,14 @@ async fn configured_runtime_publishes_data_config_with_algorithm_outputs() {
     assert_eq!(report.mqtt_messages_published, 1);
     let payload: serde_json::Value =
         serde_json::from_slice(&publisher.messages()[0].payload).unwrap();
-    assert_eq!(payload["values"]["pressure"], 1.0);
-    assert_eq!(payload["values"]["pressureReported"], 1.0);
+    let pressure = payload["values"]["pressure"]
+        .as_f64()
+        .expect("simulated pressure should be numeric");
+    assert!((2.22..=2.58).contains(&pressure));
+    assert_eq!(
+        payload["values"]["pressureReported"].as_f64(),
+        Some(pressure)
+    );
 }
 
 fn response(slave_id: u8, registers: &[u16]) -> Vec<u8> {

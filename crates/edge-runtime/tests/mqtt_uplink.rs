@@ -287,6 +287,7 @@ fn data_config_visual_graph_limits_runtime_payload_to_connected_output_inputs() 
                 kind: DataConfigGraphNodeKind::Point,
                 label: "pressure".to_string(),
                 ref_id: Some("pressure".to_string()),
+                params: Default::default(),
                 x: 72,
                 y: 80,
             },
@@ -295,6 +296,7 @@ fn data_config_visual_graph_limits_runtime_payload_to_connected_output_inputs() 
                 kind: DataConfigGraphNodeKind::Point,
                 label: "running".to_string(),
                 ref_id: Some("running".to_string()),
+                params: Default::default(),
                 x: 72,
                 y: 160,
             },
@@ -303,6 +305,7 @@ fn data_config_visual_graph_limits_runtime_payload_to_connected_output_inputs() 
                 kind: DataConfigGraphNodeKind::Mqtt,
                 label: "factory/{edge_id}/{device_id}/status".to_string(),
                 ref_id: Some("factory/{edge_id}/{device_id}/status".to_string()),
+                params: Default::default(),
                 x: 680,
                 y: 120,
             },
@@ -386,6 +389,7 @@ fn data_config_visual_graph_publishes_each_mqtt_output_to_its_own_topic() {
                 kind: DataConfigGraphNodeKind::Point,
                 label: "pressure".to_string(),
                 ref_id: Some("pressure".to_string()),
+                params: Default::default(),
                 x: 72,
                 y: 80,
             },
@@ -394,6 +398,7 @@ fn data_config_visual_graph_publishes_each_mqtt_output_to_its_own_topic() {
                 kind: DataConfigGraphNodeKind::Point,
                 label: "running".to_string(),
                 ref_id: Some("running".to_string()),
+                params: Default::default(),
                 x: 72,
                 y: 160,
             },
@@ -402,6 +407,7 @@ fn data_config_visual_graph_publishes_each_mqtt_output_to_its_own_topic() {
                 kind: DataConfigGraphNodeKind::Mqtt,
                 label: "压力输出".to_string(),
                 ref_id: Some("factory/{edge_id}/{device_id}/pressure".to_string()),
+                params: Default::default(),
                 x: 680,
                 y: 80,
             },
@@ -410,6 +416,7 @@ fn data_config_visual_graph_publishes_each_mqtt_output_to_its_own_topic() {
                 kind: DataConfigGraphNodeKind::Mqtt,
                 label: "状态输出".to_string(),
                 ref_id: Some("factory/{edge_id}/{device_id}/status".to_string()),
+                params: Default::default(),
                 x: 680,
                 y: 180,
             },
@@ -475,6 +482,171 @@ fn data_config_visual_graph_publishes_each_mqtt_output_to_its_own_topic() {
     assert!(pressure_payload["values"].get("running").is_none());
     assert_eq!(status_payload["values"]["running"], true);
     assert!(status_payload["values"].get("pressure").is_none());
+}
+
+#[test]
+fn conditional_output_port_filters_mqtt_branches_and_supports_fan_out() {
+    let route = AlgorithmSpec::dsl(
+        "pressure-route",
+        "v1",
+        AlgorithmKind::ThresholdRule,
+        AlgorithmDsl {
+            inputs: vec![AlgorithmInputBinding::new("p", "pressure")],
+            trigger: AlgorithmTrigger::on_sample(),
+            steps: vec![AlgorithmStep::ConditionalRoute {
+                source: "p".to_string(),
+                operator: edge_core::CompareOperator::Gte,
+                threshold: 10.0,
+                matched_output: "matched".to_string(),
+                unmatched_output: "unmatched".to_string(),
+            }],
+            outputs: vec![
+                AlgorithmOutput::virtual_point("matched", "pressure.matched"),
+                AlgorithmOutput::virtual_point("unmatched", "pressure.unmatched"),
+            ],
+            report: AlgorithmReportPolicy::new(AlgorithmReportMode::OnOutput, "velamq-main"),
+        },
+    );
+    let mut data_config = DataConfig::new(
+        "pressure-routing",
+        "压力分支上报",
+        "pump-1",
+        "modbus-line-a",
+        DataConfigCollection::new(1000),
+        DataConfigPublish::new(
+            "velamq-main",
+            "factory/{edge_id}/{device_id}/fallback",
+            DataConfigPayload::object(),
+        ),
+    )
+    .with_point(DataConfigPoint::new(
+        "pressure",
+        "pump.pressure",
+        PointAddress::modbus_holding_register(40001),
+        TelemetryType::Float,
+        "pressure",
+    ))
+    .with_algorithm("pressure-route");
+    let graph_node =
+        |node_id: &str, kind: DataConfigGraphNodeKind, label: &str, ref_id: &str, x, y| {
+            DataConfigGraphNode {
+                node_id: node_id.to_string(),
+                kind,
+                label: label.to_string(),
+                ref_id: Some(ref_id.to_string()),
+                params: Default::default(),
+                x,
+                y,
+            }
+        };
+    let graph_edge = |edge_id: &str, from_port: &str, to: &str| DataConfigGraphEdge {
+        edge_id: edge_id.to_string(),
+        from: "route".to_string(),
+        from_port: Some(from_port.to_string()),
+        to: to.to_string(),
+        to_port: Some("payload".to_string()),
+    };
+    data_config.visual_graph = DataConfigVisualGraph {
+        nodes: vec![
+            graph_node(
+                "point-pressure",
+                DataConfigGraphNodeKind::Point,
+                "pressure",
+                "pressure",
+                72,
+                80,
+            ),
+            graph_node(
+                "route",
+                DataConfigGraphNodeKind::Algorithm,
+                "条件分支",
+                "pressure-route",
+                360,
+                100,
+            ),
+            graph_node(
+                "matched-a",
+                DataConfigGraphNodeKind::Mqtt,
+                "命中 A",
+                "factory/{edge_id}/{device_id}/matched-a",
+                680,
+                60,
+            ),
+            graph_node(
+                "matched-b",
+                DataConfigGraphNodeKind::Mqtt,
+                "命中 B",
+                "factory/{edge_id}/{device_id}/matched-b",
+                680,
+                140,
+            ),
+            graph_node(
+                "unmatched",
+                DataConfigGraphNodeKind::Mqtt,
+                "未命中",
+                "factory/{edge_id}/{device_id}/unmatched",
+                680,
+                220,
+            ),
+        ],
+        edges: vec![
+            DataConfigGraphEdge {
+                edge_id: "point-to-route".to_string(),
+                from: "point-pressure".to_string(),
+                from_port: Some("value".to_string()),
+                to: "route".to_string(),
+                to_port: Some("input".to_string()),
+            },
+            graph_edge("matched-to-a", "matched", "matched-a"),
+            graph_edge("matched-to-b", "matched", "matched-b"),
+            graph_edge("unmatched-to-output", "unmatched", "unmatched"),
+        ],
+    };
+    let package = EdgeConfigPackage::new("edge-dev", "v1")
+        .with_device(DeviceInstance::new("pump-1", "pump"))
+        .with_mqtt_uplink(MqttUplinkConfig::velamq(
+            "velamq-main",
+            "mqtts://velamq.local:8883",
+            "edge-dev-runtime",
+        ))
+        .with_algorithm(route)
+        .with_data_config(data_config);
+    let timestamp = Utc.with_ymd_and_hms(2026, 7, 22, 8, 30, 0).unwrap();
+    let samples = vec![
+        edge_core::TelemetrySample::new(
+            "pump-1",
+            "pressure",
+            TelemetryValue::Float(12.0),
+            DataQuality::Good,
+            timestamp,
+        ),
+        edge_core::TelemetrySample::new(
+            "pump-1",
+            "pressure.matched",
+            TelemetryValue::Float(12.0),
+            DataQuality::Good,
+            timestamp,
+        ),
+    ];
+
+    let messages = build_data_config_mqtt_publish_messages(&package, &samples).unwrap();
+
+    assert_eq!(messages.len(), 2);
+    assert!(messages
+        .iter()
+        .any(|message| message.topic.ends_with("/matched-a")));
+    assert!(messages
+        .iter()
+        .any(|message| message.topic.ends_with("/matched-b")));
+    assert!(!messages
+        .iter()
+        .any(|message| message.topic.ends_with("/unmatched")));
+    for message in messages {
+        let payload: serde_json::Value = serde_json::from_slice(&message.payload).unwrap();
+        assert_eq!(payload["values"]["matched"], 12.0);
+        assert!(payload["values"].get("pressure").is_none());
+        assert!(payload["values"].get("unmatched").is_none());
+    }
 }
 
 #[test]
@@ -643,6 +815,19 @@ async fn mqtt_outbox_survives_failure_and_replays_multiple_topics_in_order() {
         vec!["factory/edge-dev/status", "factory/edge-dev/telemetry"]
     );
     assert_eq!(reopened.mqtt_outbox_len().unwrap(), 0);
+    let acknowledgements = reopened.mqtt_publish_acknowledgements(10).unwrap();
+    assert_eq!(acknowledgements.len(), 2);
+    assert_eq!(acknowledgements[0].sequence, 1);
+    assert_eq!(acknowledgements[0].sink_id, "velamq-main");
+    assert_eq!(acknowledgements[0].topic, "factory/edge-dev/status");
+    assert_eq!(acknowledgements[0].qos, 1);
+    assert!(acknowledgements[0].payload_bytes > 0);
+    assert_eq!(acknowledgements[1].sequence, 2);
+    assert_eq!(acknowledgements[1].topic, "factory/edge-dev/telemetry");
+    assert_eq!(
+        reopened.mqtt_publish_acknowledgements(1).unwrap(),
+        vec![acknowledgements[1].clone()]
+    );
 }
 
 #[tokio::test]
@@ -765,6 +950,42 @@ async fn mqtt_tls_transport_builds_with_the_selected_crypto_provider() {
     let publisher = RumqttcMqttPublisher::connect_from_uplink(&uplink);
 
     assert!(publisher.is_ok());
+}
+
+#[tokio::test]
+async fn dropping_mqtt_publisher_closes_its_background_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let broker = format!("mqtt://{}", listener.local_addr().unwrap());
+    let (connected_tx, connected_rx) = oneshot::channel();
+    let (closed_tx, closed_rx) = oneshot::channel();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let (connect_header, _) = read_mqtt_packet(&mut stream).await;
+        assert_eq!(connect_header >> 4, 1);
+        stream.write_all(&[0x20, 0x02, 0x00, 0x00]).await.unwrap();
+        connected_tx.send(()).ok();
+
+        let mut byte = [0_u8; 1];
+        let closed = match stream.read(&mut byte).await {
+            Ok(0) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => true,
+            _ => false,
+        };
+        closed_tx.send(closed).ok();
+    });
+    let uplink = MqttUplinkConfig::velamq("velamq-main", broker, "edge-drop-test");
+    let publisher = RumqttcMqttPublisher::connect_from_uplink(&uplink).unwrap();
+
+    tokio::time::timeout(Duration::from_secs(2), connected_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(publisher);
+
+    assert!(tokio::time::timeout(Duration::from_secs(2), closed_rx)
+        .await
+        .expect("publisher drop should close its MQTT connection")
+        .unwrap());
 }
 
 #[tokio::test]
