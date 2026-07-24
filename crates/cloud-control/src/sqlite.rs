@@ -1,13 +1,14 @@
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use edge_core::{
     DeviceSpec, DiscoveryReport, EdgeConfigPackage, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot,
     MqttUplinkConfig, PointMappingSuggestion,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use sqlx::{
-    sqlite::SqliteConnectOptions, sqlite::SqlitePoolOptions, Row, Sqlite, SqlitePool, Transaction,
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+    Row, Sqlite, SqlitePool, Transaction,
 };
 use uuid::Uuid;
 
@@ -23,9 +24,15 @@ pub struct SqliteCloudStore {
 
 impl SqliteCloudStore {
     pub async fn connect(database_url: &str) -> Result<Self> {
-        let options = SqliteConnectOptions::from_str(database_url)
+        let mut options = SqliteConnectOptions::from_str(database_url)
             .with_context(|| format!("invalid sqlite database url: {database_url}"))?
-            .create_if_missing(true);
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .busy_timeout(Duration::from_secs(5))
+            .synchronous(SqliteSynchronous::Normal);
+        if !is_memory_database(database_url) {
+            options = options.journal_mode(SqliteJournalMode::Wal);
+        }
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
             .connect_with(options)
@@ -33,6 +40,7 @@ impl SqliteCloudStore {
             .context("connect sqlite cloud store")?;
         let store = Self { pool };
         store.migrate().await?;
+        store.verify_integrity().await?;
         Ok(store)
     }
 
@@ -45,6 +53,20 @@ impl SqliteCloudStore {
             .execute(&self.pool)
             .await
             .context("check sqlite cloud store readiness")?;
+        Ok(())
+    }
+
+    pub async fn verify_integrity(&self) -> Result<()> {
+        let row = sqlx::query("PRAGMA quick_check")
+            .fetch_one(&self.pool)
+            .await
+            .context("run sqlite quick integrity check")?;
+        let result: String = row
+            .try_get(0)
+            .context("decode sqlite quick integrity check result")?;
+        if result != "ok" {
+            bail!("sqlite quick integrity check failed: {result}");
+        }
         Ok(())
     }
 
@@ -1285,6 +1307,10 @@ impl SqliteCloudStore {
         .context("list runtime events")?;
         decode_rows(rows, "event_json")
     }
+}
+
+fn is_memory_database(database_url: &str) -> bool {
+    database_url.contains(":memory:") || database_url.contains("mode=memory")
 }
 
 async fn insert_audit_in_transaction(

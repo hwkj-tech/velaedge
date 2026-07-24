@@ -129,7 +129,7 @@ client actor fields cannot spoof ownership or attribution.
 
 Storage is split by side:
 
-- Cloud uses SQLite for projects, products, point sets, product bindings, fleet metadata, edge config versions, audit records, latest runtime status, MQTT uplinks, discovery evidence, and release state.
+- Cloud uses SQLite for projects, products, point sets, product bindings, fleet metadata, edge config versions, audit records, latest runtime status, MQTT uplinks, discovery evidence, and release state. File databases run in WAL mode with bounded lock waiting and a startup quick-integrity check.
 - Edge runtime uses RocksDB for desired/applied config, active runtime version, and an ordered MQTT outbox. Failed messages survive restart and are replayed in sequence. QoS 1 entries are removed after matching PUBACK and QoS 2 entries after matching PUBCOMP. Each acknowledgement atomically replaces its outbox entry with a bounded route receipt containing `sink_id`, broker, client id, topic, QoS, timestamp, and payload size; the latest 1,000 receipts are retained without payload bytes or credentials. Multi-broker routing is implemented per `sink_id`; `mqtt-acceptance` performs a deployment-level SUBACK, publish ACK, and payload readback check against the target velaMQ environment.
 - JSONL can remain as a development adapter behind `LocalStore`.
 - Parquet for batch-friendly history.

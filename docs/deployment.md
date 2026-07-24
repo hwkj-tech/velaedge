@@ -58,6 +58,8 @@ administrators and enrolled runtimes should reach them.
 
 - `GET /health/live` proves the process and HTTP event loop are alive.
 - `GET /health/ready` checks in-memory state and executes `SELECT 1` against SQLite.
+- Cloud startup enables SQLite WAL mode, normal synchronous durability, a five-second busy timeout,
+  and foreign-key enforcement for file databases, then runs `PRAGMA quick_check` before serving.
 
 Both endpoints are intentionally public so orchestrators can probe a required-auth deployment.
 They expose no fleet or credential data. Use a 5-second timeout and remove an instance from service

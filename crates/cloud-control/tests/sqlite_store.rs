@@ -69,6 +69,36 @@ fn runtime_snapshot(edge_id: &str, health: EdgeHealth) -> EdgeRuntimeMetricsSnap
 }
 
 #[tokio::test]
+async fn sqlite_store_uses_production_concurrency_and_integrity_settings() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let database_url = format!("sqlite://{}", tempdir.path().join("cloud.db").display());
+    let store = SqliteCloudStore::connect(&database_url).await.unwrap();
+
+    let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    let busy_timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    let foreign_keys: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+
+    assert_eq!(journal_mode, "wal");
+    assert_eq!(busy_timeout, 5_000);
+    assert_eq!(foreign_keys, 1);
+    assert_eq!(synchronous, 1);
+    store.verify_integrity().await.unwrap();
+}
+
+#[tokio::test]
 async fn sqlite_store_persists_cloud_control_state_across_reopen() {
     let tempdir = tempfile::tempdir().unwrap();
     let database_url = format!("sqlite://{}", tempdir.path().join("cloud.db").display());
