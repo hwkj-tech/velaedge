@@ -56,6 +56,22 @@ Preflight validates JSON shape, serial-device access, supported protocol binding
 collection, MQTT sink references, TLS/QoS 1 policy, password environment names, and both EdgeLink
 certificate/key chains. It does not start Cloud or Runtime and cannot prove device communication.
 
+Start from the versioned environment checklist, but keep the populated copy outside the repository
+because it contains production paths and an MQTT password:
+
+```bash
+install -m 600 deploy/env/field-acceptance.env.example \
+  /secure/staging/field-acceptance.env
+${EDITOR:-vi} /secure/staging/field-acceptance.env
+set -a
+source /secure/staging/field-acceptance.env
+set +a
+```
+
+The template intentionally defaults to preflight mode and leaves physical-device confirmation off.
+Do not change those two values until the wiring, device identity, approved operating state, and
+work-order authorization have been checked at the device.
+
 ```bash
 export EDGEOPS_FIELD_CONFIG=/secure/staging/site-edge-config.json
 export EDGEOPS_FIELD_CLOUD_DB_SOURCE=/var/lib/edgeops/cloud-agent.sqlite
