@@ -18,6 +18,14 @@ const edges: EdgeNodeResponse[] = [
 ];
 
 describe('EdgeNodesPage', () => {
+  it('requires a published product before edge enrollment', () => {
+    render(<EdgeNodesPage edges={[]} products={[]} />);
+
+    const createButton = screen.getByRole('button', { name: '新增边端' });
+    expect(createButton).toBeDisabled();
+    expect(createButton).toHaveAttribute('title', '请先发布一个产品版本');
+  });
+
   it('exposes edge access and monitoring actions', () => {
     render(
       <EdgeNodesPage

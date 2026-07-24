@@ -125,18 +125,20 @@ export async function deleteProject(
 export async function fetchPointSets(
   fetcher: typeof fetch = fetch,
 ): Promise<PointSetResponse[]> {
-  return requestJson<PointSetResponse[]>('/api/point-sets', fetcher);
+  const pointSets = await requestJson<PointSetResponse[]>('/api/point-sets', fetcher);
+  return pointSets.map(normalizePointSet);
 }
 
 export async function createPointSet(
   request: SavePointSetRequest,
   fetcher: typeof fetch = fetch,
 ): Promise<PointSetResponse> {
-  return requestJson<PointSetResponse>('/api/point-sets', fetcher, {
-    body: JSON.stringify(request),
+  const pointSet = await requestJson<PointSetResponse>('/api/point-sets', fetcher, {
+    body: JSON.stringify(pointSetRequestBody(request)),
     headers: { 'content-type': 'application/json' },
     method: 'POST',
   });
+  return normalizePointSet(pointSet);
 }
 
 export async function savePointSet(
@@ -144,15 +146,16 @@ export async function savePointSet(
   request: SavePointSetRequest,
   fetcher: typeof fetch = fetch,
 ): Promise<PointSetResponse> {
-  return requestJson<PointSetResponse>(
+  const pointSet = await requestJson<PointSetResponse>(
     `/api/point-sets/${encodeURIComponent(pointSetId)}`,
     fetcher,
     {
-      body: JSON.stringify(request),
+      body: JSON.stringify(pointSetRequestBody(request)),
       headers: { 'content-type': 'application/json' },
       method: 'PUT',
     },
   );
+  return normalizePointSet(pointSet);
 }
 
 export async function deletePointSet(
@@ -162,6 +165,58 @@ export async function deletePointSet(
   await requestText(`/api/point-sets/${encodeURIComponent(pointSetId)}`, fetcher, {
     method: 'DELETE',
   });
+}
+
+function pointSetRequestBody(request: SavePointSetRequest): SavePointSetRequest {
+  return {
+    ...request,
+    points: request.points.map((point) => ({
+      ...point,
+      valueType: pointSetValueTypeToCore(point.valueType),
+    })),
+  };
+}
+
+function normalizePointSet(pointSet: PointSetResponse): PointSetResponse {
+  return {
+    ...pointSet,
+    points: (pointSet.points ?? []).map((point) => ({
+      ...point,
+      valueType: pointSetValueTypeFromCore(point.valueType),
+    })),
+  };
+}
+
+function pointSetValueTypeToCore(valueType: string): string {
+  switch (valueType.toLowerCase()) {
+    case 'bool':
+    case 'boolean':
+      return 'Boolean';
+    case 'int32':
+    case 'int64':
+    case 'integer':
+      return 'Integer';
+    case 'string':
+    case 'text':
+      return 'Text';
+    default:
+      return 'Float';
+  }
+}
+
+function pointSetValueTypeFromCore(valueType: string): string {
+  switch (valueType.toLowerCase()) {
+    case 'boolean':
+      return 'bool';
+    case 'integer':
+      return 'int64';
+    case 'text':
+      return 'string';
+    case 'float':
+      return 'float32';
+    default:
+      return valueType;
+  }
 }
 
 export async function fetchProducts(

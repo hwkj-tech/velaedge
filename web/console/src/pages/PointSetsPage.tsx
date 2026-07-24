@@ -63,6 +63,7 @@ export function PointSetsPage({
 
   const openCreate = () => {
     setEditingId(undefined);
+    setMessage('');
     setEditor(emptyPointSet(projects[0]?.projectId ?? ''));
   };
 
@@ -269,6 +270,12 @@ export function PointSetsPage({
               </div>
             </section>
 
+            {message ? (
+              <div className="form-validation-panel" role="alert">
+                <strong>无法保存点位集</strong>
+                <span>{message}</span>
+              </div>
+            ) : null}
             <div className="modal-actions">
               <button className="secondary-button" onClick={() => setEditor(undefined)} type="button">取消</button>
               <button className="primary-button" disabled={submitting} type="submit">{submitting ? '保存中' : '保存'}</button>

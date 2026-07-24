@@ -181,6 +181,7 @@ export interface EdgeTemplateDefinition {
   highlights: string[];
   mqtt: MqttUplinkResponse;
   name: string;
+  pointSetIds?: string[];
   points: Array<CreatePointMappingRequest & { pointId: string }>;
   productType: string;
   projectId: string;
@@ -970,6 +971,7 @@ export function ConsoleApp({
         name: `自定义产品上报 ${sequence}`,
       },
       name: `自定义边端产品 ${sequence}`,
+      pointSetIds: [],
       productType: source.productType,
       projectId: projects[0].projectId,
       templateId: `custom-product-${Date.now()}`,
@@ -1621,6 +1623,7 @@ export function hydrateProductTemplate(
           topicTemplate: mqtt.topic_template ?? base.mqtt.topicTemplate,
         }
       : base.mqtt,
+    pointSetIds: [...version.pointSetIds],
     points: points.length > 0 ? points : base.points,
     task: {
       deviceId,
@@ -1702,16 +1705,24 @@ export function buildProductVersionRequest(
 ): SaveProductVersionRequest {
   const connectionId = `${template.templateId}-connection`;
   const runtime = materializeProductRuntime(template, connectionId);
-  const pointSetIds = pointSets
-    .filter(
-      (pointSet) =>
-        pointSet.projectId === template.projectId &&
-        pointSet.points.length > 0 &&
-        pointSet.points.every((point) =>
-          template.points.some((candidate) => candidate.pointId === point.pointId),
-        ),
-    )
-    .map((pointSet) => pointSet.pointSetId);
+  const pointSetIds = template.pointSetIds
+    ? pointSets
+        .filter(
+          (pointSet) =>
+            pointSet.projectId === template.projectId &&
+            template.pointSetIds?.includes(pointSet.pointSetId),
+        )
+        .map((pointSet) => pointSet.pointSetId)
+    : pointSets
+        .filter(
+          (pointSet) =>
+            pointSet.projectId === template.projectId &&
+            pointSet.points.length > 0 &&
+            pointSet.points.every((point) =>
+              template.points.some((candidate) => candidate.pointId === point.pointId),
+            ),
+        )
+        .map((pointSet) => pointSet.pointSetId);
 
   return {
     algorithms: runtime.algorithms.map((algorithm) => ({
@@ -2835,7 +2846,14 @@ function renderPage(
           onDeleteEdge={onDeleteEdge}
           onGenerateAccessToken={onGenerateEdgeAccessToken}
           onSaveMqttUplink={onSaveMqttUplink}
-          products={buildEdgeProductOptions(edgeTemplates, projects)}
+          products={buildEdgeProductOptions(
+            edgeTemplates.filter((template) =>
+              productVersions[template.templateId]?.some(
+                (version) => version.status === 'published',
+              ),
+            ),
+            projects,
+          )}
         />
       );
     case 'edgeConfig':
@@ -2903,7 +2921,7 @@ function renderPage(
           onPublishVersion={onPublishProductVersion}
           onRollbackVersion={onRollbackProductVersion}
           onSaveTemplate={onSaveEdgeTemplate}
-          pointMappings={pointMappings}
+          pointSets={pointSets}
           projects={projects}
           templates={edgeTemplates}
           versions={productVersions}
@@ -3601,7 +3619,7 @@ function ProductManagementPage({
   onPublishVersion,
   onRollbackVersion,
   onSaveTemplate,
-  pointMappings = [],
+  pointSets = [],
   projects,
   templates,
   versions = {},
@@ -3621,7 +3639,7 @@ function ProductManagementPage({
     templateId: EdgeTemplateId,
     nextTemplate: EdgeTemplateDefinition,
   ) => Promise<EdgeTemplateDefinition>;
-  pointMappings?: PointMappingResponse[];
+  pointSets?: PointSetResponse[];
   projects: ProjectDefinition[];
   templates: EdgeTemplateDefinition[];
   versions?: Record<string, ProductVersionResponse[]>;
@@ -3747,65 +3765,20 @@ function ProductManagementPage({
     });
   };
 
-  const bindPointResource = (point: PointMappingResponse) => {
+  const bindPointSetResource = (pointSet: PointSetResponse) => {
     if (!selectedTemplate) return;
-    if (selectedTemplate.points.some((item) => item.pointId === point.pointId)) return;
-    const [addressKind = 'holding_register', addressValue = '40001'] = point.address.split(':');
-    updateTemplate({
-      points: [
-        ...selectedTemplate.points,
-        {
-          addressKind,
-          addressValue,
-          connectionId: point.connection,
-          deviceId: point.deviceId,
-          intervalMs: parseIntervalText(point.interval),
-          pointId: point.pointId,
-          semanticId: point.semanticTelemetry,
-          unit: point.unit,
-          valueType: point.valueType,
-        },
-      ],
-      dataConfig: {
-        ...selectedTemplate.dataConfig,
-        points: [
-          ...selectedTemplate.dataConfig.points,
-          {
-            addressKind,
-            addressValue,
-            jsonField: point.pointId,
-            pointId: point.pointId,
-            semanticId: point.semanticTelemetry,
-            unit: point.unit,
-            valueType: point.valueType,
-          },
-        ],
-      },
-      task: {
-        ...selectedTemplate.task,
-        pointIds: [...selectedTemplate.task.pointIds, point.pointId],
-      },
-    });
-  };
-
-  const bindPointSetResource = (points: PointMappingResponse[]) => {
-    if (!selectedTemplate) return;
-    const newTemplatePoints = points
+    const newTemplatePoints = pointSet.points
       .filter((point) => !selectedTemplate.points.some((item) => item.pointId === point.pointId))
-      .map((point) => {
-        const [addressKind = 'holding_register', addressValue = '40001'] = point.address.split(':');
-        return {
-          addressKind,
-          addressValue,
-          connectionId: point.connection,
-          deviceId: point.deviceId,
-          intervalMs: parseIntervalText(point.interval),
-          pointId: point.pointId,
-          semanticId: point.semanticTelemetry,
-          unit: point.unit,
-          valueType: point.valueType,
-        };
-      });
+      .map((point) => ({
+        addressKind: point.address.kind,
+        addressValue: point.address.value,
+        deviceId: selectedTemplate.task.deviceId,
+        intervalMs: point.intervalMs,
+        pointId: point.pointId,
+        semanticId: point.semanticId,
+        unit: point.unit ?? '',
+        valueType: point.valueType,
+      }));
     const newDataPoints = newTemplatePoints.map((point) => ({
       addressKind: point.addressKind,
       addressValue: point.addressValue,
@@ -3816,6 +3789,9 @@ function ProductManagementPage({
       valueType: point.valueType,
     }));
     updateTemplate({
+      pointSetIds: Array.from(
+        new Set([...(selectedTemplate.pointSetIds ?? []), pointSet.pointSetId]),
+      ),
       points: [...selectedTemplate.points, ...newTemplatePoints],
       dataConfig: {
         ...selectedTemplate.dataConfig,
@@ -3833,19 +3809,33 @@ function ProductManagementPage({
     });
   };
 
-  const unbindPointSetResource = (pointIds: string[]) => {
+  const unbindPointSetResource = (pointSet: PointSetResponse) => {
     if (!selectedTemplate) return;
+    const remainingPointSetIds = (selectedTemplate.pointSetIds ?? []).filter(
+      (pointSetId) => pointSetId !== pointSet.pointSetId,
+    );
+    const retainedPointIds = new Set(
+      pointSets
+        .filter((candidate) => remainingPointSetIds.includes(candidate.pointSetId))
+        .flatMap((candidate) => candidate.points.map((point) => point.pointId)),
+    );
+    const removedPointIds = pointSet.points
+      .map((point) => point.pointId)
+      .filter((pointId) => !retainedPointIds.has(pointId));
     updateTemplate({
-      points: selectedTemplate.points.filter((point) => !pointIds.includes(point.pointId)),
+      pointSetIds: remainingPointSetIds,
+      points: selectedTemplate.points.filter((point) => !removedPointIds.includes(point.pointId)),
       dataConfig: {
         ...selectedTemplate.dataConfig,
         points: selectedTemplate.dataConfig.points.filter(
-          (point) => !pointIds.includes(point.pointId),
+          (point) => !removedPointIds.includes(point.pointId),
         ),
       },
       task: {
         ...selectedTemplate.task,
-        pointIds: selectedTemplate.task.pointIds.filter((pointId) => !pointIds.includes(pointId)),
+        pointIds: selectedTemplate.task.pointIds.filter(
+          (pointId) => !removedPointIds.includes(pointId),
+        ),
       },
     });
   };
@@ -4121,10 +4111,12 @@ function ProductManagementPage({
                     </div>
                   </div>
                   <ProductPointBindingList
-                    boundPointIds={selectedTemplate.points.map((point) => point.pointId)}
+                    boundPointSetIds={selectedTemplate.pointSetIds ?? []}
                     onBindSet={bindPointSetResource}
                     onUnbindSet={unbindPointSetResource}
-                    pointMappings={pointMappings}
+                    pointSets={pointSets.filter(
+                      (pointSet) => pointSet.projectId === selectedTemplate.projectId,
+                    )}
                   />
                 </section>
               ) : null}
@@ -6170,34 +6162,6 @@ function productGraphCycleNodes(graph: DataConfigVisualGraph) {
     .map((node) => node.nodeId);
 }
 
-interface ProductPointSet {
-  connection: string;
-  deviceId: string;
-  interval: string;
-  points: PointMappingResponse[];
-  setId: string;
-  setName: string;
-}
-
-function buildProductPointSets(points: PointMappingResponse[]): ProductPointSet[] {
-  const grouped = new Map<string, PointMappingResponse[]>();
-  points.forEach((point) => {
-    const setId = `${point.edgeId}:${point.deviceId}:${point.connection}`;
-    grouped.set(setId, [...(grouped.get(setId) ?? []), point]);
-  });
-  return Array.from(grouped.entries()).map(([setId, setPoints]) => {
-    const first = setPoints[0];
-    return {
-      connection: first.connection,
-      deviceId: first.deviceId,
-      interval: dominantPointSetValue(setPoints.map((point) => point.interval)),
-      points: setPoints,
-      setId,
-      setName: `${first.deviceId} / ${first.connection}`,
-    };
-  });
-}
-
 function dominantPointSetValue(values: string[]) {
   const counts = new Map<string, number>();
   values.forEach((value) => counts.set(value, (counts.get(value) ?? 0) + 1));
@@ -6205,26 +6169,23 @@ function dominantPointSetValue(values: string[]) {
 }
 
 function ProductPointBindingList({
-  boundPointIds,
+  boundPointSetIds,
   onBindSet,
   onUnbindSet,
-  pointMappings,
+  pointSets,
 }: {
-  boundPointIds: string[];
-  onBindSet: (points: PointMappingResponse[]) => void;
-  onUnbindSet: (pointIds: string[]) => void;
-  pointMappings: PointMappingResponse[];
+  boundPointSetIds: string[];
+  onBindSet: (pointSet: PointSetResponse) => void;
+  onUnbindSet: (pointSet: PointSetResponse) => void;
+  pointSets: PointSetResponse[];
 }) {
-  const resources = buildProductPointSets(pointMappings);
-
   return (
     <div className="table-wrap product-config-table">
       <table className="ops-table">
         <thead>
           <tr>
             <th>点位集</th>
-            <th>设备</th>
-            <th>连接</th>
+            <th>协议</th>
             <th>点位数</th>
             <th>周期</th>
             <th>状态</th>
@@ -6232,23 +6193,24 @@ function ProductPointBindingList({
           </tr>
         </thead>
         <tbody>
-          {resources.map((pointSet) => {
-            const pointIds = pointSet.points.map((point) => point.pointId);
-            const isBound = pointIds.every((pointId) => boundPointIds.includes(pointId));
-            const partiallyBound = !isBound && pointIds.some((pointId) => boundPointIds.includes(pointId));
+          {pointSets.map((pointSet) => {
+            const isBound = boundPointSetIds.includes(pointSet.pointSetId);
             return (
-              <tr key={pointSet.setId}>
+              <tr key={pointSet.pointSetId}>
                 <td>
-                  <strong>{pointSet.setName}</strong>
+                  <strong>{pointSet.name}</strong>
                   <small>{pointSet.points.slice(0, 3).map((point) => point.pointId).join(', ')}</small>
                 </td>
-                <td>{pointSet.deviceId}</td>
-                <td>{pointSet.connection}</td>
+                <td>{pointSet.protocol}</td>
                 <td>{pointSet.points.length} 个</td>
-                <td>{pointSet.interval}</td>
+                <td>
+                  {dominantPointSetValue(
+                    pointSet.points.map((point) => `${point.intervalMs}ms`),
+                  )}
+                </td>
                 <td>
                   <span className={isBound ? 'tag ok' : 'tag warn'}>
-                    {isBound ? '已绑定' : partiallyBound ? '部分绑定' : '未绑定'}
+                    {isBound ? '已绑定' : '未绑定'}
                   </span>
                 </td>
                 <td>
@@ -6256,9 +6218,9 @@ function ProductPointBindingList({
                     className={isBound ? 'danger-button compact' : 'secondary-button compact'}
                     onClick={() => {
                       if (isBound) {
-                        onUnbindSet(pointIds);
+                        onUnbindSet(pointSet);
                       } else {
-                        onBindSet(pointSet.points);
+                        onBindSet(pointSet);
                       }
                     }}
                     type="button"
@@ -6269,9 +6231,9 @@ function ProductPointBindingList({
               </tr>
             );
           })}
-          {resources.length === 0 ? (
+          {pointSets.length === 0 ? (
             <tr>
-              <td colSpan={7}>暂无点位集，请先在点位管理中创建。</td>
+              <td colSpan={6}>当前项目暂无点位集，请先在点位管理中创建。</td>
             </tr>
           ) : null}
         </tbody>
@@ -6340,10 +6302,6 @@ function ProductPipelineBindingList({
       </table>
     </div>
   );
-}
-
-function parseIntervalText(interval: string) {
-  return Number.parseInt(interval.replace(/[^\d]/g, ''), 10) || 1000;
 }
 
 function mergeTemplatePoints(

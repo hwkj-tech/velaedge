@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE="${EDGEOPS_RELEASE_PROFILE:-local}"
 WORK_DIR="${EDGEOPS_RELEASE_WORK_DIR:-${ROOT_DIR}/target/release-gates-$$}"
+if [[ "$WORK_DIR" != /* ]]; then
+  WORK_DIR="${ROOT_DIR}/${WORK_DIR}"
+fi
 REPORT_PATH="${EDGEOPS_RELEASE_REPORT:-${WORK_DIR}/report.json}"
 VELAMQ_REPO="${VELAMQ_REPO:-}"
 STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -120,6 +123,12 @@ run_gate console-tests "complete component/API test suite" \
   npm --prefix web/console test -- --run
 run_gate console-build "web/console/dist" \
   npm --prefix web/console run build
+run_gate console-e2e "console-e2e/results.json" \
+  env \
+    EDGEOPS_E2E_HTTP_PORT=18261 \
+    EDGEOPS_E2E_GATEWAY_PORT=19261 \
+    EDGEOPS_E2E_WORK_DIR="${WORK_DIR}/console-e2e" \
+    npm --prefix web/console run test:e2e
 run_gate deployment-smoke "deployment-smoke/report.json" \
   env \
     EDGEOPS_DEPLOY_SMOKE_HTTP_PORT=18253 \

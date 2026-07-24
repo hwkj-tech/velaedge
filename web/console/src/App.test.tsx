@@ -483,7 +483,16 @@ const catalogPointSets: PointSetResponse[] = [
     description: '泵站标准点位',
     name: '泵站标准点位',
     pointSetId: 'pump-standard-points',
-    points: [],
+    points: [
+      {
+        address: { kind: 'holding_register', value: '40011' },
+        intervalMs: 1000,
+        pointId: 'catalog_temperature',
+        semanticId: 'environment.temperature',
+        unit: 'C',
+        valueType: 'float32',
+      },
+    ],
     projectId: 'demo-plant',
     protocol: 'ModbusRtu',
     updatedAt: '2026-06-26T00:00:00Z',

@@ -23,8 +23,8 @@ Run the tests:
 cargo test --workspace
 ```
 
-Run the consolidated local release gate (Rust, console, EdgeLink mTLS, certificate lifecycle,
-SQLite recovery, performance, and optional real VelaMQ):
+Run the consolidated local release gate (Rust, console unit tests, real-browser console workflow,
+EdgeLink mTLS, certificate lifecycle, SQLite recovery, performance, and optional real VelaMQ):
 
 ```bash
 VELAMQ_REPO=/path/to/velamq-rs scripts/run-release-gates.sh

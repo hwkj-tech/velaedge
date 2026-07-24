@@ -186,17 +186,25 @@ describe('catalog clients', () => {
       projectId: 'demo-plant',
       protocol: 'ModbusRtu',
     };
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => pointSetRequest });
-    await createPointSet(pointSetRequest, fetchMock as unknown as typeof fetch);
+    const wirePointSet = {
+      ...pointSetRequest,
+      points: [{ ...pointSetRequest.points[0], valueType: 'Float' }],
+    };
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => wirePointSet });
+    const createdPointSet = await createPointSet(
+      pointSetRequest,
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(createdPointSet.points[0].valueType).toBe('float32');
     expect(fetchMock).toHaveBeenLastCalledWith('/api/point-sets', {
-      body: JSON.stringify(pointSetRequest),
+      body: JSON.stringify(wirePointSet),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
     });
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => pointSetRequest });
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => wirePointSet });
     await savePointSet('pump points', pointSetRequest, fetchMock as unknown as typeof fetch);
     expect(fetchMock).toHaveBeenLastCalledWith('/api/point-sets/pump%20points', {
-      body: JSON.stringify(pointSetRequest),
+      body: JSON.stringify(wirePointSet),
       headers: { 'content-type': 'application/json' },
       method: 'PUT',
     });

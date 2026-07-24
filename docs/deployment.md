@@ -144,6 +144,7 @@ The equivalent individual gates are:
 cargo test --workspace
 npm --prefix web/console test -- --run
 npm --prefix web/console run build
+npm --prefix web/console run test:e2e
 scripts/run-edgelink-mtls-acceptance.sh
 scripts/run-certificate-lifecycle-acceptance.sh
 scripts/run-performance-gates.sh
@@ -163,6 +164,12 @@ The local release profile runs `run-field-preflight-acceptance.sh` automatically
 package is supplied. This controlled fixture checks the field harness, package constraints, serial
 binding, QoS 1 route, and EdgeLink certificate chains. Its report intentionally records
 `physicalDeviceExercised: false`; it is deployment-preparation evidence, not site sign-off.
+
+The console E2E gate starts a real `cloud-api` process in empty-bootstrap mode with an isolated
+SQLite database, then drives Chromium through project creation, reusable point-set creation,
+product binding and publication, edge enrollment, one-time token display, runtime-monitor dialogs,
+and Escape-key modal dismissal.
+Artifacts and a machine-readable Playwright report are retained under the release work directory.
 The physical profile additionally requires device model/serial identity, explicit operator
 confirmation, a broker-side receipt, and a verifiable `evidence-manifest.json`. Validate retained
 site evidence with `scripts/verify-field-acceptance-report.sh --require-physical REPORT_JSON`.

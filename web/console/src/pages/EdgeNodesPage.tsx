@@ -150,7 +150,13 @@ export function EdgeNodesPage({
               {toolbarMessage}
             </span>
           ) : null}
-          <button className="primary-button" onClick={openCreateDialog} type="button">
+          <button
+            className="primary-button"
+            disabled={products.length === 0}
+            onClick={openCreateDialog}
+            title={products.length === 0 ? '请先发布一个产品版本' : undefined}
+            type="button"
+          >
             <Plus size={15} aria-hidden="true" />
             新增边端
           </button>
