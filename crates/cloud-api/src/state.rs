@@ -799,45 +799,6 @@ async fn ensure_default_data_configs(
     Ok(())
 }
 
-#[cfg(test)]
-mod bootstrap_tests {
-    use super::BootstrapMode;
-
-    #[test]
-    fn explicit_bootstrap_mode_wins_over_auth_default() {
-        assert_eq!(
-            BootstrapMode::resolve(Some("demo"), Some("required")).unwrap(),
-            BootstrapMode::Demo
-        );
-        assert_eq!(
-            BootstrapMode::resolve(Some("empty"), Some("disabled")).unwrap(),
-            BootstrapMode::Empty
-        );
-    }
-
-    #[test]
-    fn required_auth_defaults_to_empty_and_local_defaults_to_demo() {
-        assert_eq!(
-            BootstrapMode::resolve(None, Some("required")).unwrap(),
-            BootstrapMode::Empty
-        );
-        assert_eq!(
-            BootstrapMode::resolve(None, Some("disabled")).unwrap(),
-            BootstrapMode::Demo
-        );
-        assert_eq!(
-            BootstrapMode::resolve(None, None).unwrap(),
-            BootstrapMode::Demo
-        );
-    }
-
-    #[test]
-    fn invalid_bootstrap_mode_is_rejected() {
-        let error = BootstrapMode::resolve(Some("seed"), None).unwrap_err();
-        assert!(error.to_string().contains("EDGEOPS_BOOTSTRAP_MODE"));
-    }
-}
-
 fn default_data_config_from_package(package: &EdgeConfigPackage) -> Option<DataConfig> {
     let task = package
         .collection_tasks
@@ -1077,4 +1038,43 @@ async fn ensure_sqlite_parent(database_url: &str) -> Result<()> {
         .await
         .with_context(|| format!("create sqlite parent directory: {}", parent.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod bootstrap_tests {
+    use super::BootstrapMode;
+
+    #[test]
+    fn explicit_bootstrap_mode_wins_over_auth_default() {
+        assert_eq!(
+            BootstrapMode::resolve(Some("demo"), Some("required")).unwrap(),
+            BootstrapMode::Demo
+        );
+        assert_eq!(
+            BootstrapMode::resolve(Some("empty"), Some("disabled")).unwrap(),
+            BootstrapMode::Empty
+        );
+    }
+
+    #[test]
+    fn required_auth_defaults_to_empty_and_local_defaults_to_demo() {
+        assert_eq!(
+            BootstrapMode::resolve(None, Some("required")).unwrap(),
+            BootstrapMode::Empty
+        );
+        assert_eq!(
+            BootstrapMode::resolve(None, Some("disabled")).unwrap(),
+            BootstrapMode::Demo
+        );
+        assert_eq!(
+            BootstrapMode::resolve(None, None).unwrap(),
+            BootstrapMode::Demo
+        );
+    }
+
+    #[test]
+    fn invalid_bootstrap_mode_is_rejected() {
+        let error = BootstrapMode::resolve(Some("seed"), None).unwrap_err();
+        assert!(error.to_string().contains("EDGEOPS_BOOTSTRAP_MODE"));
+    }
 }

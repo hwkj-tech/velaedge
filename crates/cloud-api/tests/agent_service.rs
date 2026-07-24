@@ -5,6 +5,8 @@ use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
 use cloud_api::{AgentModelConfig, AgentService};
 use serde_json::{json, Value};
 
+type CapturedRequest = Arc<Mutex<Option<(HeaderMap, Value)>>>;
+
 #[tokio::test]
 async fn openai_compatible_provider_receives_bounded_advisory_context() {
     let captured = Arc::new(Mutex::new(None::<(HeaderMap, Value)>));
@@ -12,7 +14,7 @@ async fn openai_compatible_provider_receives_bounded_advisory_context() {
         .route(
             "/v1/chat/completions",
             post(
-                |State(captured): State<Arc<Mutex<Option<(HeaderMap, Value)>>>>,
+                |State(captured): State<CapturedRequest>,
                  headers: HeaderMap,
                  Json(body): Json<Value>| async move {
                     *captured.lock().unwrap() = Some((headers, body));

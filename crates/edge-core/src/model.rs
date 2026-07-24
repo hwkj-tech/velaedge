@@ -392,21 +392,16 @@ impl AlgorithmInputBinding {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AlgorithmTrigger {
+    #[default]
     OnSample,
     OnAnyInput,
     Window {
         #[serde(rename = "everyMs")]
         every_ms: u64,
     },
-}
-
-impl Default for AlgorithmTrigger {
-    fn default() -> Self {
-        Self::OnSample
-    }
 }
 
 impl AlgorithmTrigger {

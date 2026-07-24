@@ -39,6 +39,9 @@ use crate::{
     AppState,
 };
 
+type ApiError = (StatusCode, Json<ErrorResponse>);
+type ConnectionTransport = (Option<String>, Option<SerialConnectionSettings>);
+
 #[derive(Serialize)]
 pub struct SummaryResponse {
     pub edge_count: usize,
@@ -2605,7 +2608,7 @@ async fn agent_knowledge_documents(
         })
         .cloned()
         .collect::<Vec<_>>();
-    documents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    documents.sort_by_key(|document| std::cmp::Reverse(document.updated_at));
     Json(documents)
 }
 
@@ -2706,7 +2709,7 @@ async fn delete_agent_knowledge_document(
 async fn agent_proposals(State(state): State<AppState>) -> Json<Vec<AgentProposal>> {
     let store = state.store.lock().expect("store mutex poisoned");
     let mut proposals = store.agent_proposals().cloned().collect::<Vec<_>>();
-    proposals.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    proposals.sort_by_key(|proposal| std::cmp::Reverse(proposal.created_at));
     Json(proposals)
 }
 
@@ -5123,7 +5126,7 @@ fn normalize_connection_transport(
     endpoint: Option<String>,
     requested_serial: Option<SerialConnectionSettingsDto>,
     existing_serial: Option<&SerialConnectionSettings>,
-) -> Result<(Option<String>, Option<SerialConnectionSettings>), (StatusCode, Json<ErrorResponse>)> {
+) -> Result<ConnectionTransport, ApiError> {
     let endpoint = endpoint.and_then(|value| {
         let value = value.trim();
         (!value.is_empty()).then(|| value.to_string())

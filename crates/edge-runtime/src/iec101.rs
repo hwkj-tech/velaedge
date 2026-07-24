@@ -203,7 +203,7 @@ pub fn append_iec101_checksum(frame: &mut Vec<u8>, payload_start: usize) {
 }
 
 fn contains_variable_frame(response: &[u8]) -> bool {
-    response.iter().any(|byte| *byte == VARIABLE_FRAME_START)
+    response.contains(&VARIABLE_FRAME_START)
 }
 
 fn validate_link_ack(response: &[u8], expected_link_address: u8) -> Result<()> {

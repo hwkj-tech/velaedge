@@ -110,6 +110,10 @@ skip_gate() {
 
 write_report
 
+run_gate rust-format "cargo fmt --all --check" \
+  cargo fmt --all --check
+run_gate rust-clippy "cargo clippy --workspace --all-targets --all-features -- -D warnings" \
+  cargo clippy --workspace --all-targets --all-features -- -D warnings
 run_gate rust-workspace "cargo test --workspace" \
   cargo test --workspace
 run_gate console-tests "complete component/API test suite" \

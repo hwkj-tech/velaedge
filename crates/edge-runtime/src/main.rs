@@ -365,6 +365,7 @@ struct ScheduledCloudRunReport {
     events_reported: usize,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_scheduled_cloud_ticks<C, R>(
     edge_id: &str,
     runtime_id: &str,
@@ -477,6 +478,7 @@ where
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_scheduled_data_config_ticks<C, R, P>(
     edge_id: &str,
     runtime_id: &str,

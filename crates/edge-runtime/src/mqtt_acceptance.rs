@@ -198,19 +198,18 @@ fn validate_topic(topic: &str) -> Result<()> {
 async fn wait_for_subscription(eventloop: &mut EventLoop, timeout: Duration) -> Result<()> {
     tokio::time::timeout(timeout, async {
         loop {
-            match eventloop.poll().await.context("poll mqtt subscriber")? {
-                Event::Incoming(Packet::SubAck(suback)) => {
-                    if suback.return_codes.is_empty()
-                        || suback
-                            .return_codes
-                            .iter()
-                            .any(|code| matches!(code, SubscribeReasonCode::Failure))
-                    {
-                        bail!("mqtt broker rejected the acceptance subscription");
-                    }
-                    return Ok(());
+            if let Event::Incoming(Packet::SubAck(suback)) =
+                eventloop.poll().await.context("poll mqtt subscriber")?
+            {
+                if suback.return_codes.is_empty()
+                    || suback
+                        .return_codes
+                        .iter()
+                        .any(|code| matches!(code, SubscribeReasonCode::Failure))
+                {
+                    bail!("mqtt broker rejected the acceptance subscription");
                 }
-                _ => {}
+                return Ok(());
             }
         }
     })

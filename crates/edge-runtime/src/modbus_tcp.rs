@@ -419,7 +419,7 @@ fn simulator_response_pdu(
                     .get(&coil)
                     .map(|period| {
                         let period_ms = period.as_millis().max(1);
-                        (now.as_millis() / period_ms) % 2 == 0
+                        (now.as_millis() / period_ms).is_multiple_of(2)
                     })
                     .unwrap_or_else(|| options.coils.get(&coil).copied().unwrap_or(false));
                 if value {

@@ -207,6 +207,7 @@ pub async fn publish_edgelink_runtime_status_with_store_once(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn publish_edgelink_runtime_status_with_store_and_capabilities_once(
     gateway_addr: &str,
     edge_id: &str,
@@ -263,6 +264,7 @@ where
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn publish_edgelink_runtime_status_with_mqtt_uplink_once(
     gateway_addr: &str,
     edge_id: &str,
@@ -290,6 +292,7 @@ pub async fn publish_edgelink_runtime_status_with_mqtt_uplink_once(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn publish_edgelink_runtime_status_authenticated_once(
     gateway_addr: &str,
     edge_id: &str,
@@ -394,6 +397,7 @@ pub async fn publish_edgelink_runtime_daemon_session(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn publish_edgelink_runtime_status_inner(
     gateway_addr: &str,
     edge_id: &str,
@@ -698,6 +702,7 @@ enum EdgeLinkMqttMode<'a> {
     ConfiguredUplink,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn connect_edgelink_over_stream<S>(
     stream: &mut S,
     gateway_addr: &str,
