@@ -1,11 +1,11 @@
 use edge_core::{
     AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
     AlgorithmReportPolicy, AlgorithmRuntime, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger,
-    CollectionTask, CustomSerialChecksum, CustomSerialPointSpec, CustomSerialValueEncoding,
-    DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish,
-    DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, NumberRange, PointAddress,
-    ProtocolConnection, ProtocolType, SerialConnectionSettings, TelemetryPointMapping,
-    TelemetryType, WindowAggregateFunction,
+    CollectionTask, CompareOperator, CustomSerialChecksum, CustomSerialPointSpec,
+    CustomSerialValueEncoding, DataConfig, DataConfigCollection, DataConfigPayload,
+    DataConfigPoint, DataConfigPublish, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig,
+    NumberRange, PointAddress, ProtocolConnection, ProtocolType, SerialConnectionSettings,
+    TelemetryPointMapping, TelemetryType, WindowAggregateFunction,
 };
 
 #[test]
@@ -271,6 +271,45 @@ fn algorithm_dsl_binds_point_inputs_and_virtual_outputs() {
     assert_eq!(json["kind"], "WindowAggregate");
     assert_eq!(json["dsl"]["inputs"][0]["pointId"], "pressure");
     assert_eq!(json["dsl"]["outputs"][0]["pointId"], "pressure.avg_1m");
+}
+
+#[test]
+fn duration_condition_dsl_preserves_cloud_runtime_wire_contract() {
+    let algorithm = AlgorithmSpec::dsl(
+        "pressure-high-duration",
+        "v1",
+        AlgorithmKind::DurationRule,
+        AlgorithmDsl {
+            inputs: vec![AlgorithmInputBinding::new("p", "pressure")],
+            trigger: AlgorithmTrigger::on_sample(),
+            steps: vec![AlgorithmStep::DurationCondition {
+                source: "p".to_string(),
+                operator: CompareOperator::Gte,
+                threshold: 10.0,
+                duration_ms: 5_000,
+                output: "value".to_string(),
+            }],
+            outputs: vec![AlgorithmOutput::virtual_point("value", "pressure.high_5s")],
+            report: AlgorithmReportPolicy::new(AlgorithmReportMode::OnOutput, "velamq-main"),
+        },
+    );
+
+    let json = serde_json::to_value(&algorithm).expect("algorithm serializes");
+    assert_eq!(json["kind"], "DurationRule");
+    assert_eq!(json["dsl"]["steps"][0]["type"], "durationCondition");
+    assert_eq!(json["dsl"]["steps"][0]["operator"], "Gte");
+    assert_eq!(json["dsl"]["steps"][0]["durationMs"], 5_000);
+
+    let decoded: AlgorithmSpec =
+        serde_json::from_value(json).expect("algorithm deserializes from EdgeLink JSON");
+    assert_eq!(decoded.kind, AlgorithmKind::DurationRule);
+    assert!(matches!(
+        decoded.dsl.steps.as_slice(),
+        [AlgorithmStep::DurationCondition {
+            duration_ms: 5_000,
+            ..
+        }]
+    ));
 }
 
 #[test]

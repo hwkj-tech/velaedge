@@ -1655,6 +1655,8 @@ function productComputeKindFromStoredAlgorithm(algorithm: CoreProductAlgorithmSp
       return 'change_report';
     case 'Debounce':
       return 'debounce';
+    case 'DurationRule':
+      return 'duration_condition';
     case 'ExpressionAggregate': {
       if (step?.type === 'scale') return 'scale_offset';
       if (step?.type === 'clamp') return 'clamp';
@@ -2391,6 +2393,28 @@ function buildProductComputeAlgorithm(
         outputs: [{ name: 'value', pointId: outputBase }],
         report: { mode: 'OnOutput', sink },
         steps: [{ source: primaryAlias, stableMs: Math.max(productNodeParamNumber(node, 'stableMs', 1000), 1), type: 'debounce' }],
+        trigger: { type: 'onSample' },
+      },
+      version: template.version,
+    };
+  }
+
+  if (kind === 'duration_condition') {
+    return {
+      algorithmId,
+      algorithmKind: 'DurationRule',
+      dsl: {
+        inputs,
+        outputs: [{ name: 'value', pointId: outputBase }],
+        report: { mode: 'OnOutput', sink },
+        steps: [{
+          durationMs: Math.max(productNodeParamNumber(node, 'durationMs', 5000), 1),
+          operator: productNodeCompareOperator(node),
+          output: 'value',
+          source: primaryAlias,
+          threshold: productNodeParamNumber(node, 'threshold', 0),
+          type: 'durationCondition',
+        }],
         trigger: { type: 'onSample' },
       },
       version: template.version,
@@ -4349,6 +4373,13 @@ const PRODUCT_SCENARIO_ALGORITHMS: ProductAlgorithmDefinition[] = [
     label: '信号防抖',
   },
   {
+    category: '规则',
+    defaultParams: { durationMs: 5000, operator: 'Gt', threshold: 0 },
+    description: '条件持续满足指定时间后输出一次，条件复位后可再次触发',
+    kind: 'duration_condition',
+    label: '持续条件',
+  },
+  {
     category: '转换',
     defaultParams: { expression: 'p0', outputField: 'value' },
     description: '支持四则运算及 min/max/abs/round/sqrt/pow',
@@ -5513,7 +5544,11 @@ function ProductComputeParameterEditor({
       </div>
     );
   }
-  if (kind === 'condition_route' || kind === 'alarm_event') {
+  if (
+    kind === 'condition_route' ||
+    kind === 'alarm_event' ||
+    kind === 'duration_condition'
+  ) {
     return (
       <div className="node-red-parameter-grid two-column">
         <label className="editor-control">
@@ -5532,6 +5567,9 @@ function ProductComputeParameterEditor({
           </select>
         </label>
         {numberField('threshold', '比较阈值', 0)}
+        {kind === 'duration_condition'
+          ? numberField('durationMs', '持续时长(ms)', 5000, 1)
+          : null}
       </div>
     );
   }
@@ -6081,6 +6119,13 @@ function buildProductRuntimeComputeParams(
     };
   }
   if (computeKind === 'debounce') return { stableMs: configured.stableMs ?? 1000 };
+  if (computeKind === 'duration_condition') {
+    return {
+      durationMs: configured.durationMs ?? 5000,
+      operator: configured.operator ?? 'Gt',
+      threshold: configured.threshold ?? 0,
+    };
+  }
   if (computeKind === 'scale_offset') return { factor: configured.factor ?? 1, offset: configured.offset ?? 0 };
   if (computeKind === 'clamp') return { min: configured.min ?? 0, max: configured.max ?? 100 };
   if (computeKind === 'rate_of_change') return { perMs: configured.perMs ?? 1000 };

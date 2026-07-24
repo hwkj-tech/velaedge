@@ -122,6 +122,7 @@ export function AlgorithmsPage({
     algorithmKind: 'ChangeReport',
     expression: 'a + b + c',
     inputPoints: '',
+    operator: 'Gt',
     outputPoint: 'algorithm.output',
     reportMode: 'OnChange',
     sink: 'velamq-main',
@@ -518,6 +519,25 @@ function AlgorithmEditor({
   form: EditorForm;
   setForm: Dispatch<SetStateAction<EditorForm>>;
 }) {
+  const usesThreshold = [
+    'ChangeReport',
+    'Deadband',
+    'ThresholdRule',
+    'DurationRule',
+  ].includes(form.algorithmKind);
+  const usesOperator = ['ThresholdRule', 'DurationRule'].includes(form.algorithmKind);
+  const usesTime = [
+    'WindowAggregate',
+    'Statistics',
+    'Debounce',
+    'DurationRule',
+  ].includes(form.algorithmKind);
+  const timeLabel =
+    form.algorithmKind === 'Debounce'
+      ? '稳定时长(ms)'
+      : form.algorithmKind === 'DurationRule'
+        ? '持续时长(ms)'
+        : '窗口大小(ms)';
   return (
     <>
       <section className="drawer-section">
@@ -586,45 +606,73 @@ function AlgorithmEditor({
               }
             />
           </label>
-          <label className="editor-control">
-            <span>变化阈值</span>
-            <input
-              aria-label="变化阈值"
-              value={form.threshold}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  threshold: event.target.value,
-                }))
-              }
-            />
-          </label>
-          <label className="editor-control">
-            <span>窗口大小(ms)</span>
-            <input
-              aria-label="窗口大小(ms)"
-              value={form.windowMs}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  windowMs: event.target.value,
-                }))
-              }
-            />
-          </label>
-          <label className="editor-control">
-            <span>表达式</span>
-            <input
-              aria-label="表达式"
-              value={form.expression}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  expression: event.target.value,
-                }))
-              }
-            />
-          </label>
+          {usesOperator ? (
+            <label className="editor-control">
+              <span>比较条件</span>
+              <select
+                aria-label="比较条件"
+                value={form.operator}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    operator: event.target.value as EditorForm['operator'],
+                  }))
+                }
+              >
+                <option value="Gt">大于</option>
+                <option value="Gte">大于等于</option>
+                <option value="Lt">小于</option>
+                <option value="Lte">小于等于</option>
+                <option value="Eq">等于</option>
+                <option value="Ne">不等于</option>
+              </select>
+            </label>
+          ) : null}
+          {usesThreshold ? (
+            <label className="editor-control">
+              <span>{usesOperator ? '比较阈值' : '变化阈值'}</span>
+              <input
+                aria-label={usesOperator ? '比较阈值' : '变化阈值'}
+                value={form.threshold}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    threshold: event.target.value,
+                  }))
+                }
+              />
+            </label>
+          ) : null}
+          {usesTime ? (
+            <label className="editor-control">
+              <span>{timeLabel}</span>
+              <input
+                aria-label={timeLabel}
+                value={form.windowMs}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    windowMs: event.target.value,
+                  }))
+                }
+              />
+            </label>
+          ) : null}
+          {form.algorithmKind === 'ExpressionAggregate' ? (
+            <label className="editor-control">
+              <span>表达式</span>
+              <input
+                aria-label="表达式"
+                value={form.expression}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    expression: event.target.value,
+                  }))
+                }
+              />
+            </label>
+          ) : null}
           <label className="editor-control">
             <span>上报模式</span>
             <select
@@ -678,6 +726,7 @@ interface EditorForm {
   algorithmKind: AlgorithmKind;
   expression: string;
   inputPoints: string;
+  operator: 'Gt' | 'Gte' | 'Lt' | 'Lte' | 'Eq' | 'Ne';
   outputPoint: string;
   reportMode: AlgorithmReportPolicy['mode'];
   sink: string;
@@ -688,6 +737,7 @@ interface EditorForm {
 
 function algorithmToEditorForm(algorithm: AlgorithmResponse): EditorForm {
   const firstStep = algorithm.dsl.steps[0];
+  const statisticsSuffix = /\.(avg|min|max|sum|count|first|last)$/;
   return {
     algorithmKind: algorithm.algorithmKind || 'ChangeReport',
     expression:
@@ -696,22 +746,34 @@ function algorithmToEditorForm(algorithm: AlgorithmResponse): EditorForm {
       algorithm.dsl.inputs?.length > 0
         ? algorithm.dsl.inputs.map((input) => input.pointId).join(', ')
         : algorithm.inputs,
+    operator:
+      firstStep?.type === 'thresholdRule' || firstStep?.type === 'durationCondition'
+        ? firstStep.operator
+        : 'Gt',
     outputPoint:
-      algorithm.dsl.outputs?.[0]?.pointId ||
+      (algorithm.algorithmKind === 'Statistics'
+        ? algorithm.dsl.outputs?.[0]?.pointId.replace(statisticsSuffix, '')
+        : algorithm.dsl.outputs?.[0]?.pointId) ||
       algorithm.outputIds?.[0] ||
       algorithm.outputs ||
       'algorithm.output',
     reportMode: algorithm.dsl.report?.mode || 'OnChange',
     sink: algorithm.dsl.report?.sink || 'velamq-main',
     threshold:
-      firstStep?.type === 'changeFilter' || firstStep?.type === 'thresholdRule'
+      firstStep?.type === 'changeFilter' ||
+      firstStep?.type === 'thresholdRule' ||
+      firstStep?.type === 'durationCondition'
         ? String(firstStep.threshold)
         : '0.2',
     version: algorithm.version,
     windowMs:
-      algorithm.dsl.trigger?.type === 'window'
-        ? String(algorithm.dsl.trigger.everyMs)
-        : '60000',
+      firstStep?.type === 'debounce'
+        ? String(firstStep.stableMs)
+        : firstStep?.type === 'durationCondition'
+          ? String(firstStep.durationMs)
+          : algorithm.dsl.trigger?.type === 'window'
+            ? String(algorithm.dsl.trigger.everyMs)
+            : '60000',
   };
 }
 
@@ -735,6 +797,30 @@ function buildAlgorithmDsl(form: EditorForm): AlgorithmDsl {
     mode: form.reportMode,
     sink: form.sink.trim() || 'velamq-main',
   };
+
+  if (form.algorithmKind === 'Statistics') {
+    const functions = ['avg', 'min', 'max', 'sum', 'count', 'first', 'last'] as const;
+    const outputBase = form.outputPoint.trim().replace(
+      /\.(avg|min|max|sum|count|first|last)$/,
+      '',
+    );
+    return {
+      inputs,
+      trigger: { type: 'window', everyMs: parsePositiveInt(form.windowMs, 60000) },
+      steps: [
+        {
+          type: 'windowAggregate',
+          source,
+          functions: functions.map((name) => ({ function: name, output: name })),
+        },
+      ],
+      outputs: functions.map((name) => ({
+        name,
+        pointId: `${outputBase}.${name}`,
+      })),
+      report: { ...report, mode: 'WindowResult' },
+    };
+  }
 
   if (form.algorithmKind === 'WindowAggregate') {
     return {
@@ -770,7 +856,7 @@ function buildAlgorithmDsl(form: EditorForm): AlgorithmDsl {
         {
           type: 'thresholdRule',
           source,
-          operator: 'Gt',
+          operator: form.operator,
           threshold: parseNumber(form.threshold, 0),
           event: {
             code: `${form.outputPoint.trim() || 'ALGORITHM'}_ALARM`.toUpperCase(),
@@ -781,6 +867,41 @@ function buildAlgorithmDsl(form: EditorForm): AlgorithmDsl {
       ],
       outputs: [{ name: outputName, pointId: form.outputPoint.trim() }],
       report: { ...report, mode: 'EventOnly' },
+    };
+  }
+
+  if (form.algorithmKind === 'DurationRule') {
+    return {
+      inputs,
+      trigger: { type: 'onSample' },
+      steps: [
+        {
+          type: 'durationCondition',
+          source,
+          operator: form.operator,
+          threshold: parseNumber(form.threshold, 0),
+          durationMs: parsePositiveInt(form.windowMs, 60000),
+          output: outputName,
+        },
+      ],
+      outputs: [{ name: outputName, pointId: form.outputPoint.trim() }],
+      report: { ...report, mode: 'OnOutput' },
+    };
+  }
+
+  if (form.algorithmKind === 'Debounce') {
+    return {
+      inputs,
+      trigger: { type: 'onSample' },
+      steps: [
+        {
+          type: 'debounce',
+          source,
+          stableMs: parsePositiveInt(form.windowMs, 1000),
+        },
+      ],
+      outputs: [{ name: outputName, pointId: form.outputPoint.trim() }],
+      report: { ...report, mode: 'OnOutput' },
     };
   }
 

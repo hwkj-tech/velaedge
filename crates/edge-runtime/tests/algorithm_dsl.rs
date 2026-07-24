@@ -256,6 +256,72 @@ fn debounce_waits_until_value_is_stable() {
 }
 
 #[test]
+fn duration_condition_requires_continuous_match_and_emits_once_per_period() {
+    let algorithm = AlgorithmSpec::dsl(
+        "pressure-high-duration",
+        "v1",
+        AlgorithmKind::DurationRule,
+        AlgorithmDsl {
+            inputs: vec![AlgorithmInputBinding::new("pressure", "pressure")],
+            trigger: AlgorithmTrigger::on_sample(),
+            steps: vec![AlgorithmStep::DurationCondition {
+                source: "pressure".to_string(),
+                operator: CompareOperator::Gte,
+                threshold: 10.0,
+                duration_ms: 2_000,
+                output: "value".to_string(),
+            }],
+            outputs: vec![AlgorithmOutput::virtual_point("value", "pressure.high_2s")],
+            report: AlgorithmReportPolicy::new(AlgorithmReportMode::OnOutput, "velamq-main"),
+        },
+    );
+    let mut engine = AlgorithmEngine::new(vec![algorithm]).unwrap();
+    let t0 = Utc::now();
+
+    assert!(engine
+        .apply_samples(&[sample("pressure", 11.0, t0)])
+        .unwrap()
+        .samples
+        .is_empty());
+    assert!(engine
+        .apply_samples(&[sample("pressure", 9.0, t0 + Duration::seconds(1))])
+        .unwrap()
+        .samples
+        .is_empty());
+    assert!(engine
+        .apply_samples(&[sample("pressure", 12.0, t0 + Duration::seconds(2))])
+        .unwrap()
+        .samples
+        .is_empty());
+    let first_period = engine
+        .apply_samples(&[sample("pressure", 13.0, t0 + Duration::seconds(4))])
+        .unwrap();
+    assert_eq!(
+        sample_value(&first_period.samples, "pressure.high_2s"),
+        Some(13.0)
+    );
+    assert!(engine
+        .apply_samples(&[sample("pressure", 14.0, t0 + Duration::seconds(5))])
+        .unwrap()
+        .samples
+        .is_empty());
+
+    engine
+        .apply_samples(&[sample("pressure", 8.0, t0 + Duration::seconds(6))])
+        .unwrap();
+    engine
+        .apply_samples(&[sample("pressure", 12.0, t0 + Duration::seconds(7))])
+        .unwrap();
+    let second_period = engine
+        .apply_samples(&[sample("pressure", 15.0, t0 + Duration::seconds(9))])
+        .unwrap();
+    assert_eq!(
+        sample_value(&second_period.samples, "pressure.high_2s"),
+        Some(15.0)
+    );
+}
+
+#[test]
 fn conditional_route_emits_one_named_branch_that_can_fan_out() {
     let route = AlgorithmSpec::dsl(
         "pressure-route",

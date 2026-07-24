@@ -1277,6 +1277,54 @@ describe('App cloud console write actions', () => {
     expect(within(dialog).getByText(/2 点位 \/ 3 计算节点 \/ 1 输出/)).toBeInTheDocument();
   });
 
+  it('persists continuous-condition nodes as executable Runtime DSL', async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /产品管理/ }));
+    await screen.findByText('产品列表');
+    fireEvent.click(screen.getAllByRole('button', { name: '配置' })[0]);
+    const dialog = screen.getByRole('dialog', { name: '产品配置' });
+    fireEvent.click(within(dialog).getByRole('tab', { name: '采集编排' }));
+
+    fireEvent.click(within(dialog).getAllByRole('button', { name: /持续条件/ })[0]);
+    const node = within(dialog).getByRole('button', { name: '流程节点 持续条件' });
+    fireEvent.contextMenu(node);
+    fireEvent.click(within(dialog).getByRole('menuitem', { name: '编辑节点' }));
+
+    fireEvent.change(within(dialog).getByLabelText('条件比较符'), {
+      target: { value: 'Lte' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('比较阈值'), {
+      target: { value: '12.5' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('持续时长(ms)'), {
+      target: { value: '7500' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(createProductVersion).toHaveBeenCalledOnce());
+    const savedRequest = vi.mocked(createProductVersion).mock.calls[0][1];
+    expect(savedRequest.algorithms).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'DurationRule',
+          dsl: expect.objectContaining({
+            steps: [
+              {
+                durationMs: 7500,
+                operator: 'Lte',
+                output: 'value',
+                source: 'p0',
+                threshold: 12.5,
+                type: 'durationCondition',
+              },
+            ],
+          }),
+        }),
+      ]),
+    );
+  });
+
   it('keeps edge management focused on access, product binding, monitoring and token creation', async () => {
     render(<App />);
 

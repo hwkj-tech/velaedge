@@ -4596,6 +4596,7 @@ fn validate_algorithm_dsl(
             | AlgorithmStep::Clamp { source, .. }
             | AlgorithmStep::RateOfChange { source, .. }
             | AlgorithmStep::Debounce { source, .. }
+            | AlgorithmStep::DurationCondition { source, .. }
             | AlgorithmStep::ConditionalRoute { source, .. }
             | AlgorithmStep::ThresholdRule { source, .. } => Some(source.as_str()),
             AlgorithmStep::Expression { .. } => None,

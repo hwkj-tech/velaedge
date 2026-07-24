@@ -113,7 +113,10 @@ impl AlgorithmEngine {
                     }
                     AlgorithmKind::Debounce => apply_debounce(&algorithm, state, &sample)
                         .map(|samples| (samples, Vec::new())),
-                    AlgorithmKind::DurationRule => Ok((Vec::new(), Vec::new())),
+                    AlgorithmKind::DurationRule => {
+                        apply_duration_condition(&algorithm, state, &sample)
+                            .map(|samples| (samples, Vec::new()))
+                    }
                 };
                 let stats = self.execution.entry(algorithm.id.clone()).or_default();
                 stats.last_run_latency_ms = elapsed_millis(started.elapsed());
@@ -155,6 +158,7 @@ struct AlgorithmState {
     latest_by_alias: BTreeMap<String, TelemetrySample>,
     previous_by_alias: BTreeMap<String, TelemetrySample>,
     debounce_by_alias: BTreeMap<String, DebounceState>,
+    duration_by_alias: BTreeMap<String, DurationConditionState>,
     windows: BTreeMap<String, WindowState>,
 }
 
@@ -162,6 +166,12 @@ struct AlgorithmState {
 struct DebounceState {
     value: TelemetryValue,
     since: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+struct DurationConditionState {
+    since: DateTime<Utc>,
+    emitted: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -447,6 +457,87 @@ fn apply_debounce(
     state
         .last_reported
         .insert(output.point_id.clone(), sample.value.clone());
+    Ok(vec![TelemetrySample::new(
+        sample.device_id.clone(),
+        output.point_id.clone(),
+        sample.value.clone(),
+        sample.quality,
+        sample.timestamp,
+    )])
+}
+
+fn apply_duration_condition(
+    algorithm: &AlgorithmSpec,
+    state: &mut AlgorithmState,
+    sample: &TelemetrySample,
+) -> Result<Vec<TelemetrySample>> {
+    let Some((source, operator, threshold, duration_ms, output_name)) =
+        algorithm.dsl.steps.iter().find_map(|step| match step {
+            AlgorithmStep::DurationCondition {
+                source,
+                operator,
+                threshold,
+                duration_ms,
+                output,
+            } => Some((source, *operator, *threshold, *duration_ms, output)),
+            _ => None,
+        })
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(binding) = algorithm
+        .dsl
+        .inputs
+        .iter()
+        .find(|input| input.alias == *source)
+    else {
+        bail!(
+            "algorithm {} references missing input alias {}",
+            algorithm.id,
+            source
+        );
+    };
+    if binding.point_id != sample.telemetry_id {
+        return Ok(Vec::new());
+    }
+    let Some(value) = sample.value.as_f64() else {
+        return Ok(Vec::new());
+    };
+    if !compare(value, operator, threshold) {
+        state.duration_by_alias.remove(source);
+        return Ok(Vec::new());
+    }
+
+    let duration_state =
+        state
+            .duration_by_alias
+            .entry(source.clone())
+            .or_insert(DurationConditionState {
+                since: sample.timestamp,
+                emitted: false,
+            });
+    if sample.timestamp < duration_state.since {
+        duration_state.since = sample.timestamp;
+        duration_state.emitted = false;
+    }
+    let elapsed_ms = (sample.timestamp - duration_state.since).num_milliseconds() as u64;
+    if duration_state.emitted || elapsed_ms < duration_ms {
+        return Ok(Vec::new());
+    }
+    duration_state.emitted = true;
+
+    let Some(output) = algorithm
+        .dsl
+        .outputs
+        .iter()
+        .find(|output| output.name == *output_name)
+    else {
+        bail!(
+            "algorithm {} references missing output {}",
+            algorithm.id,
+            output_name
+        );
+    };
     Ok(vec![TelemetrySample::new(
         sample.device_id.clone(),
         output.point_id.clone(),

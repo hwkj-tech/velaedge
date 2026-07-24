@@ -554,6 +554,14 @@ export type AlgorithmStep =
   | { type: 'rateOfChange'; source: string; output: string; perMs: number }
   | { type: 'debounce'; source: string; stableMs: number }
   | {
+      type: 'durationCondition';
+      source: string;
+      operator: 'Gt' | 'Gte' | 'Lt' | 'Lte' | 'Eq' | 'Ne';
+      threshold: number;
+      durationMs: number;
+      output: string;
+    }
+  | {
       type: 'conditionalRoute';
       source: string;
       operator: 'Gt' | 'Gte' | 'Lt' | 'Lte' | 'Eq' | 'Ne';

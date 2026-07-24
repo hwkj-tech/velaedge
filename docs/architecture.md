@@ -23,7 +23,13 @@ Shared contracts used by both edge and cloud:
 - `DeviceShadow`: latest known local device state.
 - `CloudEnvelope`: versioned message wrapper for edge-cloud communication.
 - `EdgeLinkMessage`: private runtime-cloud message contract carried over a runtime-initiated TCP session.
-- `AlgorithmSpec`: deterministic point-driven DSL for window, change, deadband, expression, merge, and threshold computation nodes. The only executable engine is `Rule`; legacy `Wasm`, `Onnx`, and `Python` values are accepted solely while reading older persisted packages and normalize to `Rule` on the next write.
+- `AlgorithmSpec`: deterministic point-driven DSL for window/statistical aggregation, change,
+  deadband, debounce, continuous condition, expression, transform, merge, conditional routing,
+  and threshold computation nodes. Continuous conditions retain Runtime state, emit once after
+  the comparison remains true for the configured duration, and re-arm only after the comparison
+  becomes false. The only executable engine is `Rule`; legacy `Wasm`, `Onnx`, and `Python` values
+  are accepted solely while reading older persisted packages and normalize to `Rule` on the next
+  write.
 - `EdgeConfigPackage`: edge-targeted configuration bundle with devices, protocol connections, MQTT uplinks, point mappings, collection tasks, algorithms, data configs, and their visual graph.
 
 ### `crates/edge-runtime`

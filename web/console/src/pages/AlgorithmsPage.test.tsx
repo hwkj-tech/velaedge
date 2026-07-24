@@ -88,6 +88,73 @@ describe('AlgorithmsPage', () => {
     expect(screen.getByText('已保存')).toBeInTheDocument();
   });
 
+  it('creates an executable continuous-condition rule with focused parameters', async () => {
+    const onCreateAlgorithm = vi.fn().mockResolvedValue({
+      algorithmId: 'pressure-high-duration',
+    });
+
+    render(
+      <AlgorithmsPage
+        selectedEdgeId="edge-dev"
+        onCreateAlgorithm={onCreateAlgorithm}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '新建算法' }));
+    const dialog = screen.getByRole('dialog', { name: '新建算法' });
+    fireEvent.change(within(dialog).getByLabelText('新建 Algorithm ID'), {
+      target: { value: 'pressure-high-duration' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('算法类型'), {
+      target: { value: 'DurationRule' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('输入点位'), {
+      target: { value: 'pressure' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('输出虚拟点位'), {
+      target: { value: 'pressure.high_5s' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('比较条件'), {
+      target: { value: 'Gte' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('比较阈值'), {
+      target: { value: '10' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('持续时长(ms)'), {
+      target: { value: '5000' },
+    });
+
+    expect(within(dialog).queryByLabelText('表达式')).not.toBeInTheDocument();
+    expect(within(dialog).getByLabelText('DSL 预览')).toHaveTextContent(
+      'durationCondition',
+    );
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(onCreateAlgorithm).toHaveBeenCalledWith('edge-dev', {
+        algorithmId: 'pressure-high-duration',
+        version: '1.0.0',
+        algorithmKind: 'DurationRule',
+        dsl: {
+          inputs: [{ alias: 'p', pointId: 'pressure' }],
+          trigger: { type: 'onSample' },
+          steps: [
+            {
+              type: 'durationCondition',
+              source: 'p',
+              operator: 'Gte',
+              threshold: 10,
+              durationMs: 5000,
+              output: 'high_5s',
+            },
+          ],
+          outputs: [{ name: 'high_5s', pointId: 'pressure.high_5s' }],
+          report: { mode: 'OnOutput', sink: 'velamq-main' },
+        },
+      });
+    });
+  });
+
   it('shows the bound edge context without switching edges in the page', () => {
     render(
       <AlgorithmsPage

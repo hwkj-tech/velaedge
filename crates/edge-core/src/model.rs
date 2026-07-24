@@ -456,6 +456,14 @@ pub enum AlgorithmStep {
         #[serde(rename = "stableMs")]
         stable_ms: u64,
     },
+    DurationCondition {
+        source: String,
+        operator: CompareOperator,
+        threshold: f64,
+        #[serde(rename = "durationMs")]
+        duration_ms: u64,
+        output: String,
+    },
     ConditionalRoute {
         source: String,
         operator: CompareOperator,

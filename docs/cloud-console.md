@@ -67,11 +67,13 @@ When there is no edge yet, the console does not query edge-scoped endpoints or i
 7. Collection orchestration
    Build a directed, acyclic data flow from reusable point inputs through deterministic calculation
    nodes to one or more MQTT outputs. The current palette contains window aggregation, moving
-   average, statistical summary, change reporting, deadband filtering, debounce, expression,
-   scale/offset, clamp, rate of change, multi-point merge, conditional routing, and alarm event
-   nodes. Conditional nodes expose named outputs, one output may fan out to several downstream
-   nodes, and separate branches may publish to different `sink_id` and topic templates. Runtime
-   executes the same persisted graph and DSL; the browser is not the execution engine.
+   average, statistical summary, change reporting, deadband filtering, debounce, continuous
+   condition, expression, scale/offset, clamp, rate of change, multi-point merge, conditional
+   routing, and alarm event nodes. A continuous-condition node emits once after its comparison
+   remains true for the configured duration, and may emit again only after the condition resets.
+   Conditional nodes expose named outputs, one output may fan out to several downstream nodes,
+   and separate branches may publish to different `sink_id` and topic templates. Runtime executes
+   the same persisted graph and DSL; the browser is not the execution engine.
 
 8. MQTT uplink
    Configure the runtime's northbound MQTT publishing sink to velaMQ. MQTT is used for serial telemetry upload, not as a device-side acquisition protocol.
