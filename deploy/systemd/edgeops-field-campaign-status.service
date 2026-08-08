@@ -1,0 +1,19 @@
+[Unit]
+Description=VelaEdge physical field campaign site status
+After=local-fs.target
+ConditionPathExists=/etc/edgeops/field-campaign/site-plan.json
+ConditionPathExists=/opt/edgeops/deploy/field-acceptance-policy.json
+
+[Service]
+Type=oneshot
+User=edgeops-runtime
+Group=edgeops-runtime
+StateDirectory=edgeops-field-campaign
+WorkingDirectory=/var/lib/edgeops-field-campaign
+ExecStart=/opt/edgeops/bin/field-campaign-status --plan /etc/edgeops/field-campaign/site-plan.json --policy /opt/edgeops/deploy/field-acceptance-policy.json --output /var/lib/edgeops-field-campaign/site-status.json
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/edgeops-field-campaign
+UMask=0077

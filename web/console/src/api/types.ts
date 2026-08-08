@@ -24,13 +24,60 @@ export interface SaveProjectRequest {
 export interface CatalogPointAddress {
   kind: string;
   value: string;
+  modbus?: CatalogModbusPointOptions;
 }
+
+export interface CatalogModbusPointOptions {
+  encoding?: 'u16' | 'i16' | 'u32' | 'i32' | 'u64' | 'i64' | 'f32' | 'f64';
+  byteOrder: 'big_endian' | 'little_endian';
+  wordOrder: 'high_word_first' | 'low_word_first';
+  scale: number;
+  offset: number;
+  bitIndex?: number;
+}
+
+export interface CatalogBacnetPointOptions {
+  writePriority: number;
+}
+
+export type CatalogOpcUaWriteDataType =
+  | 'Boolean'
+  | 'SByte'
+  | 'Byte'
+  | 'Int16'
+  | 'UInt16'
+  | 'Int32'
+  | 'UInt32'
+  | 'Int64'
+  | 'UInt64'
+  | 'Float'
+  | 'Double'
+  | 'String';
+
+export interface CatalogOpcUaPointOptions {
+  writeDataType: CatalogOpcUaWriteDataType;
+}
+
+export type CatalogIec104ControlType = 'C_SC_NA_1' | 'C_DC_NA_1' | 'C_SE_NC_1';
+
+export interface CatalogIec104PointOptions {
+  controlType: CatalogIec104ControlType;
+  selectBeforeOperate: boolean;
+}
+
+export type CatalogIec101ControlType = CatalogIec104ControlType;
+export type CatalogIec101PointOptions = CatalogIec104PointOptions;
 
 export interface PointSetPointResponse {
   pointId: string;
   semanticId: string;
   address: CatalogPointAddress;
   valueType: string;
+  access: 'read_only' | 'read_write' | 'write_only';
+  opcUa?: CatalogOpcUaPointOptions;
+  iec101?: CatalogIec101PointOptions;
+  iec104?: CatalogIec104PointOptions;
+  bacnet?: CatalogBacnetPointOptions;
   unit?: string | null;
   intervalMs: number;
 }
@@ -53,6 +100,35 @@ export interface SavePointSetRequest {
   description: string;
   protocol: string;
   points: PointSetPointResponse[];
+}
+
+export interface Dlt645DataIdentifierTemplateResponse {
+  templateId: string;
+  name: string;
+  semanticId: string;
+  dataIdentifier: string;
+  valueType: 'Float' | 'Integer' | 'Boolean' | 'Text';
+  decimalPlaces: number;
+  valueBytes: number;
+  unit?: string | null;
+}
+
+export interface BacnetObjectTemplateResponse {
+  objectType: string;
+  name: string;
+  rawValue: number;
+  writable: boolean;
+}
+
+export interface BacnetPropertyTemplateResponse {
+  property: string;
+  name: string;
+  rawValue: number;
+}
+
+export interface BacnetIpCatalogResponse {
+  objectTypes: BacnetObjectTemplateResponse[];
+  properties: BacnetPropertyTemplateResponse[];
 }
 
 export interface ProductResponse {
@@ -83,6 +159,7 @@ export interface SaveProductVersionRequest {
   collectionTasks: unknown[];
   algorithms: unknown[];
   dataConfigs: unknown[];
+  commandFlows: CommandFlowConfig[];
   mqttUplinks: unknown[];
 }
 
@@ -97,8 +174,48 @@ export interface ProductVersionResponse {
   collectionTasks: unknown[];
   algorithms: unknown[];
   dataConfigs: unknown[];
+  commandFlows: CommandFlowConfig[];
   mqttUplinks: unknown[];
   createdAt: string;
+}
+
+export type CommandGraphNodeKind =
+  | 'mqtt_input'
+  | 'json_parse'
+  | 'condition'
+  | 'safety_gate'
+  | 'point_write'
+  | 'mqtt_reply';
+
+export interface CommandGraphNode {
+  node_id: string;
+  kind: CommandGraphNodeKind;
+  label: string;
+  ref_id?: string;
+  params: Record<string, unknown>;
+  x: number;
+  y: number;
+}
+
+export interface CommandGraphEdge {
+  edge_id: string;
+  from: string;
+  from_port?: string;
+  to: string;
+  to_port?: string;
+}
+
+export interface CommandFlowConfig {
+  flow_id: string;
+  name: string;
+  enabled: boolean;
+  protocol_connection_id?: string;
+  mqtt_connection_id: string;
+  subscribe_topic: string;
+  qos: number;
+  reply_topic_template: string;
+  nodes: CommandGraphNode[];
+  edges: CommandGraphEdge[];
 }
 
 export interface PointMappingResponse {
@@ -126,6 +243,7 @@ export interface SavePointMappingRequest {
   addressValue: string;
   intervalMs: number;
   unit: string;
+  readWrite?: 'read' | 'read_write' | 'write';
 }
 
 export interface CreatePointMappingRequest {
@@ -138,6 +256,7 @@ export interface CreatePointMappingRequest {
   valueType?: string;
   unit?: string;
   intervalMs?: number;
+  readWrite?: 'read' | 'read_write' | 'write';
 }
 
 export interface ApplyResultResponse {
@@ -366,6 +485,38 @@ export interface ReviewAgentProposalRequest {
   note?: string | null;
 }
 
+export interface Iec104ConnectionSettings {
+  cp56TimeZoneOffsetMinutes: number;
+}
+
+export interface Iec101ConnectionSettings {
+  cp56TimeZoneOffsetMinutes: number;
+}
+
+export type RuntimeProtocolTransport =
+  | 'internal'
+  | 'serial'
+  | 'tcp'
+  | 'udp'
+  | 'tcp_udp';
+
+export type RuntimeProtocolMaturity =
+  | 'laboratory'
+  | 'deployment_candidate'
+  | 'production'
+  | 'planned';
+
+export interface RuntimeProtocolDescriptor {
+  protocolType: string;
+  capabilityId: string;
+  displayName: string;
+  transport: RuntimeProtocolTransport;
+  maturity: RuntimeProtocolMaturity;
+  telemetryRead: boolean;
+  commandWrite: boolean;
+  automaticDiscovery: boolean;
+}
+
 export interface ProtocolConnectionResponse {
   edgeId: string;
   connectionId: string;
@@ -373,6 +524,13 @@ export interface ProtocolConnectionResponse {
   protocol: string;
   endpoint: string;
   serial?: SerialConnectionSettings | null;
+  iec101?: Iec101ConnectionSettings | null;
+  iec104?: Iec104ConnectionSettings | null;
+  opcUa?: OpcUaConnectionSettings | null;
+  bacnetIp?: BacnetIpConnectionSettings | null;
+  siemensS7?: SiemensS7ConnectionSettings | null;
+  omronFins?: OmronFinsConnectionSettings | null;
+  circuitBreaker?: ProtocolCircuitBreakerConfig;
   status: string;
   policy: string;
 }
@@ -381,12 +539,102 @@ export interface SaveProtocolConnectionRequest {
   protocolType: string;
   endpoint: string | null;
   serial?: SerialConnectionSettings | null;
+  iec101?: Iec101ConnectionSettings | null;
+  iec104?: Iec104ConnectionSettings | null;
+  opcUa?: OpcUaConnectionSettings | null;
+  bacnetIp?: BacnetIpConnectionSettings | null;
+  siemensS7?: SiemensS7ConnectionSettings | null;
+  omronFins?: OmronFinsConnectionSettings | null;
+  circuitBreaker?: ProtocolCircuitBreakerConfig;
 }
 
 export interface CreateProtocolConnectionRequest {
   protocolType: string;
   endpoint: string | null;
   serial?: SerialConnectionSettings | null;
+  iec101?: Iec101ConnectionSettings | null;
+  iec104?: Iec104ConnectionSettings | null;
+  opcUa?: OpcUaConnectionSettings | null;
+  bacnetIp?: BacnetIpConnectionSettings | null;
+  siemensS7?: SiemensS7ConnectionSettings | null;
+  omronFins?: OmronFinsConnectionSettings | null;
+  circuitBreaker?: ProtocolCircuitBreakerConfig;
+}
+
+export type OpcUaSecurityPolicy =
+  | 'none'
+  | 'basic256_sha256'
+  | 'aes128_sha256_rsa_oaep'
+  | 'aes256_sha256_rsa_pss';
+
+export type OpcUaMessageSecurityMode = 'none' | 'sign' | 'sign_and_encrypt';
+export type OpcUaAuthMode = 'anonymous' | 'username' | 'x509';
+
+export interface OpcUaConnectionSettings {
+  securityPolicy: OpcUaSecurityPolicy;
+  messageSecurityMode: OpcUaMessageSecurityMode;
+  authMode: OpcUaAuthMode;
+  username?: string | null;
+  passwordEnv?: string | null;
+  userCertificatePath?: string | null;
+  userPrivateKeyPath?: string | null;
+  pkiDir: string;
+  trustServerCerts: boolean;
+  verifyServerCerts: boolean;
+  connectTimeoutMs: number;
+  requestTimeoutMs: number;
+  sessionTimeoutMs: number;
+  sessionRetryLimit: number;
+}
+
+export interface BacnetIpConnectionSettings {
+  bindAddress: string;
+  localPort: number;
+  broadcastAddress: string;
+  apduTimeoutMs: number;
+  apduRetries: number;
+  discoveryTimeoutMs: number;
+  maxApduLength: 50 | 128 | 206 | 480 | 1024 | 1476;
+  foreignDevice?: BacnetForeignDeviceSettings | null;
+  cov?: BacnetCovSettings | null;
+}
+
+export interface BacnetForeignDeviceSettings {
+  bbmdAddress: string;
+  ttlSeconds: number;
+}
+
+export interface BacnetCovSettings {
+  lifetimeSeconds: number;
+  confirmedNotifications: boolean;
+  fallbackPollIntervalMs: number;
+}
+
+export interface SiemensS7ConnectionSettings {
+  rack: number;
+  slot: number;
+  pduSize: 240 | 480 | 960;
+  connectTimeoutMs: number;
+  requestTimeoutMs: number;
+}
+
+export interface OmronFinsConnectionSettings {
+  transport: 'udp' | 'tcp';
+  sourceNetwork: number;
+  sourceNode: number;
+  sourceUnit: number;
+  destinationNetwork: number;
+  destinationNode: number;
+  destinationUnit: number;
+  timeoutMs: number;
+  wordOrder: 'high_word_first' | 'low_word_first';
+}
+
+export interface ProtocolCircuitBreakerConfig {
+  enabled: boolean;
+  failureThreshold: number;
+  openDurationMs: number;
+  halfOpenSuccessThreshold: number;
 }
 
 export interface SerialConnectionSettings {
@@ -630,6 +878,34 @@ export interface ProtocolRuntimeMetrics {
   timeout_count: number;
   error_count: number;
   reconnect_count: number;
+  collection_attempt_count?: number;
+  collection_success_count?: number;
+  write_attempt_count?: number;
+  write_success_count?: number;
+  circuit_state?: 'Closed' | 'Open' | 'HalfOpen';
+  consecutive_failure_count?: number;
+  circuit_open_count?: number;
+  circuit_rejected_count?: number;
+  last_quality_code?:
+    | 'good'
+    | 'uncertain_protocol'
+    | 'uncertain_last_known'
+    | 'uncertain_out_of_range'
+    | 'uncertain_substituted'
+    | 'uncertain_overflow'
+    | 'bad_communication'
+    | 'bad_timeout'
+    | 'bad_protocol'
+    | 'bad_decode'
+    | 'bad_configuration'
+    | 'bad_out_of_service';
+  good_value_count?: number;
+  uncertain_value_count?: number;
+  bad_value_count?: number;
+  subscription_count?: number;
+  notification_count?: number;
+  subscription_error_count?: number;
+  fallback_poll_count?: number;
 }
 
 export interface LocalStoreMetrics {
@@ -645,6 +921,31 @@ export interface AlgorithmRuntimeMetrics {
   last_run_latency_ms: number;
   error_count: number;
   alert_count: number;
+}
+
+export interface MqttSinkRuntimeMetrics {
+  sink_id: string;
+  broker: string;
+  client_id: string;
+  connected: boolean;
+  publish_success_count: number;
+  publish_failure_count: number;
+  published_bytes: number;
+  average_ack_latency_ms: number;
+  last_ack_latency_ms?: number | null;
+  last_publish_at?: string | null;
+  last_topic?: string | null;
+  last_error?: string | null;
+}
+
+export interface MqttRuntimeMetrics {
+  configured_sink_count: number;
+  connected_sink_count: number;
+  connection_generation: number;
+  publish_success_count: number;
+  publish_failure_count: number;
+  published_bytes: number;
+  sinks: MqttSinkRuntimeMetrics[];
 }
 
 export interface CloudSyncMetrics {
@@ -666,6 +967,7 @@ export interface EdgeRuntimeMetricsSnapshot {
   protocols: ProtocolRuntimeMetrics[];
   local_store: LocalStoreMetrics;
   algorithms: AlgorithmRuntimeMetrics[];
+  mqtt?: MqttRuntimeMetrics;
   cloud_sync: CloudSyncMetrics;
 }
 
@@ -701,6 +1003,18 @@ export interface MqttUplinkResponse {
   sinkId: string;
   broker: string;
   clientId: string;
+  protocolVersion?: '3.1.1' | '5.0';
+  keepAliveSeconds?: number;
+  cleanSession?: boolean;
+  cleanStart?: boolean;
+  sessionExpiryIntervalSeconds?: number;
+  receiveMaximum?: number;
+  maximumPacketSizeBytes?: number;
+  topicAliasMaximum?: number;
+  requestResponseInformation?: boolean;
+  requestProblemInformation?: boolean;
+  userProperties?: MqttUserProperty[];
+  lastWill?: MqttLastWill;
   username?: string;
   passwordEnv?: string;
   tlsCaPath?: string;
@@ -710,11 +1024,33 @@ export interface MqttUplinkResponse {
   flushIntervalMs: number;
 }
 
+export interface MqttUserProperty {
+  key: string;
+  value: string;
+}
+
+export interface MqttLastWill {
+  topic: string;
+  payload: string;
+  qos: number;
+  retain: boolean;
+  delayIntervalSeconds?: number;
+  payloadFormatUtf8?: boolean;
+  messageExpiryIntervalSeconds?: number;
+  contentType?: string;
+  responseTopic?: string;
+  correlationData?: string;
+  userProperties?: MqttUserProperty[];
+}
+
 export type SaveMqttUplinkRequest = MqttUplinkResponse;
 
 export interface RunDiscoveryRequest {
   connectionId: string;
-  addressRange: string;
+  addressRange?: string;
+  rootNodeId?: string;
+  maxDepth?: number;
+  includeStandardNamespace?: boolean;
 }
 
 export interface DiscoveredPointResponse {

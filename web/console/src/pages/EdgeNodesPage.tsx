@@ -17,6 +17,7 @@ import type {
   MqttUplinkResponse,
 } from '../api/types';
 import { Modal } from '../components/Modal';
+import { MqttConnectionForm } from '../components/MqttConnectionForm';
 import { displayError } from '../utils/errors';
 
 export type EdgeConfigTabKey =
@@ -26,8 +27,7 @@ export type EdgeConfigTabKey =
   | 'collection'
   | 'algorithms'
   | 'reports'
-  | 'mqtt'
-  | 'release';
+  | 'mqtt';
 
 export interface EdgeConfigSummary {
   collectionTaskCount: number;
@@ -85,7 +85,7 @@ export function EdgeNodesPage({
   const [page, setPage] = useState(1);
   const [createDialog, setCreateDialog] = useState<CreateManagedEdgeRequest>();
   const [accessDialog, setAccessDialog] = useState<EdgeNodeResponse>();
-  const [monitorDialog, setMonitorDialog] = useState<EdgeNodeResponse>();
+  const [monitorEdgeId, setMonitorEdgeId] = useState<string>();
   const [mqttDialog, setMqttDialog] = useState<{ edgeId: string; form: MqttUplinkResponse }>();
   const [issuedAccessTokens, setIssuedAccessTokens] = useState<Record<string, string>>({});
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -94,6 +94,7 @@ export function EdgeNodesPage({
   const currentPage = Math.min(page, totalPages);
   const pageStart = (currentPage - 1) * pageSize;
   const visibleEdges = edges.slice(pageStart, pageStart + pageSize);
+  const monitorEdge = edges.find((edge) => edge.edgeId === monitorEdgeId);
 
   const handleDeleteEdge = async (edgeId: string) => {
     setToolbarMessage('');
@@ -223,7 +224,7 @@ export function EdgeNodesPage({
                         <button
                           aria-label={`运行监控 ${edge.edgeId}`}
                           className="secondary-button compact"
-                          onClick={() => setMonitorDialog(edge)}
+                          onClick={() => setMonitorEdgeId(edge.edgeId)}
                           type="button"
                         >
                           <Activity size={14} aria-hidden="true" />
@@ -295,7 +296,7 @@ export function EdgeNodesPage({
         <Modal onClose={() => setCreateDialog(undefined)}>
           <form
             aria-label="新增边端"
-            className="modal-panel"
+            className="modal-panel mqtt-connection-modal"
             onSubmit={async (event) => {
               event.preventDefault();
               setSaveState('saving');
@@ -437,21 +438,21 @@ export function EdgeNodesPage({
           </section>
         </Modal>
       ) : null}
-      {monitorDialog ? (
-        <Modal onClose={() => setMonitorDialog(undefined)}>
+      {monitorEdge ? (
+        <Modal onClose={() => setMonitorEdgeId(undefined)}>
           <section aria-label="边端运行监控" className="modal-panel edge-monitor-modal" role="dialog">
             <div className="modal-header">
               <div>
-                <h3>边端运行监控</h3>
-                <p>{monitorDialog.displayName} · {monitorDialog.edgeId}</p>
+                <h3>边端运行监控 <span className="live-monitor-indicator"><i />实时</span></h3>
+                <p>{monitorEdge.displayName} · {monitorEdge.edgeId} · 每 5 秒刷新</p>
               </div>
-              <button aria-label="关闭" className="icon-button" onClick={() => setMonitorDialog(undefined)} type="button">
+              <button aria-label="关闭" className="icon-button" onClick={() => setMonitorEdgeId(undefined)} type="button">
                 <X size={16} aria-hidden="true" />
               </button>
             </div>
             <EdgeMonitorDetails
-              edge={monitorDialog}
-              summary={findConfigSummary(configSummaries, monitorDialog.edgeId)}
+              edge={monitorEdge}
+              summary={findConfigSummary(configSummaries, monitorEdge.edgeId)}
             />
           </section>
         </Modal>
@@ -460,7 +461,7 @@ export function EdgeNodesPage({
         <Modal onClose={() => setMqttDialog(undefined)}>
           <form
             aria-label="边端 MQTT 配置"
-            className="modal-panel"
+            className="modal-panel mqtt-connection-modal"
             onSubmit={async (event) => {
               event.preventDefault();
               setSaveState('saving');
@@ -476,23 +477,18 @@ export function EdgeNodesPage({
             role="dialog"
           >
             <div className="modal-header">
-              <h3>边端 MQTT 配置 {mqttDialog.edgeId}</h3>
+              <div>
+                <h3>MQTT 连接</h3>
+                <p>{mqttDialog.edgeId} · 上报 Topic 与触发策略由采集编排定义</p>
+              </div>
               <button aria-label="关闭" className="icon-button" onClick={() => setMqttDialog(undefined)} type="button">
                 <X size={16} aria-hidden="true" />
               </button>
             </div>
-            <div className="form-grid">
-              <MqttField label="Sink ID" value={mqttDialog.form.sinkId} onChange={(sinkId) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, sinkId } })} />
-              <MqttField label="Broker 地址" value={mqttDialog.form.broker} onChange={(broker) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, broker } })} />
-              <MqttField label="Client ID" value={mqttDialog.form.clientId} onChange={(clientId) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, clientId } })} />
-              <MqttField label="MQTT 用户名" value={mqttDialog.form.username ?? ''} onChange={(username) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, username } })} />
-              <MqttField label="密码环境变量" value={mqttDialog.form.passwordEnv ?? ''} onChange={(passwordEnv) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, passwordEnv } })} />
-              <MqttField label="私有 CA 路径" value={mqttDialog.form.tlsCaPath ?? ''} onChange={(tlsCaPath) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, tlsCaPath } })} />
-              <MqttField label="默认 Topic 模板" value={mqttDialog.form.topicTemplate} onChange={(topicTemplate) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, topicTemplate } })} />
-              <MqttField label="QoS" type="number" value={String(mqttDialog.form.qos)} onChange={(qos) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, qos: Number(qos) } })} />
-              <MqttField label="批量条数" type="number" value={String(mqttDialog.form.batchSize)} onChange={(batchSize) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, batchSize: Number(batchSize) } })} />
-              <MqttField label="刷新间隔(ms)" type="number" value={String(mqttDialog.form.flushIntervalMs)} onChange={(flushIntervalMs) => setMqttDialog({ ...mqttDialog, form: { ...mqttDialog.form, flushIntervalMs: Number(flushIntervalMs) } })} />
-            </div>
+            <MqttConnectionForm
+              form={mqttDialog.form}
+              onChange={(form) => setMqttDialog({ ...mqttDialog, form })}
+            />
             <div className="drawer-footer">
               <span className="editor-status" role="status">{mqttSaveText(saveState)}</span>
               <button className="secondary-button" onClick={() => setMqttDialog(undefined)} type="button">取消</button>
@@ -543,7 +539,7 @@ function EdgeMonitorDetails({ edge, summary }: { edge: EdgeNodeResponse; summary
           <MonitorMetric label="数据上报" value={summary.dataConfigCount} suffix="个" />
         </div>
         <div className="edge-monitor-release">
-          <span>配置发布</span><strong>{summary.releaseStatus}</strong>
+          <span>配置同步</span><strong>{summary.releaseStatus}</strong>
         </div>
       </section>
 
@@ -598,7 +594,7 @@ function findConfigSummary(
       mqttSinkId: '未配置',
       pointCount: 0,
       protocolCount: 0,
-      releaseStatus: '待发布',
+      releaseStatus: '等待同步',
       productName: '未绑定产品',
       productVersion: '-',
       projectName: '未分配项目',
@@ -627,34 +623,20 @@ function EdgeTextField({
   );
 }
 
-function MqttField({
-  label,
-  onChange,
-  type = 'text',
-  value,
-}: {
-  label: string;
-  onChange: (value: string) => void;
-  type?: string;
-  value: string;
-}) {
-  return (
-    <label className="editor-control">
-      <span>{label}</span>
-      <input aria-label={label} type={type} value={value} onChange={(event) => onChange(event.target.value)} />
-    </label>
-  );
-}
-
 function defaultMqttUplink(edgeId: string): MqttUplinkResponse {
   return {
     batchSize: 100,
     broker: '',
     clientId: `${edgeId}-runtime`,
+    cleanSession: true,
+    cleanStart: true,
     flushIntervalMs: 1000,
+    keepAliveSeconds: 60,
+    protocolVersion: '3.1.1',
     qos: 1,
     sinkId: 'velamq-main',
     topicTemplate: 'edge/{edge_id}/device/{device_id}/telemetry',
+    sessionExpiryIntervalSeconds: 0,
   };
 }
 

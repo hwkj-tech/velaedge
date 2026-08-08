@@ -245,7 +245,7 @@ export function DeviceModelsPage({
         {editDialogOpen ? (
         <Drawer
           onClose={() => setEditDialogOpen(false)}
-          subtitle="模型保存后进入待发布配置，发布后边端按语义点位匹配协议地址"
+          subtitle="模型保存并通过校验后自动同步，边端按语义点位匹配协议地址"
           title={`编辑设备模型 ${activeModel.deviceType}`}
           footer={
             <>

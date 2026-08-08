@@ -9,6 +9,10 @@ if [[ "$WORK_DIR" != /* ]]; then
 fi
 REPORT_PATH="${EDGEOPS_RELEASE_REPORT:-${WORK_DIR}/report.json}"
 VELAMQ_REPO="${VELAMQ_REPO:-}"
+FIELD_CAMPAIGN_DIRS="${EDGEOPS_FIELD_CAMPAIGN_DIRS:-}"
+FIELD_CAMPAIGN_PLAN="${EDGEOPS_FIELD_CAMPAIGN_PLAN:-}"
+FIELD_POLICY="${EDGEOPS_FIELD_POLICY:-}"
+CONTAINER_PROTOCOL_GATE="${EDGEOPS_CONTAINER_PROTOCOL_GATE:-}"
 STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 RESULTS='[]'
 OVERALL_STATUS="running"
@@ -16,6 +20,28 @@ OVERALL_STATUS="running"
 case "$PROFILE" in
   local | site) ;;
   *) echo "EDGEOPS_RELEASE_PROFILE must be local or site" >&2; exit 2 ;;
+esac
+
+if [[ ( "$PROFILE" == site || -n "$FIELD_CAMPAIGN_PLAN" ) && -z "$FIELD_POLICY" ]]; then
+  FIELD_POLICY="${ROOT_DIR}/deploy/field-acceptance-policy.json"
+fi
+if [[ -n "$FIELD_POLICY" && "$FIELD_POLICY" != /* ]]; then
+  FIELD_POLICY="${ROOT_DIR}/${FIELD_POLICY}"
+fi
+if [[ -n "$FIELD_CAMPAIGN_PLAN" && "$FIELD_CAMPAIGN_PLAN" != /* ]]; then
+  FIELD_CAMPAIGN_PLAN="${ROOT_DIR}/${FIELD_CAMPAIGN_PLAN}"
+fi
+
+if [[ -z "$CONTAINER_PROTOCOL_GATE" ]]; then
+  if [[ "$PROFILE" == site ]]; then
+    CONTAINER_PROTOCOL_GATE=required
+  else
+    CONTAINER_PROTOCOL_GATE=auto
+  fi
+fi
+case "$CONTAINER_PROTOCOL_GATE" in
+  auto | required | skip) ;;
+  *) echo "EDGEOPS_CONTAINER_PROTOCOL_GATE must be auto, required or skip" >&2; exit 2 ;;
 esac
 
 for command in cargo curl git jq nc npm openssl rg sqlite3; do
@@ -101,6 +127,48 @@ run_gate() {
   fi
 }
 
+run_field_interoperability_gate() {
+  local name="$1"
+  local campaign_list="$2"
+  local -a campaign_dirs command
+  IFS=':' read -r -a campaign_dirs <<<"$campaign_list"
+  command=(
+    cargo run --quiet --release -p edge-runtime --bin field-interoperability-gate --
+    --output "${WORK_DIR}/field-interoperability/report.json"
+  )
+  if [[ -n "$FIELD_POLICY" ]]; then
+    [[ -f "$FIELD_POLICY" ]] || {
+      echo "field interoperability policy does not exist: $FIELD_POLICY" >&2
+      return 2
+    }
+    command+=(--policy "$FIELD_POLICY")
+  fi
+  local directory
+  for directory in "${campaign_dirs[@]}"; do
+    [[ -n "$directory" ]] || continue
+    command+=(--campaign-dir "$directory")
+  done
+  run_gate "$name" "field-interoperability/report.json" "${command[@]}"
+}
+
+run_field_site_status_gate() {
+  local name="$1"
+  [[ -f "$FIELD_CAMPAIGN_PLAN" ]] || {
+    echo "field campaign plan does not exist: $FIELD_CAMPAIGN_PLAN" >&2
+    return 2
+  }
+  [[ -f "$FIELD_POLICY" ]] || {
+    echo "field interoperability policy does not exist: $FIELD_POLICY" >&2
+    return 2
+  }
+  run_gate "$name" "field-campaign-site/report.json" \
+    cargo run --quiet --release -p edge-runtime --bin field-campaign-status -- \
+      --plan "$FIELD_CAMPAIGN_PLAN" \
+      --policy "$FIELD_POLICY" \
+      --output "${WORK_DIR}/field-campaign-site/report.json" \
+      --require-complete
+}
+
 skip_gate() {
   local name="$1"
   local required="$2"
@@ -119,6 +187,27 @@ run_gate rust-clippy "cargo clippy --workspace --all-targets --all-features -- -
   cargo clippy --workspace --all-targets --all-features -- -D warnings
 run_gate rust-workspace "cargo test --workspace" \
   cargo test --workspace
+run_gate protocol-matrix "protocol-matrix/report.json" \
+  env \
+    EDGEOPS_PROTOCOL_MATRIX_WORK_DIR="${WORK_DIR}/protocol-matrix" \
+    "${ROOT_DIR}/scripts/run-protocol-matrix-acceptance.sh"
+if [[ "$CONTAINER_PROTOCOL_GATE" == skip ]]; then
+  skip_gate container-protocol-devices false "disabled by EDGEOPS_CONTAINER_PROTOCOL_GATE=skip"
+elif command -v docker >/dev/null && docker info >/dev/null 2>&1; then
+  run_gate container-protocol-devices "container-protocol-devices/report.json" \
+    env \
+      EDGEOPS_CONTAINER_PROTOCOL_WORK_DIR="${WORK_DIR}/container-protocol-devices" \
+      EDGEOPS_CONTAINER_PROTOCOL_NO_BUILD="${EDGEOPS_CONTAINER_PROTOCOL_NO_BUILD:-0}" \
+      "${ROOT_DIR}/scripts/run-container-protocol-device-acceptance.sh"
+elif [[ "$CONTAINER_PROTOCOL_GATE" == required ]]; then
+  echo "Docker is required for the container protocol device gate" >&2
+  OVERALL_STATUS=failed
+  skip_gate container-protocol-devices true "Docker daemon is unavailable"
+  write_report "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  exit 2
+else
+  skip_gate container-protocol-devices false "Docker daemon is unavailable"
+fi
 run_gate console-tests "complete component/API test suite" \
   npm --prefix web/console test -- --run
 run_gate console-build "web/console/dist" \
@@ -147,6 +236,10 @@ run_gate field-report-verifier "field-report-verifier/report.json" \
   env \
     EDGEOPS_FIELD_VERIFIER_TEST_WORK_DIR="${WORK_DIR}/field-report-verifier" \
     "${ROOT_DIR}/scripts/test-field-acceptance-report-verifier.sh"
+run_gate field-campaign-runner "field-campaign-runner/report.json" \
+  env \
+    EDGEOPS_FIELD_CAMPAIGN_RUNNER_TEST_WORK_DIR="${WORK_DIR}/field-campaign-runner" \
+    "${ROOT_DIR}/scripts/test-field-campaign-runner.sh"
 
 run_gate edgelink-mtls "edgelink/report.json" \
   env \
@@ -191,21 +284,16 @@ else
   skip_gate velamq-tls-qos1 false "set VELAMQ_REPO to run broker-source acceptance"
 fi
 
-if [[ "$PROFILE" == "site" ]]; then
-  [[ -n "${EDGEOPS_FIELD_CONFIG:-}" ]] || {
-    echo "EDGEOPS_FIELD_CONFIG is required for the site release profile" >&2
-    OVERALL_STATUS=failed
-    skip_gate physical-field true "EDGEOPS_FIELD_CONFIG is missing"
-    write_report "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-    exit 2
-  }
-  run_gate physical-field "field/report.json" \
-    env \
-      EDGEOPS_FIELD_PREFLIGHT_ONLY=0 \
-      EDGEOPS_FIELD_WORK_DIR="${WORK_DIR}/field" \
-      EDGEOPS_FIELD_HTTP_PORT=18241 \
-      EDGEOPS_FIELD_GATEWAY_PORT=19241 \
-      "${ROOT_DIR}/scripts/run-field-hardware-acceptance.sh"
+if [[ -n "$FIELD_CAMPAIGN_PLAN" ]]; then
+  run_field_site_status_gate field-campaign-site
+elif [[ "$PROFILE" == "site" ]]; then
+  echo "EDGEOPS_FIELD_CAMPAIGN_PLAN is required for the site release profile" >&2
+  OVERALL_STATUS=failed
+  skip_gate field-campaign-site true "EDGEOPS_FIELD_CAMPAIGN_PLAN is missing"
+  write_report "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  exit 2
+elif [[ -n "$FIELD_CAMPAIGN_DIRS" ]]; then
+  run_field_interoperability_gate field-interoperability "$FIELD_CAMPAIGN_DIRS"
 elif [[ -n "${EDGEOPS_FIELD_CONFIG:-}" ]]; then
   run_gate field-preflight "field-preflight/report.json" \
     env \

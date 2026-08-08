@@ -55,6 +55,7 @@ describe('PointMappingsPage', () => {
         addressKind: 'holding_register',
         addressValue: '40002',
         intervalMs: 2000,
+        readWrite: 'read',
         unit: 'MPa',
       });
     });
@@ -91,8 +92,27 @@ describe('PointMappingsPage', () => {
         addressKind: 'coil',
         addressValue: '00002',
         intervalMs: 1000,
+        readWrite: 'read',
         unit: '-',
       });
+    });
+  });
+
+  it('persists explicit writable access for command orchestration', async () => {
+    const onSavePoint = vi.fn().mockResolvedValue(undefined);
+    render(<PointMappingsPage points={pointFixtures} selectedEdgeId="edge-dev" onSavePoint={onSavePoint} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '修改点位集 pump-1 / modbus-line-a' }));
+    const dialog = screen.getByRole('dialog', { name: '点位集 pump-1 / modbus-line-a' });
+    fireEvent.change(within(dialog).getByLabelText('访问权限'), {
+      target: { value: 'read_write' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(onSavePoint).toHaveBeenCalledWith('edge-dev', 'pressure', expect.objectContaining({
+        readWrite: 'read_write',
+      }));
     });
   });
 

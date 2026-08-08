@@ -258,7 +258,7 @@ export function AgentAssistantPage({
       if (proposal) {
         setProposals((current) => [proposal, ...current]);
         pushMessage({
-          body: `“${suggestion.title}”已保存到审核队列。保存和审核都不会自动发布配置。`,
+          body: `“${suggestion.title}”已保存到审核队列。只有用户应用建议后，变更才会写入并自动同步到 Runtime。`,
           role: 'assistant',
           title: '草案已保存',
         });
@@ -785,7 +785,7 @@ export function AgentAssistantPage({
               <div>
                 <span>Agent Knowledge</span>
                 <h2>{knowledgeEditor ? '编辑知识条目' : '新增知识条目'}</h2>
-                <p>内容仅用于受限检索和回答引用，不会触发配置发布或设备指令。</p>
+                <p>内容仅用于受限检索和回答引用，不会触发配置同步或设备指令。</p>
               </div>
               <button
                 aria-label="关闭知识编辑弹窗"

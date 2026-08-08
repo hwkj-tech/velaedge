@@ -5,8 +5,12 @@ use chrono::{DateTime, Utc};
 use edge_core::EdgeConfigPackage;
 use rocksdb::{Direction, IteratorMode, Options, WriteBatch, DB};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
-use crate::{AppliedEdgeConfig, MqttPublishMessage};
+use crate::{
+    AppliedEdgeConfig, CommandExecutionReport, CommandExecutionStatus, CommandWriteRecord,
+    MqttPublishMessage,
+};
 
 const DESIRED_CONFIG_PREFIX: &str = "desired-config";
 const ACTIVE_CONFIG_PREFIX: &str = "active-config";
@@ -15,6 +19,81 @@ const MQTT_OUTBOX_SEQUENCE_KEY: &str = "mqtt-outbox-sequence";
 const MQTT_ACK_PREFIX: &str = "mqtt-ack/";
 const MQTT_ACK_COUNT_KEY: &str = "mqtt-ack-count";
 const MQTT_ACK_RETENTION: usize = 1_000;
+const COMMAND_AUDIT_PREFIX: &str = "command-audit/";
+const COMMAND_RATE_PREFIX: &str = "command-rate/";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CommandRateLimit {
+    pub gate_id: String,
+    pub max_commands: u32,
+    pub window_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CommandRateDecision {
+    Accepted,
+    Rejected(CommandRateLimit),
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedCommandRateWindow {
+    accepted_at_ms: Vec<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandAuditState {
+    Processing,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandAuditRecord {
+    pub edge_id: String,
+    pub flow_id: String,
+    pub command_id: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    pub payload_digest: String,
+    pub state: CommandAuditState,
+    pub accepted_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub writes: Vec<CommandWriteRecord>,
+    pub error: Option<String>,
+    pub replies: Vec<MqttPublishMessage>,
+}
+
+impl CommandAuditRecord {
+    pub fn execution_report(&self) -> Option<CommandExecutionReport> {
+        let status = match self.state {
+            CommandAuditState::Processing => return None,
+            CommandAuditState::Succeeded => CommandExecutionStatus::Succeeded,
+            CommandAuditState::Failed => CommandExecutionStatus::Failed,
+        };
+        Some(CommandExecutionReport {
+            flow_id: self.flow_id.clone(),
+            command_id: self.command_id.clone(),
+            source: self.source.clone(),
+            status,
+            writes: self.writes.clone(),
+            error: self.error.clone(),
+            completed_at: self.completed_at.unwrap_or(self.accepted_at),
+            duplicate: true,
+            replies: self.replies.clone(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CommandClaim {
+    Started(CommandAuditRecord),
+    Duplicate(CommandAuditRecord),
+    InProgress(CommandAuditRecord),
+    Conflict(CommandAuditRecord),
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct MqttOutboxEntry {
@@ -47,6 +126,8 @@ pub struct MqttOutboxStats {
 pub struct RocksEdgeRuntimeStore {
     db: DB,
     outbox_write_lock: Mutex<()>,
+    mqtt_flush_lock: tokio::sync::Mutex<()>,
+    command_write_lock: Mutex<()>,
 }
 
 impl RocksEdgeRuntimeStore {
@@ -57,7 +138,177 @@ impl RocksEdgeRuntimeStore {
         Ok(Self {
             db,
             outbox_write_lock: Mutex::new(()),
+            mqtt_flush_lock: tokio::sync::Mutex::new(()),
+            command_write_lock: Mutex::new(()),
         })
+    }
+
+    pub(crate) async fn lock_mqtt_outbox_flush(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.mqtt_flush_lock.lock().await
+    }
+
+    pub fn claim_command(
+        &self,
+        edge_id: &str,
+        flow_id: &str,
+        command_id: &str,
+        payload: &[u8],
+    ) -> Result<CommandClaim> {
+        if edge_id.trim().is_empty() || flow_id.trim().is_empty() || command_id.trim().is_empty() {
+            bail!("edge id, command flow id and command id are required");
+        }
+        let _guard = self
+            .command_write_lock
+            .lock()
+            .map_err(|_| anyhow!("command audit write lock is poisoned"))?;
+        let key = command_audit_key(edge_id, flow_id, command_id);
+        let payload_digest = sha256_hex(payload);
+        if let Some(existing) = self.command_audit_by_key(&key)? {
+            if existing.payload_digest != payload_digest {
+                return Ok(CommandClaim::Conflict(existing));
+            }
+            return Ok(match existing.state {
+                CommandAuditState::Processing => CommandClaim::InProgress(existing),
+                CommandAuditState::Succeeded | CommandAuditState::Failed => {
+                    CommandClaim::Duplicate(existing)
+                }
+            });
+        }
+
+        let record = CommandAuditRecord {
+            edge_id: edge_id.to_string(),
+            flow_id: flow_id.to_string(),
+            command_id: command_id.to_string(),
+            source: None,
+            payload_digest,
+            state: CommandAuditState::Processing,
+            accepted_at: Utc::now(),
+            completed_at: None,
+            writes: Vec::new(),
+            error: None,
+            replies: Vec::new(),
+        };
+        self.put_command_audit(&key, &record)?;
+        Ok(CommandClaim::Started(record))
+    }
+
+    pub fn complete_command(
+        &self,
+        edge_id: &str,
+        payload: &[u8],
+        report: &CommandExecutionReport,
+    ) -> Result<CommandAuditRecord> {
+        let _guard = self
+            .command_write_lock
+            .lock()
+            .map_err(|_| anyhow!("command audit write lock is poisoned"))?;
+        let key = command_audit_key(edge_id, &report.flow_id, &report.command_id);
+        let mut record = self
+            .command_audit_by_key(&key)?
+            .context("command must be claimed before completion")?;
+        if record.payload_digest != sha256_hex(payload) {
+            bail!(
+                "command {} payload conflicts with its claimed payload",
+                report.command_id
+            );
+        }
+        if record.state != CommandAuditState::Processing {
+            bail!("command {} has already completed", report.command_id);
+        }
+        record.state = match report.status {
+            CommandExecutionStatus::Succeeded => CommandAuditState::Succeeded,
+            CommandExecutionStatus::Failed => CommandAuditState::Failed,
+        };
+        record.completed_at = Some(report.completed_at);
+        record.writes = report.writes.clone();
+        record.source = report.source.clone();
+        record.error = report.error.clone();
+        record.replies = report.replies.clone();
+        self.put_command_audit(&key, &record)?;
+        Ok(record)
+    }
+
+    pub fn command_audit(
+        &self,
+        edge_id: &str,
+        flow_id: &str,
+        command_id: &str,
+    ) -> Result<Option<CommandAuditRecord>> {
+        self.command_audit_by_key(&command_audit_key(edge_id, flow_id, command_id))
+    }
+
+    pub(crate) fn consume_command_rate_slots(
+        &self,
+        edge_id: &str,
+        flow_id: &str,
+        limits: &[CommandRateLimit],
+        accepted_at: DateTime<Utc>,
+    ) -> Result<CommandRateDecision> {
+        if limits.is_empty() {
+            return Ok(CommandRateDecision::Accepted);
+        }
+        let _guard = self
+            .command_write_lock
+            .lock()
+            .map_err(|_| anyhow!("command audit write lock is poisoned"))?;
+        let now_ms = accepted_at.timestamp_millis();
+        let mut windows = Vec::with_capacity(limits.len());
+
+        for limit in limits {
+            let key = command_rate_key(edge_id, flow_id, &limit.gate_id);
+            let mut window = match self
+                .db
+                .get(&key)
+                .context("failed to read command rate window")?
+            {
+                Some(payload) => serde_json::from_slice::<PersistedCommandRateWindow>(&payload)
+                    .context("failed to decode command rate window")?,
+                None => PersistedCommandRateWindow::default(),
+            };
+            window.accepted_at_ms.retain(|previous_ms| {
+                let elapsed_ms = i128::from(now_ms) - i128::from(*previous_ms);
+                elapsed_ms < i128::from(limit.window_ms)
+            });
+            if window.accepted_at_ms.len() >= limit.max_commands as usize {
+                return Ok(CommandRateDecision::Rejected(limit.clone()));
+            }
+            window.accepted_at_ms.push(now_ms);
+            windows.push((key, window));
+        }
+
+        let mut batch = WriteBatch::default();
+        for (key, window) in windows {
+            batch.put(
+                key,
+                serde_json::to_vec(&window).context("failed to encode command rate window")?,
+            );
+        }
+        self.db
+            .write(batch)
+            .context("failed to persist command rate windows")?;
+        Ok(CommandRateDecision::Accepted)
+    }
+
+    fn command_audit_by_key(&self, key: &str) -> Result<Option<CommandAuditRecord>> {
+        let Some(payload) = self
+            .db
+            .get(key)
+            .context("failed to read command audit record")?
+        else {
+            return Ok(None);
+        };
+        serde_json::from_slice(&payload)
+            .map(Some)
+            .context("failed to decode command audit record")
+    }
+
+    fn put_command_audit(&self, key: &str, record: &CommandAuditRecord) -> Result<()> {
+        self.db
+            .put(
+                key,
+                serde_json::to_vec(record).context("failed to encode command audit record")?,
+            )
+            .context("failed to persist command audit record")
     }
 
     pub fn put_desired_config(&self, package: &EdgeConfigPackage) -> Result<()> {
@@ -373,4 +624,25 @@ fn mqtt_outbox_key(sequence: u64) -> String {
 
 fn mqtt_ack_key(sequence: u64) -> String {
     format!("{MQTT_ACK_PREFIX}{sequence:020}")
+}
+
+fn command_audit_key(edge_id: &str, flow_id: &str, command_id: &str) -> String {
+    format!(
+        "{COMMAND_AUDIT_PREFIX}{}",
+        sha256_hex(format!("{edge_id}\0{flow_id}\0{command_id}").as_bytes())
+    )
+}
+
+fn command_rate_key(edge_id: &str, flow_id: &str, gate_id: &str) -> String {
+    format!(
+        "{COMMAND_RATE_PREFIX}{}",
+        sha256_hex(format!("{edge_id}\0{flow_id}\0{gate_id}").as_bytes())
+    )
+}
+
+fn sha256_hex(payload: &[u8]) -> String {
+    Sha256::digest(payload)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }

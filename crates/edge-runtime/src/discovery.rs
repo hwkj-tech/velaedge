@@ -6,8 +6,37 @@ use edge_core::{
 
 use crate::{
     modbus_rtu::{build_read_holding_registers_request, parse_read_holding_registers_response},
-    SerialBus, SerialBusFactory,
+    OpcUaAdapter, SerialBus, SerialBusFactory,
 };
+
+pub async fn run_protocol_discovery_request<F>(
+    package: &EdgeConfigPackage,
+    request: DiscoveryRequest,
+    factory: &mut F,
+) -> Result<DiscoveryReport>
+where
+    F: SerialBusFactory,
+{
+    let connection = package
+        .protocol_connections
+        .iter()
+        .find(|connection| connection.connection_id == request.protocol_connection_id)
+        .cloned()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "discovery connection {} is not present in active config",
+                request.protocol_connection_id
+            )
+        })?;
+    match connection.protocol {
+        ProtocolType::ModbusRtu => run_modbus_discovery_request(package, request, factory).await,
+        ProtocolType::OpcUa => {
+            let mut adapter = OpcUaAdapter::new(connection, Vec::new())?;
+            adapter.discover_variables(&request).await
+        }
+        protocol => bail!("runtime discovery does not support {protocol:?} connections"),
+    }
+}
 
 pub async fn run_modbus_discovery_request<F>(
     package: &EdgeConfigPackage,

@@ -7,8 +7,6 @@ HTTP_PORT="${CLOUD_RECOVERY_HTTP_PORT:-18085}"
 GATEWAY_PORT="${CLOUD_RECOVERY_GATEWAY_PORT:-19085}"
 WORK_DIR="${CLOUD_RECOVERY_WORK_DIR:-${ROOT_DIR}/target/cloud-recovery-acceptance-$$}"
 REPORT_PATH="${CLOUD_RECOVERY_REPORT:-${WORK_DIR}/report.json}"
-DATABASE_PATH="${WORK_DIR}/cloud.sqlite"
-BACKUP_PATH="${WORK_DIR}/cloud.backup.sqlite"
 CLOUD_PID=""
 
 for command in curl jq nc sqlite3; do
@@ -26,6 +24,9 @@ for port in "$HTTP_PORT" "$GATEWAY_PORT"; do
 done
 
 mkdir -p "$WORK_DIR" "$(dirname "$REPORT_PATH")"
+RUN_DIR="$(mktemp -d "${WORK_DIR}/run.XXXXXX")"
+DATABASE_PATH="${RUN_DIR}/cloud.sqlite"
+BACKUP_PATH="${RUN_DIR}/cloud.backup.sqlite"
 cargo build -p cloud-api >/dev/null
 
 cleanup() {
@@ -83,7 +84,7 @@ stop_cloud() {
   grep -q "cloud agent stopped" "$log_path"
 }
 
-FIRST_LOG="${WORK_DIR}/cloud-before-restore.log"
+FIRST_LOG="${RUN_DIR}/cloud-before-restore.log"
 start_cloud "$FIRST_LOG"
 READY_BEFORE="$(wait_until_ready "$FIRST_LOG")"
 sqlite3 "$DATABASE_PATH" \
@@ -99,7 +100,7 @@ RESTORED_MARKER="$(sqlite3 "$DATABASE_PATH" 'SELECT value FROM recovery_acceptan
   exit 1
 }
 
-SECOND_LOG="${WORK_DIR}/cloud-after-restore.log"
+SECOND_LOG="${RUN_DIR}/cloud-after-restore.log"
 start_cloud "$SECOND_LOG"
 READY_AFTER="$(wait_until_ready "$SECOND_LOG")"
 PROJECTS="$(curl -fsS --max-time 5 "http://127.0.0.1:${HTTP_PORT}/api/projects")"
@@ -107,6 +108,7 @@ printf '%s' "$PROJECTS" | jq -e 'any(.[]; .projectId == "demo-plant")' >/dev/nul
 stop_cloud "$SECOND_LOG"
 
 jq -n \
+  --arg runDirectory "$RUN_DIR" \
   --arg database "$DATABASE_PATH" \
   --arg backup "$BACKUP_PATH" \
   --arg restoredMarker "$RESTORED_MARKER" \
@@ -114,6 +116,7 @@ jq -n \
   --argjson readinessAfter "$READY_AFTER" \
   --argjson projects "$PROJECTS" \
   '{
+    runDirectory: $runDirectory,
     database: $database,
     backup: $backup,
     restoredMarker: $restoredMarker,

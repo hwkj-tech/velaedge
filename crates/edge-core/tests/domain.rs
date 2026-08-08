@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use edge_core::{
     CloudEnvelope, CommandCandidate, CommandParameter, CommandRisk, CommandSpec, DataQuality,
-    DeviceShadow, DeviceSpec, NumberRange, PolicyEngine, TelemetryPoint, TelemetrySample,
-    TelemetryType, TelemetryValue,
+    DataQualityCode, DeviceShadow, DeviceSpec, NumberRange, PolicyEngine, TelemetryPoint,
+    TelemetrySample, TelemetryType, TelemetryValue,
 };
 
 #[test]
@@ -42,6 +42,31 @@ fn device_shadow_tracks_latest_sample_per_telemetry_id() {
         Some(&TelemetryValue::Float(3.8))
     );
     assert!(shadow.latest_value("temperature").is_none());
+}
+
+#[test]
+fn telemetry_sample_quality_code_is_detailed_and_backward_compatible() {
+    let sample = TelemetrySample::new(
+        "pump-1",
+        "pressure",
+        TelemetryValue::Float(21.0),
+        DataQuality::Good,
+        Utc::now(),
+    )
+    .with_quality_code(DataQualityCode::UncertainOutOfRange);
+
+    let payload = serde_json::to_value(&sample).unwrap();
+    assert_eq!(payload["quality"], "Uncertain");
+    assert_eq!(payload["quality_code"], "uncertain_out_of_range");
+
+    let mut legacy_payload = payload;
+    legacy_payload
+        .as_object_mut()
+        .unwrap()
+        .remove("quality_code");
+    let legacy: TelemetrySample = serde_json::from_value(legacy_payload).unwrap();
+    assert_eq!(legacy.quality, DataQuality::Uncertain);
+    assert_eq!(legacy.quality_code, None);
 }
 
 #[test]

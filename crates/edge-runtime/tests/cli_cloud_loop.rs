@@ -40,6 +40,13 @@ fn package_with_one_failing_collection_task() -> EdgeConfigPackage {
             protocol: ProtocolType::ModbusTcp,
             endpoint: Some("127.0.0.1:502".to_string()),
             serial: None,
+            iec101: None,
+            iec104: None,
+            opc_ua: None,
+            bacnet_ip: None,
+            siemens_s7: None,
+            omron_fins: None,
+            circuit_breaker: Default::default(),
         })
         .with_point_mapping(TelemetryPointMapping::new(
             "pressure",

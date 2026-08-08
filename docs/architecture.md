@@ -39,7 +39,7 @@ Deterministic edge runtime:
 - `ProtocolAdapter`: trait for protocol-specific telemetry collection.
 - Runtime capability config: declares enabled serial collection protocols, MQTT northbound uplink support, and the local storage backend.
 - `ModbusRtuAdapter`: real serial Modbus RTU register collection through `tokio-serial`.
-- `Dlt645Adapter`: DL/T 645-2007 meter addressing, read-data framing, checksum validation, `+0x33` decoding, and typed BCD telemetry over the shared serial bus.
+- `Dlt645Adapter`: DL/T 645-2007 meter addressing, read-data framing, checksum validation, `+0x33` decoding, typed BCD telemetry, common-DI response-length validation, and de-duplicated multi-meter serial polling over the shared RS-485 bus.
 - `SimulatedProtocolAdapter`: isolated test and demo adapter.
 - `LocalStore`: trait for local persistence.
 - `JsonlLocalStore`: simple inspectable local store for telemetry samples.
@@ -57,7 +57,7 @@ Cloud control-plane primitives:
 - `ConfigPackage`: versioned deployment package for edge-specific device specs and algorithms.
 - `AgentCommandDraft`: output from an Agent that becomes an `edge-core::CommandCandidate`.
 - `ConfigAuthoringService`: creates cloud-side point mappings, collection tasks, and edge-targeted config packages.
-- `ReleaseService`: validates config packages, records desired versions, and tracks reported edge versions.
+- `ReleaseService`: compatibility boundary for validating internal config revisions, recording desired versions, and tracking reported edge versions. Operators do not create releases manually.
 - `SqliteCloudStore`: persists fleet, config, releases, audit, runtime status, MQTT uplinks, and discovery evidence.
 
 This crate plans and governs. It does not execute protocol actions.
@@ -67,7 +67,7 @@ This crate plans and governs. It does not execute protocol actions.
 Cloud API and console hosting:
 
 - `GET /api/summary`: fleet and release summary for the console.
-- `POST /api/releases`: accepts an `EdgeConfigPackage` and creates a release through `cloud-control`.
+- `POST /api/releases`: compatibility endpoint for older clients. The console saves product and edge configuration directly; valid changes create an internal revision and start synchronization automatically.
 - `GET/PUT /api/edges/{edge_id}/mqtt-uplink`: manages runtime northbound publishing to velaMQ.
 - `POST /api/edges/{edge_id}/discovery/run`: validates a bounded read-only discovery job and dispatches it through the target Runtime's registered EdgeLink session. Offline runtimes return `503`, busy sessions return `409`, and command timeout returns `504`.
 - `gateway`: EdgeLink session handling, online runtime registration, correlated command dispatch, and result persistence for runtime-initiated cloud connections.
@@ -79,7 +79,7 @@ The executable cloud service uses SQLite by default and hydrates its in-process 
 
 Built-in management UI:
 
-- Dashboard, projects, products, reusable point sets, product-owned collection graphs, edge binding, runtime monitoring, releases, audit, and Agent assistant views.
+- Dashboard, projects, products, reusable point sets, product-owned collection graphs, edge binding, runtime monitoring, audit, and Agent assistant views.
 - Products own reusable point-set bindings, computation graphs, MQTT outputs, and versioned edge configuration.
 - Edge instances bind a product version, receive a generated enrollment token, and report runtime apply and health state.
 
@@ -104,14 +104,14 @@ Built-in management UI:
 7. Cloud user maps semantic telemetry points to protocol addresses.
 8. Cloud user groups point mappings into collection tasks and attaches calculation nodes.
 9. Cloud user configures the MQTT northbound uplink to velaMQ.
-10. Cloud creates a versioned `EdgeConfigPackage`.
-11. Release validation checks references, duplicate ids, graph topology, and edge target consistency.
-12. Cloud Edge Gateway sends the desired version through EdgeLink after the runtime connects.
-13. Edge runtime validates locally, persists desired/applied state, and reports both the desired version being acknowledged and the applied result.
-14. Cloud correlates the report with the exact pending release. A successful report advances the edge's reported product version; a rejected or failed report records the failure without replacing the last successfully applied version.
-15. Cloud compares desired and reported versions and records audit events. Rollback uses the same exact-version acknowledgement path, so an older target version cannot be confused with a newer superseded release.
+10. Saving a complete, valid product or edge configuration creates a versioned `EdgeConfigPackage` and an internal pending revision in one SQLite transaction. Incomplete authoring state is saved for later editing but is not synchronized.
+11. Validation checks references, duplicate ids, graph topology, writable command targets, protocol parameters, and edge target consistency before the revision becomes desired state.
+12. For an online Runtime, Cloud signals the active EdgeLink session immediately; the Runtime reconnects and receives the newest desired revision. An offline Runtime receives it on its next connection, so no operator retry is required.
+13. Edge runtime validates again, writes desired state to RocksDB, atomically activates the package, and reports the exact version and apply result. A rejected package leaves the previous active version running.
+14. Cloud correlates the report with the exact internal revision. A successful report advances the edge's reported product version; a rejected or failed report records the failure without replacing the last successfully applied version.
+15. Cloud compares desired and reported versions and records audit events. Older pending revisions are superseded, so reconnecting runtimes cannot apply stale configuration.
 
-The cloud console owns authoring, validation, release planning, and auditability. The edge runtime owns real protocol execution, local storage, policy checks, and offline behavior.
+The cloud console owns authoring, validation, automatic synchronization status, and auditability. The edge runtime owns real protocol execution, local storage, policy checks, and offline behavior.
 
 ### Management API identity boundary
 
@@ -121,7 +121,7 @@ EdgeLink device authentication. Local development defaults to `disabled`; deploy
 Only token digests are retained in the authorization registry.
 
 - `viewer`: GET/HEAD/OPTIONS management access.
-- `operator`: viewer access plus configuration create/update, release actions, discovery, and Agent operations.
+- `operator`: viewer access plus configuration create/update and synchronization, discovery, and Agent operations.
 - `admin`: operator access plus DELETE operations and edge access-token generation.
 
 Authorization executes before request extraction and handler logic, so rejected calls cannot mutate
@@ -135,7 +135,7 @@ client actor fields cannot spoof ownership or attribution.
 
 Storage is split by side:
 
-- Cloud uses SQLite for projects, products, point sets, product bindings, fleet metadata, edge config versions, audit records, latest runtime status, MQTT uplinks, discovery evidence, and release state. File databases run in WAL mode with bounded lock waiting and a startup quick-integrity check.
+- Cloud uses SQLite for projects, products, point sets, product bindings, fleet metadata, edge config versions, audit records, latest runtime status, MQTT uplinks, discovery evidence, and internal synchronization revisions. File databases run in WAL mode with bounded lock waiting and a startup quick-integrity check.
 - Edge runtime uses RocksDB for desired/applied config, active runtime version, and an ordered MQTT outbox. Failed messages survive restart and are replayed in sequence. QoS 1 entries are removed after matching PUBACK and QoS 2 entries after matching PUBCOMP. Each acknowledgement atomically replaces its outbox entry with a bounded route receipt containing `sink_id`, broker, client id, topic, QoS, timestamp, and payload size; the latest 1,000 receipts are retained without payload bytes or credentials. Multi-broker routing is implemented per `sink_id`; `mqtt-acceptance` performs a deployment-level SUBACK, publish ACK, and payload readback check against the target velaMQ environment.
 - JSONL can remain as a development adapter behind `LocalStore`.
 - Parquet for batch-friendly history.
@@ -167,7 +167,7 @@ Each real device protocol adapter should keep low-level driver details isolated:
 ```text
 serial protocol adapter -> normalized TelemetrySample -> edge runtime -> RocksDB outbox -> MQTT uplink -> velaMQ
 
-The custom serial adapter is intentionally a bounded frame DSL rather than a script runtime. Cloud validates the request frame, checksum policy, response prefix, value offset/length, encoding, and scale before publishing; Runtime validates the same contract again before any serial I/O and rejects checksum, prefix, bounds, UTF-8, or telemetry-type mismatches without emitting a sample.
+The custom serial adapter is intentionally a bounded frame DSL rather than a script runtime. Cloud validates the schema version, request frame, Raw/SLIP/COBS framing, checksum policy, response prefix, value offset/length, encoding, and scale before publishing; Runtime validates the same contract again before any serial I/O and rejects framing, checksum, prefix, bounds, UTF-8, or telemetry-type mismatches without emitting a sample. JSON without `schemaVersion` remains v1 Raw for compatibility. DSL v2 permits framed transports; checksums are calculated over the decoded payload, so requests are checksummed before framing and responses are unframed before checksum validation.
                                                     -> local shadow + EdgeLink runtime status
 ```
 
@@ -182,7 +182,23 @@ Recommended first adapters:
 - IEC 101 for power and telemetry devices.
 - Custom serial framing for project-specific instruments.
 - Modbus TCP is implemented with bounded connect/request timeouts, MBAP transaction validation,
-  exception handling, and function 01/03/04 reads. OPC UA remains future adapter work.
+  exception handling, and function 01/03/04 reads. OPC UA uses a persistent client session, endpoint
+  discovery, bounded service calls, batch Read, security/authentication settings, quality mapping,
+  and reconnects after a failed session. Telemetry uses native Subscription/MonitoredItem data
+  changes with per-point sampling intervals, bounded queues and periodic Read health probes so a
+  disconnected session cannot continue serving stale cached values as `Good`. OPC UA discovery
+  performs bounded hierarchical Browse, follows continuation points, reads discovered scalar
+  variables in one batch, and infers the point type. Point mappings may use a direct NodeId or a
+  structured semantic BrowsePath; the Runtime batches `TranslateBrowsePathsToNodeIds`, rejects
+  ambiguous/non-local results and caches resolved NodeIds until the mapping or session changes.
+  Explicitly writable OPC UA points also carry an exact Built-in Type. MQTT command flows reuse the
+  active Session for standard Write service calls and may perform a Read-back verification before
+  updating the local shadow and publishing the command reply.
+- IEC 104 uses one persistent STARTDT session per configured station for both monitoring and control.
+  Explicitly writable points bind one exact command ASDU (`C_SC_NA_1`, `C_DC_NA_1` or `C_SE_NC_1`)
+  and may require select-before-operate. The Runtime validates the semantic type and value range before
+  transport, serializes commands on the session, waits for a positive activation confirmation for the
+  same IOA, and only then updates the device shadow and emits the MQTT command reply.
 - Siemens S7 for PLC integration.
 - Omron FINS for Omron PLCs.
 - BACnet for building automation.

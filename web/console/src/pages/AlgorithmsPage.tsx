@@ -394,7 +394,7 @@ export function AlgorithmsPage({
         {isConfigureMode && editDialogOpen ? (
           <Drawer
             onClose={() => setEditDialogOpen(false)}
-            subtitle="保存后进入待发布配置，发布后边端 runtime 按点位样本执行"
+            subtitle="保存并通过校验后自动同步，边端 runtime 按点位样本执行"
             title={`编辑算法 ${selectedAlgorithm.algorithmId}`}
             footer={
               <>

@@ -226,7 +226,8 @@ fn apply_change_report(
         sample.value.clone(),
         sample.quality,
         sample.timestamp,
-    )])
+    )
+    .inherit_quality(sample)])
 }
 
 fn apply_window_aggregate(
@@ -272,6 +273,12 @@ fn apply_window_aggregate(
         .iter()
         .filter_map(|sample| sample.value.as_f64())
         .collect::<Vec<_>>();
+    let quality_source = window
+        .samples
+        .iter()
+        .max_by_key(|window_sample| data_quality_rank(window_sample.quality))
+        .unwrap_or(sample)
+        .clone();
     let mut outputs = Vec::new();
     for function in functions {
         if let Some((name, value)) = aggregate_value(function, &values) {
@@ -281,13 +288,16 @@ fn apply_window_aggregate(
                 .iter()
                 .find(|output| output.name == name)
             {
-                outputs.push(TelemetrySample::new(
-                    sample.device_id.clone(),
-                    output.point_id.clone(),
-                    TelemetryValue::Float(value),
-                    DataQuality::Good,
-                    sample.timestamp,
-                ));
+                outputs.push(
+                    TelemetrySample::new(
+                        sample.device_id.clone(),
+                        output.point_id.clone(),
+                        value,
+                        quality_source.quality,
+                        sample.timestamp,
+                    )
+                    .inherit_quality(&quality_source),
+                );
             }
         }
     }
@@ -382,9 +392,10 @@ fn apply_transform(
         sample.device_id.clone(),
         output.point_id.clone(),
         TelemetryValue::Float(value),
-        DataQuality::Good,
+        sample.quality,
         sample.timestamp,
-    )])
+    )
+    .inherit_quality(sample)])
 }
 
 fn numeric_source(
@@ -463,7 +474,8 @@ fn apply_debounce(
         sample.value.clone(),
         sample.quality,
         sample.timestamp,
-    )])
+    )
+    .inherit_quality(sample)])
 }
 
 fn apply_duration_condition(
@@ -544,7 +556,8 @@ fn apply_duration_condition(
         sample.value.clone(),
         sample.quality,
         sample.timestamp,
-    )])
+    )
+    .inherit_quality(sample)])
 }
 
 fn apply_threshold_rule(
@@ -614,13 +627,16 @@ fn apply_threshold_rule(
                     output_name
                 );
             };
-            samples.push(TelemetrySample::new(
-                sample.device_id.clone(),
-                output.point_id.clone(),
-                sample.value.clone(),
-                sample.quality,
-                sample.timestamp,
-            ));
+            samples.push(
+                TelemetrySample::new(
+                    sample.device_id.clone(),
+                    output.point_id.clone(),
+                    sample.value.clone(),
+                    sample.quality,
+                    sample.timestamp,
+                )
+                .inherit_quality(sample),
+            );
         }
         if matched {
             let Some(event) = event else {
@@ -649,36 +665,44 @@ fn value_changed(previous: &TelemetryValue, current: &TelemetryValue, threshold:
     }
 }
 
-fn aggregate_value(function: &WindowAggregateFunction, values: &[f64]) -> Option<(String, f64)> {
+fn aggregate_value(
+    function: &WindowAggregateFunction,
+    values: &[f64],
+) -> Option<(String, TelemetryValue)> {
     match function {
         WindowAggregateFunction::Avg { output } => non_empty(values).map(|values| {
             (
                 output.clone(),
-                values.iter().sum::<f64>() / values.len() as f64,
+                TelemetryValue::Float(values.iter().sum::<f64>() / values.len() as f64),
             )
         }),
         WindowAggregateFunction::Min { output } => non_empty(values).map(|values| {
             (
                 output.clone(),
-                values.iter().copied().fold(f64::INFINITY, f64::min),
+                TelemetryValue::Float(values.iter().copied().fold(f64::INFINITY, f64::min)),
             )
         }),
         WindowAggregateFunction::Max { output } => non_empty(values).map(|values| {
             (
                 output.clone(),
-                values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                TelemetryValue::Float(values.iter().copied().fold(f64::NEG_INFINITY, f64::max)),
             )
         }),
-        WindowAggregateFunction::Sum { output } => {
-            Some((output.clone(), values.iter().sum::<f64>()))
+        WindowAggregateFunction::Sum { output } => Some((
+            output.clone(),
+            TelemetryValue::Float(values.iter().sum::<f64>()),
+        )),
+        WindowAggregateFunction::Count { output } => {
+            Some((output.clone(), TelemetryValue::Integer(values.len() as i64)))
         }
-        WindowAggregateFunction::Count { output } => Some((output.clone(), values.len() as f64)),
-        WindowAggregateFunction::First { output } => {
-            values.first().copied().map(|value| (output.clone(), value))
-        }
-        WindowAggregateFunction::Last { output } => {
-            values.last().copied().map(|value| (output.clone(), value))
-        }
+        WindowAggregateFunction::First { output } => values
+            .first()
+            .copied()
+            .map(|value| (output.clone(), TelemetryValue::Float(value))),
+        WindowAggregateFunction::Last { output } => values
+            .last()
+            .copied()
+            .map(|value| (output.clone(), TelemetryValue::Float(value))),
     }
 }
 
@@ -873,6 +897,14 @@ fn compare(value: f64, operator: CompareOperator, threshold: f64) -> bool {
         CompareOperator::Lte => value <= threshold,
         CompareOperator::Eq => (value - threshold).abs() < f64::EPSILON,
         CompareOperator::Ne => (value - threshold).abs() >= f64::EPSILON,
+    }
+}
+
+const fn data_quality_rank(quality: DataQuality) -> u8 {
+    match quality {
+        DataQuality::Good => 0,
+        DataQuality::Uncertain => 1,
+        DataQuality::Bad => 2,
     }
 }
 

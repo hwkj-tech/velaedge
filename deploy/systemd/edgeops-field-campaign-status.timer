@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh VelaEdge physical field campaign site status
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Persistent=true
+Unit=edgeops-field-campaign-status.service
+
+[Install]
+WantedBy=timers.target

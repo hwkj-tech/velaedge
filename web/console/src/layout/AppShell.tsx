@@ -29,7 +29,6 @@ export type PageKey =
   | 'protocolConnections'
   | 'dataConfigs'
   | 'discovery'
-  | 'releases'
   | 'runtimeStatus'
   | 'auditLog'
   | 'agentAssistant';
@@ -55,7 +54,6 @@ const pageTitleByKey = new Map(navItems.map((item) => [item.key, item.label]));
 pageTitleByKey.set('edgeConfig', '边端配置');
 pageTitleByKey.set('protocolConnections', '协议连接');
 pageTitleByKey.set('dataConfigs', '数据上报');
-pageTitleByKey.set('releases', '配置发布');
 
 export interface PlatformStatus {
   environment: string;
@@ -89,7 +87,7 @@ export function AppShell({
   const activeTitle = pageTitleByKey.get(activePage) ?? 'Dashboard';
   const releaseStatus =
     platformStatus.pendingReleaseCount > 0
-      ? `${platformStatus.pendingReleaseCount} 个配置待发布`
+      ? `${platformStatus.pendingReleaseCount} 个边端待同步`
       : '配置已同步';
 
   return (

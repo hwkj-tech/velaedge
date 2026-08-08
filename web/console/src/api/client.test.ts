@@ -35,6 +35,7 @@ import {
   fetchAuthStatus,
   fetchCollectionTasks,
   fetchDeviceModels,
+  fetchDlt645DataIdentifiers,
   fetchEdgeCollectionTasks,
   fetchEdgeDataConfigs,
   fetchEdgeAlgorithms,
@@ -43,6 +44,7 @@ import {
   fetchEdgeProtocolConnections,
   fetchPointMappings,
   fetchPointSets,
+  fetchProtocolCatalog,
   fetchProducts,
   fetchProductVersions,
   fetchProjects,
@@ -137,6 +139,10 @@ describe('catalog clients', () => {
     expect(fetchMock).toHaveBeenLastCalledWith('/api/projects');
     await fetchPointSets(fetchMock as unknown as typeof fetch);
     expect(fetchMock).toHaveBeenLastCalledWith('/api/point-sets');
+    await fetchDlt645DataIdentifiers(fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/protocols/dlt645/data-identifiers');
+    await fetchProtocolCatalog(fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/protocols/catalog');
     await fetchProducts(fetchMock as unknown as typeof fetch);
     expect(fetchMock).toHaveBeenLastCalledWith('/api/products');
     await fetchProductVersions('pump product', fetchMock as unknown as typeof fetch);
@@ -176,6 +182,7 @@ describe('catalog clients', () => {
       name: 'Pump points',
       pointSetId: 'pump-points',
       points: [{
+        access: 'read_only' as const,
         address: { kind: 'holding_register', value: '40001' },
         intervalMs: 1000,
         pointId: 'pressure',
@@ -239,6 +246,7 @@ describe('catalog clients', () => {
     const versionRequest = {
       algorithms: [],
       collectionTasks: [],
+      commandFlows: [],
       dataConfigs: [],
       deviceModels: [],
       devices: [],

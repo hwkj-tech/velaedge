@@ -57,6 +57,7 @@ struct RegisteredEdgeSession {
 }
 
 enum EdgeGatewayCommand {
+    ConfigChanged,
     Discovery {
         request: DiscoveryRequest,
         response: oneshot::Sender<Result<DiscoveryReport, String>>,
@@ -119,6 +120,25 @@ impl EdgeGatewayCommandRegistry {
             Ok(Ok(Err(reason))) => Err(EdgeGatewayDispatchError::Failed(reason)),
             Ok(Ok(Ok(report))) => Ok(report),
         }
+    }
+
+    pub async fn notify_config_changed(
+        &self,
+        edge_id: &str,
+    ) -> Result<(), EdgeGatewayDispatchError> {
+        let sender = self
+            .sessions
+            .lock()
+            .await
+            .get(edge_id)
+            .map(|session| session.sender.clone())
+            .ok_or(EdgeGatewayDispatchError::Offline)?;
+        sender
+            .try_send(EdgeGatewayCommand::ConfigChanged)
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => EdgeGatewayDispatchError::Busy,
+                mpsc::error::TrySendError::Closed(_) => EdgeGatewayDispatchError::Offline,
+            })
     }
 
     async fn register(
@@ -827,7 +847,7 @@ async fn handle_edgelink_runtime_messages_with_registry<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let (sender, mut commands) = mpsc::channel(1);
+    let (sender, mut commands) = mpsc::channel(8);
     let session_id = registry.register(&session.edge_id, sender).await;
     let (mut reader, mut writer) = tokio::io::split(stream);
     let mut pending = HashMap::<String, PendingDiscovery>::new();
@@ -913,6 +933,11 @@ where
                         break;
                     };
                     match command {
+                        EdgeGatewayCommand::ConfigChanged => {
+                            // Reconnect through the existing deployment handshake so Runtime keeps
+                            // the same validation, atomic activation, and rollback guarantees.
+                            break;
+                        }
                         EdgeGatewayCommand::Discovery { request, response } => {
                             if !pending.is_empty() {
                                 let _ = response.send(Err("another discovery request is already running".to_string()));

@@ -1,11 +1,12 @@
 use chrono::{DateTime, Utc};
 use edge_core::{
-    AlgorithmSpec, CollectionTask, DataConfig, DeviceInstance, DeviceSpec, MqttUplinkConfig,
-    PointAddress, ProtocolConnection, ProtocolType, TelemetryType,
+    AlgorithmSpec, BacnetPointOptions, CollectionTask, CommandFlowConfig, DataConfig,
+    DeviceInstance, DeviceSpec, Iec101PointOptions, Iec104PointOptions, MqttUplinkConfig,
+    OpcUaPointOptions, PointAccess, PointAddress, ProtocolConnection, ProtocolType, TelemetryType,
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
     pub project_id: String,
@@ -32,18 +33,28 @@ impl Project {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PointSetPoint {
     pub point_id: String,
     pub semantic_id: String,
     pub address: PointAddress,
     pub value_type: TelemetryType,
+    #[serde(default)]
+    pub access: PointAccess,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opc_ua: Option<OpcUaPointOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iec101: Option<Iec101PointOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iec104: Option<Iec104PointOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bacnet: Option<BacnetPointOptions>,
     pub unit: Option<String>,
     pub interval_ms: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PointSet {
     pub point_set_id: String,
@@ -132,6 +143,8 @@ pub struct ProductVersion {
     pub collection_tasks: Vec<CollectionTask>,
     pub algorithms: Vec<AlgorithmSpec>,
     pub data_configs: Vec<DataConfig>,
+    #[serde(default)]
+    pub command_flows: Vec<CommandFlowConfig>,
     pub mqtt_uplinks: Vec<MqttUplinkConfig>,
     pub created_at: DateTime<Utc>,
 }
@@ -149,6 +162,7 @@ impl ProductVersion {
             collection_tasks: Vec::new(),
             algorithms: Vec::new(),
             data_configs: Vec::new(),
+            command_flows: Vec::new(),
             mqtt_uplinks: Vec::new(),
             created_at: Utc::now(),
         }

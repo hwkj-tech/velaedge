@@ -11,6 +11,7 @@ pub mod knowledge;
 pub mod release;
 pub mod sqlite;
 pub mod store;
+pub mod templates;
 pub mod validation;
 
 pub use agent::{
@@ -31,4 +32,8 @@ pub use knowledge::KnowledgeDocument;
 pub use release::{ReleaseRecord, ReleaseService, ReleaseStatus};
 pub use sqlite::SqliteCloudStore;
 pub use store::CloudControlStore;
+pub use templates::{
+    manufacturer_product_templates, ProductTemplateBundle, OMRON_FINS_TEMPLATE_ID,
+    SIEMENS_S7_TEMPLATE_ID,
+};
 pub use validation::{ConfigValidator, ValidationError};

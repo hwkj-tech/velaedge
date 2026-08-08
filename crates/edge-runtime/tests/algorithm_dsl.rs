@@ -2,7 +2,7 @@ use chrono::{Duration, Utc};
 use edge_core::{
     AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
     AlgorithmReportPolicy, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger, CompareOperator,
-    DataQuality, TelemetrySample, TelemetryValue, WindowAggregateFunction,
+    DataQuality, DataQualityCode, TelemetrySample, TelemetryValue, WindowAggregateFunction,
 };
 use edge_runtime::AlgorithmEngine;
 
@@ -51,14 +51,19 @@ fn window_aggregate_emits_virtual_point_when_window_closes() {
             trigger: AlgorithmTrigger::window(60_000),
             steps: vec![AlgorithmStep::window_aggregate(
                 "p",
-                vec![WindowAggregateFunction::Avg {
-                    output: "pressure_avg".to_string(),
-                }],
+                vec![
+                    WindowAggregateFunction::Avg {
+                        output: "pressure_avg".to_string(),
+                    },
+                    WindowAggregateFunction::Count {
+                        output: "pressure_count".to_string(),
+                    },
+                ],
             )],
-            outputs: vec![AlgorithmOutput::virtual_point(
-                "pressure_avg",
-                "pressure.avg_1m",
-            )],
+            outputs: vec![
+                AlgorithmOutput::virtual_point("pressure_avg", "pressure.avg_1m"),
+                AlgorithmOutput::virtual_point("pressure_count", "pressure.count_1m"),
+            ],
             report: AlgorithmReportPolicy::new(AlgorithmReportMode::WindowResult, "velamq-main"),
         },
     );
@@ -77,9 +82,11 @@ fn window_aggregate_emits_virtual_point_when_window_closes() {
         .apply_samples(&[sample("pressure", 14.0, t0 + Duration::seconds(60))])
         .unwrap();
 
-    assert_eq!(output.samples.len(), 1);
+    assert_eq!(output.samples.len(), 2);
     assert_eq!(output.samples[0].telemetry_id, "pressure.avg_1m");
     assert_eq!(output.samples[0].value, TelemetryValue::Float(12.0));
+    assert_eq!(output.samples[1].telemetry_id, "pressure.count_1m");
+    assert_eq!(output.samples[1].value, TelemetryValue::Integer(2));
 }
 
 #[test]
@@ -120,6 +127,31 @@ fn algorithm_outputs_flow_into_downstream_compute_nodes() {
     assert_eq!(report.samples.len(), 2);
     assert_eq!(report.samples[0].telemetry_id, "pressure.reported");
     assert_eq!(report.samples[1].telemetry_id, "pressure.forwarded");
+}
+
+#[test]
+fn algorithm_outputs_preserve_the_worst_input_quality_code() {
+    let algorithm = transform_algorithm(
+        "scale",
+        "pressure.scaled",
+        AlgorithmStep::Scale {
+            source: "p".to_string(),
+            output: "value".to_string(),
+            factor: 2.0,
+            offset: 0.0,
+        },
+    );
+    let mut engine = AlgorithmEngine::new(vec![algorithm]).unwrap();
+    let input = sample("pressure", 11.0, Utc::now())
+        .with_quality_code(DataQualityCode::UncertainOutOfRange);
+
+    let report = engine.apply_samples(&[input]).unwrap();
+
+    assert_eq!(report.samples[0].quality, DataQuality::Uncertain);
+    assert_eq!(
+        report.samples[0].quality_code,
+        Some(DataQualityCode::UncertainOutOfRange)
+    );
 }
 
 #[test]

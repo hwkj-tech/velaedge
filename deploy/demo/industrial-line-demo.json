@@ -1,0 +1,191 @@
+{
+  "project": {
+    "projectId": "industrial-demo-lab",
+    "name": "工业协议实时演示实验室",
+    "environment": "local",
+    "owner": "velaedge-demo",
+    "description": "连接真实容器化 Modbus TCP、Siemens S7 与 Omron FINS 设备的综合演示项目。"
+  },
+  "pointSets": [
+    {
+      "pointSetId": "demo-modbus-pump-points",
+      "projectId": "industrial-demo-lab",
+      "name": "Modbus 泵站点位集",
+      "description": "动态压力、流量、温度、运行和告警点位，运行线圈支持指令写入。",
+      "protocol": "ModbusTcp",
+      "points": [
+        {"pointId":"modbus_pressure","semanticId":"pump.pressure","address":{"kind":"holding_register","value":"40011"},"valueType":"Float","access":"read_only","unit":"MPa","intervalMs":1000},
+        {"pointId":"modbus_flow","semanticId":"pump.flow","address":{"kind":"holding_register","value":"40013"},"valueType":"Float","access":"read_only","unit":"m3/h","intervalMs":1000},
+        {"pointId":"modbus_temperature","semanticId":"pump.temperature","address":{"kind":"input_register","value":"30001"},"valueType":"Integer","access":"read_only","unit":"C","intervalMs":1000},
+        {"pointId":"modbus_running","semanticId":"pump.running","address":{"kind":"coil","value":"00001"},"valueType":"Boolean","access":"read_write","unit":null,"intervalMs":500},
+        {"pointId":"modbus_alarm","semanticId":"pump.alarm","address":{"kind":"coil","value":"00007"},"valueType":"Boolean","access":"read_only","unit":null,"intervalMs":500}
+      ]
+    },
+    {
+      "pointSetId": "demo-s7-drive-points",
+      "projectId": "industrial-demo-lab",
+      "name": "Siemens S7 驱动点位集",
+      "description": "S7 DB 区压力、速度和状态点位，包含可写启停命令。",
+      "protocol": "SiemensS7",
+      "points": [
+        {"pointId":"s7_pressure","semanticId":"drive.pressure","address":{"kind":"s7_address","value":"DB1.REAL0"},"valueType":"Float","access":"read_only","unit":"bar","intervalMs":500},
+        {"pointId":"s7_running","semanticId":"drive.running","address":{"kind":"s7_address","value":"DB1.DBX4.0"},"valueType":"Boolean","access":"read_only","unit":null,"intervalMs":500},
+        {"pointId":"s7_speed","semanticId":"drive.speed","address":{"kind":"s7_address","value":"DB1.DINT6"},"valueType":"Integer","access":"read_only","unit":"rpm","intervalMs":500},
+        {"pointId":"s7_start_command","semanticId":"drive.command.start","address":{"kind":"s7_address","value":"DB1.DBX10.0"},"valueType":"Boolean","access":"read_write","unit":null,"intervalMs":500}
+      ]
+    },
+    {
+      "pointSetId": "demo-fins-machine-points",
+      "projectId": "industrial-demo-lab",
+      "name": "Omron FINS 机台点位集",
+      "description": "FINS 数据存储区计数、温度和状态点位，包含可写启停命令。",
+      "protocol": "OmronFins",
+      "points": [
+        {"pointId":"fins_counter","semanticId":"machine.counter","address":{"kind":"fins_address","value":"D100"},"valueType":"Integer","access":"read_only","unit":"count","intervalMs":1000},
+        {"pointId":"fins_temperature","semanticId":"machine.temperature","address":{"kind":"fins_address","value":"D102"},"valueType":"Float","access":"read_only","unit":"C","intervalMs":1000},
+        {"pointId":"fins_running","semanticId":"machine.running","address":{"kind":"fins_address","value":"CIO0.0"},"valueType":"Boolean","access":"read_only","unit":null,"intervalMs":500},
+        {"pointId":"fins_start_command","semanticId":"machine.command.start","address":{"kind":"fins_address","value":"CIO0.1"},"valueType":"Boolean","access":"read_write","unit":null,"intervalMs":500}
+      ]
+    }
+  ],
+  "product": {
+    "productId": "industrial-line-demo",
+    "projectId": "industrial-demo-lab",
+    "name": "工业产线综合采集 Demo",
+    "productType": "multi-protocol-production-line",
+    "description": "同一 Runtime 并行采集 Modbus、S7、FINS，执行窗口聚合和变化过滤，并按多主题输出到 VelaMQ。"
+  },
+  "version": {
+    "version": "v2.2.0",
+    "pointSetIds": ["demo-modbus-pump-points", "demo-s7-drive-points", "demo-fins-machine-points"],
+    "deviceModels": [],
+    "devices": [
+      {"device_id":"pump-modbus-1","device_type":"modbus-pump"},
+      {"device_id":"drive-s7-1","device_type":"siemens-s7-drive"},
+      {"device_id":"machine-fins-1","device_type":"omron-fins-machine"}
+    ],
+    "protocolConnections": [
+      {"connection_id":"demo-modbus-tcp","protocol":"ModbusTcp","endpoint":"tcp://127.0.0.1:1502"},
+      {"connection_id":"demo-siemens-s7","protocol":"SiemensS7","endpoint":"s7://127.0.0.1:11102","siemens_s7":{"rack":0,"slot":1,"pduSize":480,"connectTimeoutMs":5000,"requestTimeoutMs":10000}},
+      {"connection_id":"demo-omron-fins","protocol":"OmronFins","endpoint":"fins://127.0.0.1:19600","omron_fins":{"transport":"tcp","sourceNetwork":0,"sourceNode":0,"sourceUnit":0,"destinationNetwork":0,"destinationNode":0,"destinationUnit":0,"timeoutMs":2000,"wordOrder":"low_word_first"}}
+    ],
+    "collectionTasks": [
+      {"task_id":"demo-modbus-scan","device_id":"pump-modbus-1","point_ids":["modbus_pressure","modbus_flow","modbus_temperature","modbus_running","modbus_alarm"],"interval_ms":1000,"enabled":true},
+      {"task_id":"demo-s7-scan","device_id":"drive-s7-1","point_ids":["s7_pressure","s7_running","s7_speed","s7_start_command"],"interval_ms":500,"enabled":true},
+      {"task_id":"demo-fins-scan","device_id":"machine-fins-1","point_ids":["fins_counter","fins_temperature","fins_running","fins_start_command"],"interval_ms":1000,"enabled":true}
+    ],
+    "algorithms": [
+      {
+        "id":"modbus-pressure-window","version":"1.0.0","kind":"WindowAggregate","runtime":"Rule",
+        "inputs":["modbus_pressure"],"outputs":["modbus_pressure_avg","modbus_pressure_min","modbus_pressure_max","modbus_pressure_count"],
+        "dsl":{"inputs":[{"alias":"pressure","pointId":"modbus_pressure"}],"trigger":{"type":"window","everyMs":5000},"steps":[{"type":"windowAggregate","source":"pressure","functions":[{"function":"avg","output":"avg"},{"function":"min","output":"min"},{"function":"max","output":"max"},{"function":"count","output":"count"}]}],"outputs":[{"name":"avg","pointId":"modbus_pressure_avg"},{"name":"min","pointId":"modbus_pressure_min"},{"name":"max","pointId":"modbus_pressure_max"},{"name":"count","pointId":"modbus_pressure_count"}],"report":{"mode":"WindowResult","sink":"velamq-main"}}
+      },
+      {
+        "id":"modbus-running-change","version":"1.0.0","kind":"ChangeReport","runtime":"Rule",
+        "inputs":["modbus_running"],"outputs":["modbus_running_changed"],
+        "dsl":{"inputs":[{"alias":"running","pointId":"modbus_running"}],"trigger":{"type":"onSample"},"steps":[{"type":"changeFilter","source":"running","threshold":0}],"outputs":[{"name":"value","pointId":"modbus_running_changed"}],"report":{"mode":"OnChange","sink":"velamq-main"}}
+      },
+      {
+        "id":"s7-speed-window","version":"1.0.0","kind":"WindowAggregate","runtime":"Rule",
+        "inputs":["s7_speed"],"outputs":["s7_speed_avg","s7_speed_min","s7_speed_max","s7_speed_count"],
+        "dsl":{"inputs":[{"alias":"speed","pointId":"s7_speed"}],"trigger":{"type":"window","everyMs":5000},"steps":[{"type":"windowAggregate","source":"speed","functions":[{"function":"avg","output":"avg"},{"function":"min","output":"min"},{"function":"max","output":"max"},{"function":"count","output":"count"}]}],"outputs":[{"name":"avg","pointId":"s7_speed_avg"},{"name":"min","pointId":"s7_speed_min"},{"name":"max","pointId":"s7_speed_max"},{"name":"count","pointId":"s7_speed_count"}],"report":{"mode":"WindowResult","sink":"velamq-main"}}
+      },
+      {
+        "id":"fins-running-change","version":"1.0.0","kind":"ChangeReport","runtime":"Rule",
+        "inputs":["fins_running"],"outputs":["fins_running_changed"],
+        "dsl":{"inputs":[{"alias":"running","pointId":"fins_running"}],"trigger":{"type":"onSample"},"steps":[{"type":"changeFilter","source":"running","threshold":0}],"outputs":[{"name":"value","pointId":"fins_running_changed"}],"report":{"mode":"OnChange","sink":"velamq-main"}}
+      }
+    ],
+    "dataConfigs": [
+      {
+        "config_id":"demo-modbus-flow","name":"Modbus 泵站多分支采集","enabled":true,"device_id":"pump-modbus-1","protocol_connection_id":"demo-modbus-tcp",
+        "collection":{"period_ms":1000,"timeout_ms":1000,"retry_count":2},
+        "points":[
+          {"point_id":"modbus_pressure","semantic_id":"pump.pressure","address":{"kind":"holding_register","value":"40011"},"value_type":"Float","unit":"MPa","json_field":"pressure"},
+          {"point_id":"modbus_flow","semantic_id":"pump.flow","address":{"kind":"holding_register","value":"40013"},"value_type":"Float","unit":"m3/h","json_field":"flow"},
+          {"point_id":"modbus_temperature","semantic_id":"pump.temperature","address":{"kind":"input_register","value":"30001"},"value_type":"Integer","unit":"C","json_field":"temperature"},
+          {"point_id":"modbus_running","semantic_id":"pump.running","address":{"kind":"coil","value":"00001"},"value_type":"Boolean","unit":null,"json_field":"running"},
+          {"point_id":"modbus_alarm","semantic_id":"pump.alarm","address":{"kind":"coil","value":"00007"},"value_type":"Boolean","unit":null,"json_field":"alarm"}
+        ],
+        "algorithm_ids":["modbus-pressure-window","modbus-running-change"],
+        "visual_graph":{"nodes":[
+          {"node_id":"m-pressure","kind":"Point","label":"压力","ref_id":"modbus_pressure","x":60,"y":40},{"node_id":"m-flow","kind":"Point","label":"流量","ref_id":"modbus_flow","x":60,"y":125},{"node_id":"m-temp","kind":"Point","label":"温度","ref_id":"modbus_temperature","x":60,"y":210},{"node_id":"m-running","kind":"Point","label":"运行状态","ref_id":"modbus_running","x":60,"y":295},{"node_id":"m-alarm","kind":"Point","label":"告警状态","ref_id":"modbus_alarm","x":60,"y":380},
+          {"node_id":"m-merge","kind":"Algorithm","label":"多点 JSON 合并","ref_id":"merge_points","x":340,"y":155},{"node_id":"m-window","kind":"Algorithm","label":"压力 5 秒窗口","ref_id":"modbus-pressure-window","x":340,"y":40},{"node_id":"m-change","kind":"Algorithm","label":"运行变化过滤","ref_id":"modbus-running-change","x":340,"y":330},
+          {"node_id":"m-mqtt-telemetry","kind":"Mqtt","label":"泵站实时遥测","ref_id":"factory/{edge_id}/modbus/{device_id}/telemetry","params":{"payloadLayout":"business","includeTimestamp":false,"includeQuality":false},"x":680,"y":155},{"node_id":"m-mqtt-aggregate","kind":"Mqtt","label":"压力聚合","ref_id":"factory/{edge_id}/modbus/{device_id}/aggregate","params":{"payloadLayout":"business","includeTimestamp":false,"includeQuality":false},"x":680,"y":40},{"node_id":"m-mqtt-event","kind":"Mqtt","label":"运行变化","ref_id":"factory/{edge_id}/modbus/{device_id}/events","params":{"payloadLayout":"business","includeTimestamp":false,"includeQuality":false},"x":680,"y":330}
+        ],"edges":[
+          {"edge_id":"m-pressure-merge","from":"m-pressure","from_port":"value","to":"m-merge","to_port":"input"},{"edge_id":"m-flow-merge","from":"m-flow","from_port":"value","to":"m-merge","to_port":"input"},{"edge_id":"m-temp-merge","from":"m-temp","from_port":"value","to":"m-merge","to_port":"input"},{"edge_id":"m-running-merge","from":"m-running","from_port":"value","to":"m-merge","to_port":"input"},{"edge_id":"m-alarm-merge","from":"m-alarm","from_port":"value","to":"m-merge","to_port":"input"},{"edge_id":"m-merge-out","from":"m-merge","from_port":"output","to":"m-mqtt-telemetry","to_port":"payload"},
+          {"edge_id":"m-pressure-window","from":"m-pressure","from_port":"value","to":"m-window","to_port":"input"},{"edge_id":"m-window-out","from":"m-window","from_port":"output","to":"m-mqtt-aggregate","to_port":"payload"},{"edge_id":"m-running-change","from":"m-running","from_port":"value","to":"m-change","to_port":"input"},{"edge_id":"m-change-out","from":"m-change","from_port":"output","to":"m-mqtt-event","to_port":"payload"}
+        ]},
+        "publish":{"sink_id":"velamq-main","topic_template":"factory/{edge_id}/modbus/{device_id}/telemetry","qos":1,"payload":{"mode":"Object","timestamp_field":"timestamp","include_quality":true}}
+      },
+      {
+        "config_id":"demo-s7-flow","name":"Siemens S7 驱动采集","enabled":true,"device_id":"drive-s7-1","protocol_connection_id":"demo-siemens-s7",
+        "collection":{"period_ms":500,"timeout_ms":1200,"retry_count":2},
+        "points":[
+          {"point_id":"s7_pressure","semantic_id":"drive.pressure","address":{"kind":"s7_address","value":"DB1.REAL0"},"value_type":"Float","unit":"bar","json_field":"pressure"},
+          {"point_id":"s7_running","semantic_id":"drive.running","address":{"kind":"s7_address","value":"DB1.DBX4.0"},"value_type":"Boolean","unit":null,"json_field":"running"},
+          {"point_id":"s7_speed","semantic_id":"drive.speed","address":{"kind":"s7_address","value":"DB1.DINT6"},"value_type":"Integer","unit":"rpm","json_field":"speed"},
+          {"point_id":"s7_start_command","semantic_id":"drive.command.start","address":{"kind":"s7_address","value":"DB1.DBX10.0"},"value_type":"Boolean","unit":null,"json_field":"startCommand"}
+        ],
+        "algorithm_ids":["s7-speed-window"],
+        "visual_graph":{"nodes":[
+          {"node_id":"s-pressure","kind":"Point","label":"压力","ref_id":"s7_pressure","x":60,"y":50},{"node_id":"s-running","kind":"Point","label":"运行状态","ref_id":"s7_running","x":60,"y":140},{"node_id":"s-speed","kind":"Point","label":"转速","ref_id":"s7_speed","x":60,"y":230},{"node_id":"s-start","kind":"Point","label":"启停命令","ref_id":"s7_start_command","x":60,"y":320},
+          {"node_id":"s-merge","kind":"Algorithm","label":"驱动数据合并","ref_id":"merge_points","x":350,"y":140},{"node_id":"s-window","kind":"Algorithm","label":"转速 5 秒窗口","ref_id":"s7-speed-window","x":350,"y":270},
+          {"node_id":"s-mqtt-telemetry","kind":"Mqtt","label":"S7 实时遥测","ref_id":"factory/{edge_id}/s7/{device_id}/telemetry","params":{"payloadLayout":"business","includeTimestamp":false,"includeQuality":false},"x":690,"y":140},{"node_id":"s-mqtt-aggregate","kind":"Mqtt","label":"转速聚合","ref_id":"factory/{edge_id}/s7/{device_id}/aggregate","params":{"payloadLayout":"business","includeTimestamp":false,"includeQuality":false},"x":690,"y":270}
+        ],"edges":[
+          {"edge_id":"s-pressure-merge","from":"s-pressure","from_port":"value","to":"s-merge","to_port":"input"},{"edge_id":"s-running-merge","from":"s-running","from_port":"value","to":"s-merge","to_port":"input"},{"edge_id":"s-speed-merge","from":"s-speed","from_port":"value","to":"s-merge","to_port":"input"},{"edge_id":"s-start-merge","from":"s-start","from_port":"value","to":"s-merge","to_port":"input"},{"edge_id":"s-merge-out","from":"s-merge","from_port":"output","to":"s-mqtt-telemetry","to_port":"payload"},{"edge_id":"s-speed-window","from":"s-speed","from_port":"value","to":"s-window","to_port":"input"},{"edge_id":"s-window-out","from":"s-window","from_port":"output","to":"s-mqtt-aggregate","to_port":"payload"}
+        ]},
+        "publish":{"sink_id":"velamq-main","topic_template":"factory/{edge_id}/s7/{device_id}/telemetry","qos":1,"payload":{"mode":"Object","timestamp_field":"timestamp","include_quality":true}}
+      },
+      {
+        "config_id":"demo-fins-flow","name":"Omron FINS 机台采集","enabled":true,"device_id":"machine-fins-1","protocol_connection_id":"demo-omron-fins",
+        "collection":{"period_ms":1000,"timeout_ms":1500,"retry_count":2},
+        "points":[
+          {"point_id":"fins_counter","semantic_id":"machine.counter","address":{"kind":"fins_address","value":"D100"},"value_type":"Integer","unit":"count","json_field":"counter"},
+          {"point_id":"fins_temperature","semantic_id":"machine.temperature","address":{"kind":"fins_address","value":"D102"},"value_type":"Float","unit":"C","json_field":"temperature"},
+          {"point_id":"fins_running","semantic_id":"machine.running","address":{"kind":"fins_address","value":"CIO0.0"},"value_type":"Boolean","unit":null,"json_field":"running"},
+          {"point_id":"fins_start_command","semantic_id":"machine.command.start","address":{"kind":"fins_address","value":"CIO0.1"},"value_type":"Boolean","unit":null,"json_field":"startCommand"}
+        ],
+        "algorithm_ids":["fins-running-change"],
+        "visual_graph":{"nodes":[
+          {"node_id":"f-counter","kind":"Point","label":"计数","ref_id":"fins_counter","x":60,"y":50},{"node_id":"f-temp","kind":"Point","label":"温度","ref_id":"fins_temperature","x":60,"y":140},{"node_id":"f-running","kind":"Point","label":"运行状态","ref_id":"fins_running","x":60,"y":230},{"node_id":"f-start","kind":"Point","label":"启停命令","ref_id":"fins_start_command","x":60,"y":320},
+          {"node_id":"f-merge","kind":"Algorithm","label":"机台数据合并","ref_id":"merge_points","x":350,"y":140},{"node_id":"f-change","kind":"Algorithm","label":"运行变化过滤","ref_id":"fins-running-change","x":350,"y":270},
+          {"node_id":"f-mqtt-telemetry","kind":"Mqtt","label":"FINS 实时遥测","ref_id":"factory/{edge_id}/fins/{device_id}/telemetry","params":{"payloadLayout":"business","includeTimestamp":false,"includeQuality":false},"x":690,"y":140},{"node_id":"f-mqtt-event","kind":"Mqtt","label":"状态变化","ref_id":"factory/{edge_id}/fins/{device_id}/events","params":{"payloadLayout":"business","includeTimestamp":false,"includeQuality":false},"x":690,"y":270}
+        ],"edges":[
+          {"edge_id":"f-counter-merge","from":"f-counter","from_port":"value","to":"f-merge","to_port":"input"},{"edge_id":"f-temp-merge","from":"f-temp","from_port":"value","to":"f-merge","to_port":"input"},{"edge_id":"f-running-merge","from":"f-running","from_port":"value","to":"f-merge","to_port":"input"},{"edge_id":"f-start-merge","from":"f-start","from_port":"value","to":"f-merge","to_port":"input"},{"edge_id":"f-merge-out","from":"f-merge","from_port":"output","to":"f-mqtt-telemetry","to_port":"payload"},{"edge_id":"f-running-change","from":"f-running","from_port":"value","to":"f-change","to_port":"input"},{"edge_id":"f-change-out","from":"f-change","from_port":"output","to":"f-mqtt-event","to_port":"payload"}
+        ]},
+        "publish":{"sink_id":"velamq-main","topic_template":"factory/{edge_id}/fins/{device_id}/telemetry","qos":1,"payload":{"mode":"Object","timestamp_field":"timestamp","include_quality":true}}
+      }
+    ],
+    "commandFlows": [
+      {
+        "flow_id":"demo-modbus-command","name":"Modbus 泵启停指令","enabled":true,"mqtt_connection_id":"velamq-main","subscribe_topic":"factory/{edge_id}/commands/modbus","qos":1,"reply_topic_template":"factory/{edge_id}/commands/reply/{command_id}",
+        "nodes":[{"node_id":"input","kind":"mqtt_input","label":"MQTT 指令输入","x":40,"y":120},{"node_id":"parse","kind":"json_parse","label":"解析 JSON","x":240,"y":120},{"node_id":"safety","kind":"safety_gate","label":"限流与确认","params":{"max_commands":30,"window_ms":60000,"require_confirmation":false},"x":440,"y":120},{"node_id":"write","kind":"point_write","label":"写入运行线圈","ref_id":"modbus_running","params":{"value_path":"values.modbus_running","verification":"readback"},"x":650,"y":120},{"node_id":"reply","kind":"mqtt_reply","label":"执行回执","x":860,"y":120}],
+        "edges":[{"edge_id":"input-parse","from":"input","to":"parse"},{"edge_id":"parse-safety","from":"parse","to":"safety"},{"edge_id":"safety-write","from":"safety","to":"write"},{"edge_id":"write-reply","from":"write","to":"reply"}]
+      },
+      {
+        "flow_id":"demo-s7-command","name":"Siemens S7 启停指令","enabled":true,"mqtt_connection_id":"velamq-main","subscribe_topic":"factory/{edge_id}/commands/s7","qos":1,"reply_topic_template":"factory/{edge_id}/commands/reply/{command_id}",
+        "nodes":[{"node_id":"input","kind":"mqtt_input","label":"MQTT 指令输入","x":40,"y":120},{"node_id":"parse","kind":"json_parse","label":"解析 JSON","x":240,"y":120},{"node_id":"safety","kind":"safety_gate","label":"限流与确认","params":{"max_commands":30,"window_ms":60000,"require_confirmation":false},"x":440,"y":120},{"node_id":"write","kind":"point_write","label":"写入 S7 启停位","ref_id":"s7_start_command","params":{"value_path":"values.s7_start_command","verification":"readback"},"x":650,"y":120},{"node_id":"reply","kind":"mqtt_reply","label":"执行回执","x":860,"y":120}],
+        "edges":[{"edge_id":"input-parse","from":"input","to":"parse"},{"edge_id":"parse-safety","from":"parse","to":"safety"},{"edge_id":"safety-write","from":"safety","to":"write"},{"edge_id":"write-reply","from":"write","to":"reply"}]
+      },
+      {
+        "flow_id":"demo-fins-command","name":"Omron FINS 启停指令","enabled":true,"mqtt_connection_id":"velamq-main","subscribe_topic":"factory/{edge_id}/commands/fins","qos":1,"reply_topic_template":"factory/{edge_id}/commands/reply/{command_id}",
+        "nodes":[{"node_id":"input","kind":"mqtt_input","label":"MQTT 指令输入","x":40,"y":120},{"node_id":"parse","kind":"json_parse","label":"解析 JSON","x":240,"y":120},{"node_id":"safety","kind":"safety_gate","label":"限流与确认","params":{"max_commands":30,"window_ms":60000,"require_confirmation":false},"x":440,"y":120},{"node_id":"write","kind":"point_write","label":"写入 FINS 启停位","ref_id":"fins_start_command","params":{"value_path":"values.fins_start_command","verification":"readback"},"x":650,"y":120},{"node_id":"reply","kind":"mqtt_reply","label":"执行回执","x":860,"y":120}],
+        "edges":[{"edge_id":"input-parse","from":"input","to":"parse"},{"edge_id":"parse-safety","from":"parse","to":"safety"},{"edge_id":"safety-write","from":"safety","to":"write"},{"edge_id":"write-reply","from":"write","to":"reply"}]
+      }
+    ],
+    "mqttUplinks": [
+      {
+        "sink_id":"velamq-main","broker":"mqtt://127.0.0.1:1883","client_id":"{edge_id}-industrial-demo","protocol_version":"5.0","keep_alive_seconds":30,"clean_session":false,"clean_start":false,"session_expiry_interval_seconds":3600,"receive_maximum":100,"maximum_packet_size_bytes":1048576,"topic_alias_maximum":16,"request_response_information":true,"request_problem_information":true,"user_properties":[{"key":"platform","value":"velaedge"},{"key":"demo","value":"industrial-line"}],
+        "last_will":{"topic":"factory/{edge_id}/runtime/status","payload":"{\"online\":false,\"reason\":\"connection_lost\"}","qos":1,"retain":true,"delay_interval_seconds":5,"payload_format_utf8":true,"message_expiry_interval_seconds":300,"content_type":"application/json","user_properties":[{"key":"source","value":"velaedge-runtime"}]},
+        "topic_template":"factory/{edge_id}/telemetry","qos":1,"batch_size":100,"flush_interval_ms":1000
+      }
+    ]
+  },
+  "binding": {
+    "edgeId": "edge-draft-1",
+    "projectId": "industrial-demo-lab",
+    "productId": "industrial-line-demo",
+    "desiredVersion": "v2.2.0"
+  }
+}

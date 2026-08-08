@@ -16,14 +16,25 @@ repository = "https://github.com/hwkj-tech/velaedge"
 [workspace.dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
+async-opcua = { version = "0.19.0", default-features = false }
+bacnet-client = "0.10.1"
+bacnet-encoding = "0.10.1"
+bacnet-network = "0.10.1"
+bacnet-services = "0.10.1"
+bacnet-transport = "0.10.1"
+bacnet-types = "0.10.1"
 axum = "0.8"
+bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
 libc = "0.2"
+omron-fins = "0.5.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rocksdb = "0.24"
 rumqttc = { version = "0.25.1", features = ["url"] }
 rustls-pemfile = "2.2"
+snap7-client = "0.1.7"
+snap7-server = "0.1.7"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
@@ -34,8 +45,11 @@ thiserror = "2.0"
 tokio = { version = "1.38", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
 tokio-serial = "5.5.0"
 tokio-rustls = "0.26"
+tokio-util = { version = "0.7", features = ["codec"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 uuid = { version = "1.8", features = ["serde", "v4"] }
+voltage_iec104 = "0.1.0"
+futures = "0.3"

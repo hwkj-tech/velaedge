@@ -2,12 +2,14 @@ use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 
 use edge_core::{
     DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish,
-    DataQuality, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, PointAddress,
+    DataQuality, DeviceInstance, EdgeConfigPackage, ModbusByteOrder, ModbusPointOptions,
+    ModbusRegisterEncoding, ModbusWordOrder, MqttUplinkConfig, PointAccess, PointAddress,
     ProtocolConnection, TelemetryPointMapping, TelemetryType, TelemetryValue,
 };
 use edge_runtime::{
     ConfiguredEdgeRuntime, ModbusTcpAdapter, ModbusTcpSimulator, ModbusTcpSimulatorOptions,
-    ProtocolAdapter, RocksEdgeRuntimeStore, RumqttcMqttPublisher, ScriptedSerialBusFactory,
+    ProtocolAdapter, ProtocolCommandAdapter, ProtocolPointWrite, RocksEdgeRuntimeStore,
+    RumqttcMqttPublisher, ScriptedSerialBusFactory,
 };
 use tempfile::tempdir;
 use tokio::{
@@ -37,6 +39,7 @@ async fn modbus_tcp_adapter_reads_registers_and_coils_over_a_real_socket() {
             PointAddress {
                 kind: "input_register".to_string(),
                 value: "30001".to_string(),
+                modbus: None,
             },
             TelemetryType::Integer,
         ),
@@ -48,6 +51,7 @@ async fn modbus_tcp_adapter_reads_registers_and_coils_over_a_real_socket() {
             PointAddress {
                 kind: "coil".to_string(),
                 value: "00001".to_string(),
+                modbus: None,
             },
             TelemetryType::Boolean,
         ),
@@ -64,6 +68,352 @@ async fn modbus_tcp_adapter_reads_registers_and_coils_over_a_real_socket() {
     assert!(samples
         .iter()
         .all(|sample| sample.quality == DataQuality::Good));
+    server.abort();
+}
+
+#[tokio::test]
+async fn modbus_tcp_adapter_reads_discrete_inputs_over_a_real_socket() {
+    let mut options = ModbusTcpSimulatorOptions::new("127.0.0.1:0".parse().unwrap());
+    options.discrete_inputs.insert(0, true);
+    let simulator = ModbusTcpSimulator::bind(options).await.unwrap();
+    let endpoint = simulator.local_addr().unwrap().to_string();
+    let server = tokio::spawn(simulator.run());
+    let connection = ProtocolConnection::modbus_tcp("modbus-main", endpoint);
+    let mappings = vec![TelemetryPointMapping::new(
+        "alarm",
+        "pump-1",
+        "pump.alarm",
+        "modbus-main",
+        PointAddress {
+            kind: "discrete_input".to_string(),
+            value: "10001".to_string(),
+            modbus: None,
+        },
+        TelemetryType::Boolean,
+    )];
+    let mut adapter = ModbusTcpAdapter::new(connection, mappings);
+
+    let samples = adapter.read_telemetry().await.unwrap();
+
+    assert_eq!(samples.len(), 1);
+    assert_eq!(samples[0].value, TelemetryValue::Boolean(true));
+    server.abort();
+}
+
+#[tokio::test]
+async fn modbus_tcp_adapter_merges_contiguous_points_into_bounded_read_windows() {
+    let mut options = ModbusTcpSimulatorOptions::new("127.0.0.1:0".parse().unwrap());
+    options.holding_registers.insert(0, 220);
+    options.holding_registers.insert(1, 1);
+    options.holding_registers.insert(2, 0x41C8);
+    options.holding_registers.insert(3, 0);
+    options.coils.insert(0, true);
+    options.coils.insert(1, false);
+    let simulator = ModbusTcpSimulator::bind(options).await.unwrap();
+    let endpoint = simulator.local_addr().unwrap().to_string();
+    let metrics = simulator.metrics();
+    let server = tokio::spawn(simulator.run());
+    let connection = ProtocolConnection::modbus_tcp("modbus-main", endpoint);
+    let mappings = vec![
+        tcp_mapping(
+            "voltage",
+            "holding_register",
+            "40001",
+            TelemetryType::Integer,
+        ),
+        tcp_mapping(
+            "running",
+            "holding_register",
+            "40002",
+            TelemetryType::Boolean,
+        ),
+        tcp_mapping(
+            "temperature",
+            "holding_register",
+            "40003",
+            TelemetryType::Float,
+        ),
+        tcp_mapping("enabled", "coil", "00001", TelemetryType::Boolean),
+        tcp_mapping("alarm", "coil", "00002", TelemetryType::Boolean),
+    ];
+    let mut adapter = ModbusTcpAdapter::new(connection, mappings);
+
+    let samples = adapter.read_telemetry().await.unwrap();
+
+    assert_eq!(samples.len(), 5);
+    assert_eq!(samples[0].value, TelemetryValue::Integer(220));
+    assert_eq!(samples[1].value, TelemetryValue::Boolean(true));
+    assert_eq!(samples[2].value, TelemetryValue::Float(25.0));
+    assert_eq!(samples[3].value, TelemetryValue::Boolean(true));
+    assert_eq!(samples[4].value, TelemetryValue::Boolean(false));
+    assert_eq!(metrics.requests_total(), 2);
+    server.abort();
+}
+
+#[tokio::test]
+async fn modbus_tcp_adapter_decodes_per_point_register_layouts_in_one_read_window() {
+    let mut options = ModbusTcpSimulatorOptions::new("127.0.0.1:0".parse().unwrap());
+    options.holding_registers.insert(0, 0xFEFF);
+    let raw_float = 100.0_f32.to_be_bytes();
+    options
+        .holding_registers
+        .insert(1, u16::from_be_bytes([raw_float[2], raw_float[3]]));
+    options
+        .holding_registers
+        .insert(2, u16::from_be_bytes([raw_float[0], raw_float[1]]));
+    options.holding_registers.insert(3, 0x0020);
+    let simulator = ModbusTcpSimulator::bind(options).await.unwrap();
+    let endpoint = simulator.local_addr().unwrap().to_string();
+    let metrics = simulator.metrics();
+    let server = tokio::spawn(simulator.run());
+
+    let signed =
+        PointAddress::modbus_holding_register(40001).with_modbus_options(ModbusPointOptions {
+            encoding: Some(ModbusRegisterEncoding::I16),
+            byte_order: ModbusByteOrder::LittleEndian,
+            ..Default::default()
+        });
+    let engineering =
+        PointAddress::modbus_holding_register(40002).with_modbus_options(ModbusPointOptions {
+            encoding: Some(ModbusRegisterEncoding::F32),
+            word_order: ModbusWordOrder::LowWordFirst,
+            scale: 0.1,
+            offset: 1.0,
+            ..Default::default()
+        });
+    let ready =
+        PointAddress::modbus_holding_register(40004).with_modbus_options(ModbusPointOptions {
+            bit_index: Some(5),
+            ..Default::default()
+        });
+    let mappings = vec![
+        TelemetryPointMapping::new(
+            "signed",
+            "device-1",
+            "signed",
+            "modbus-main",
+            signed,
+            TelemetryType::Integer,
+        ),
+        TelemetryPointMapping::new(
+            "engineering",
+            "device-1",
+            "engineering",
+            "modbus-main",
+            engineering,
+            TelemetryType::Float,
+        ),
+        TelemetryPointMapping::new(
+            "ready",
+            "device-1",
+            "ready",
+            "modbus-main",
+            ready,
+            TelemetryType::Boolean,
+        ),
+    ];
+    let connection = ProtocolConnection::modbus_tcp("modbus-main", endpoint);
+    let mut adapter = ModbusTcpAdapter::new(connection, mappings);
+
+    let samples = adapter.read_telemetry().await.unwrap();
+
+    assert_eq!(samples[0].value, TelemetryValue::Integer(-2));
+    assert_eq!(samples[1].value, TelemetryValue::Float(11.0));
+    assert_eq!(samples[2].value, TelemetryValue::Boolean(true));
+    assert_eq!(metrics.requests_total(), 1);
+    server.abort();
+}
+
+#[tokio::test]
+async fn modbus_tcp_adapter_writes_float_over_a_real_socket() {
+    let (endpoint, request, server) = spawn_write_echo_server().await;
+    let connection = ProtocolConnection::modbus_tcp("modbus-main", endpoint);
+    let mapping = TelemetryPointMapping::new(
+        "setpoint",
+        "pump-1",
+        "pump.setpoint",
+        "modbus-main",
+        PointAddress::modbus_holding_register(40010),
+        TelemetryType::Float,
+    )
+    .with_access(PointAccess::ReadWrite);
+    let mut adapter = ModbusTcpAdapter::new(connection, Vec::new());
+
+    let result = adapter
+        .write_point(&mapping, TelemetryValue::Float(12.5))
+        .await
+        .unwrap();
+
+    assert!(result.verified);
+    let request = request.await.unwrap();
+    assert_eq!(request[7], 0x10);
+    assert_eq!(&request[8..13], &[0, 9, 0, 2, 4]);
+    assert_eq!(&request[13..17], &12.5_f32.to_be_bytes());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn modbus_tcp_adapter_applies_inverse_transform_and_word_order_on_write() {
+    let (endpoint, request, server) = spawn_write_echo_server().await;
+    let connection = ProtocolConnection::modbus_tcp("modbus-main", endpoint);
+    let address =
+        PointAddress::modbus_holding_register(40010).with_modbus_options(ModbusPointOptions {
+            encoding: Some(ModbusRegisterEncoding::F32),
+            word_order: ModbusWordOrder::LowWordFirst,
+            scale: 0.5,
+            offset: 10.0,
+            ..Default::default()
+        });
+    let mapping = TelemetryPointMapping::new(
+        "setpoint",
+        "pump-1",
+        "pump.setpoint",
+        "modbus-main",
+        address,
+        TelemetryType::Float,
+    )
+    .with_access(PointAccess::ReadWrite);
+    let mut adapter = ModbusTcpAdapter::new(connection, Vec::new());
+
+    adapter
+        .write_point(&mapping, TelemetryValue::Float(12.0))
+        .await
+        .unwrap();
+
+    let request = request.await.unwrap();
+    let raw = 4.0_f32.to_be_bytes();
+    assert_eq!(&request[13..17], &[raw[2], raw[3], raw[0], raw[1]]);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn modbus_tcp_adapter_writes_single_coil_over_a_real_socket() {
+    let (endpoint, request, server) = spawn_write_echo_server().await;
+    let connection = ProtocolConnection::modbus_tcp("modbus-main", endpoint);
+    let mapping = TelemetryPointMapping::new(
+        "start",
+        "pump-1",
+        "pump.start",
+        "modbus-main",
+        PointAddress {
+            kind: "coil".to_string(),
+            value: "00001".to_string(),
+            modbus: None,
+        },
+        TelemetryType::Boolean,
+    )
+    .with_access(PointAccess::ReadWrite);
+    let mut adapter = ModbusTcpAdapter::new(connection, Vec::new());
+
+    adapter
+        .write_point(&mapping, TelemetryValue::Boolean(true))
+        .await
+        .unwrap();
+
+    let request = request.await.unwrap();
+    assert_eq!(&request[7..12], &[0x05, 0, 0, 0xFF, 0]);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn modbus_tcp_adapter_batches_contiguous_coils_and_registers() {
+    let mut options = ModbusTcpSimulatorOptions::new("127.0.0.1:0".parse().unwrap());
+    options.coils.insert(0, false);
+    options.coils.insert(1, false);
+    options.holding_registers.insert(9, 0);
+    options.holding_registers.insert(10, 0);
+    options.holding_registers.insert(11, 0);
+    let simulator = ModbusTcpSimulator::bind(options).await.unwrap();
+    let endpoint = simulator.local_addr().unwrap().to_string();
+    let metrics = simulator.metrics();
+    let server = tokio::spawn(simulator.run());
+    let connection = ProtocolConnection::modbus_tcp("modbus-main", &endpoint);
+    let coil_1 = tcp_mapping("coil_1", "coil", "00001", TelemetryType::Boolean)
+        .with_access(PointAccess::ReadWrite);
+    let coil_2 = tcp_mapping("coil_2", "coil", "00002", TelemetryType::Boolean)
+        .with_access(PointAccess::ReadWrite);
+    let register = tcp_mapping(
+        "register",
+        "holding_register",
+        "40010",
+        TelemetryType::Integer,
+    )
+    .with_access(PointAccess::ReadWrite);
+    let float = tcp_mapping("float", "holding_register", "40011", TelemetryType::Float)
+        .with_access(PointAccess::ReadWrite);
+    let mut writer = ModbusTcpAdapter::new(connection.clone(), Vec::new());
+
+    writer
+        .write_points(&[
+            ProtocolPointWrite::new(coil_1.clone(), TelemetryValue::Boolean(true)),
+            ProtocolPointWrite::new(coil_2.clone(), TelemetryValue::Boolean(false)),
+        ])
+        .await
+        .unwrap();
+    writer
+        .write_points(&[
+            ProtocolPointWrite::new(register.clone(), TelemetryValue::Integer(321)),
+            ProtocolPointWrite::new(float.clone(), TelemetryValue::Float(12.5)),
+        ])
+        .await
+        .unwrap();
+
+    assert_eq!(metrics.requests_total(), 2);
+    let mut reader = ModbusTcpAdapter::new(connection, vec![coil_1, coil_2, register, float]);
+    let samples = reader.read_telemetry().await.unwrap();
+    assert_eq!(samples[0].value, TelemetryValue::Boolean(true));
+    assert_eq!(samples[1].value, TelemetryValue::Boolean(false));
+    assert_eq!(samples[2].value, TelemetryValue::Integer(321));
+    assert_eq!(samples[3].value, TelemetryValue::Float(12.5));
+    server.abort();
+}
+
+#[tokio::test]
+async fn simulator_persists_writable_coils_and_registers_across_connections() {
+    let mut options = ModbusTcpSimulatorOptions::new("127.0.0.1:0".parse().unwrap());
+    options.coils.insert(0, false);
+    options.holding_registers.insert(9, 0);
+    let simulator = ModbusTcpSimulator::bind(options).await.unwrap();
+    let endpoint = simulator.local_addr().unwrap().to_string();
+    let server = tokio::spawn(simulator.run());
+    let coil = TelemetryPointMapping::new(
+        "start",
+        "pump-1",
+        "pump.start",
+        "modbus-main",
+        PointAddress {
+            kind: "coil".to_string(),
+            value: "00001".to_string(),
+            modbus: None,
+        },
+        TelemetryType::Boolean,
+    )
+    .with_access(PointAccess::ReadWrite);
+    let register = TelemetryPointMapping::new(
+        "speed_setpoint",
+        "pump-1",
+        "pump.speed_setpoint",
+        "modbus-main",
+        PointAddress::modbus_holding_register(40010),
+        TelemetryType::Integer,
+    )
+    .with_access(PointAccess::ReadWrite);
+    let connection = ProtocolConnection::modbus_tcp("modbus-main", &endpoint);
+    let mut writer = ModbusTcpAdapter::new(connection.clone(), Vec::new());
+
+    writer
+        .write_point(&coil, TelemetryValue::Boolean(true))
+        .await
+        .unwrap();
+    writer
+        .write_point(&register, TelemetryValue::Integer(1450))
+        .await
+        .unwrap();
+
+    let mut reader = ModbusTcpAdapter::new(connection, vec![coil, register]);
+    let samples = reader.read_telemetry().await.unwrap();
+    assert_eq!(samples[0].value, TelemetryValue::Boolean(true));
+    assert_eq!(samples[1].value, TelemetryValue::Integer(1450));
     server.abort();
 }
 
@@ -184,6 +534,7 @@ async fn modbus_tcp_runtime_publishes_qos1_payload_and_records_rocksdb_acknowled
             PointAddress {
                 kind: "coil".to_string(),
                 value: "00001".to_string(),
+                modbus: None,
             },
             TelemetryType::Boolean,
         ))
@@ -214,6 +565,7 @@ async fn modbus_tcp_runtime_publishes_qos1_payload_and_records_rocksdb_acknowled
                 PointAddress {
                     kind: "coil".to_string(),
                     value: "00001".to_string(),
+                    modbus: None,
                 },
                 TelemetryType::Boolean,
                 "running",
@@ -310,6 +662,26 @@ async fn read_mqtt_packet(stream: &mut TcpStream) -> (u8, Vec<u8>) {
     (header, body)
 }
 
+fn tcp_mapping(
+    point_id: &str,
+    kind: &str,
+    value: &str,
+    value_type: TelemetryType,
+) -> TelemetryPointMapping {
+    TelemetryPointMapping::new(
+        point_id,
+        "device-1",
+        point_id,
+        "modbus-main",
+        PointAddress {
+            kind: kind.to_string(),
+            value: value.to_string(),
+            modbus: None,
+        },
+        value_type,
+    )
+}
+
 async fn spawn_simulator() -> (String, tokio::task::JoinHandle<anyhow::Result<()>>) {
     let mut options = ModbusTcpSimulatorOptions::new(
         "127.0.0.1:0"
@@ -327,4 +699,34 @@ async fn spawn_simulator() -> (String, tokio::task::JoinHandle<anyhow::Result<()
     let endpoint = simulator.local_addr().unwrap().to_string();
     let server = tokio::spawn(simulator.run());
     (endpoint, server)
+}
+
+async fn spawn_write_echo_server() -> (
+    String,
+    oneshot::Receiver<Vec<u8>>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = listener.local_addr().unwrap().to_string();
+    let (request_tx, request_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut header = [0_u8; 7];
+        stream.read_exact(&mut header).await.unwrap();
+        let body_len = u16::from_be_bytes([header[4], header[5]]) as usize - 1;
+        let mut body = vec![0_u8; body_len];
+        stream.read_exact(&mut body).await.unwrap();
+        let mut request = header.to_vec();
+        request.extend(&body);
+        let response_pdu = body[..5].to_vec();
+        let mut response = Vec::new();
+        response.extend([header[0], header[1]]);
+        response.extend(0_u16.to_be_bytes());
+        response.extend(((response_pdu.len() + 1) as u16).to_be_bytes());
+        response.push(header[6]);
+        response.extend(response_pdu);
+        stream.write_all(&response).await.unwrap();
+        request_tx.send(request).unwrap();
+    });
+    (endpoint, request_rx, server)
 }

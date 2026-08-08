@@ -48,7 +48,7 @@ describe('AppShell', () => {
     expect(screen.getByText('12 个边端在线')).toBeInTheDocument();
     expect(screen.getByText('项目: factory-a')).toBeInTheDocument();
     expect(screen.getByText('环境: prod')).toBeInTheDocument();
-    expect(screen.getByText('4 个配置待发布')).toBeInTheDocument();
+    expect(screen.getByText('4 个边端待同步')).toBeInTheDocument();
   });
 
   it('shows the authenticated principal and supports logout', () => {

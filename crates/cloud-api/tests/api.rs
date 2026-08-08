@@ -5,8 +5,9 @@ use axum::{
 use cloud_api::{app, AgentService, ApiAuthConfig, ApiRole, AppState};
 use cloud_control::{EdgeNode, SqliteCloudStore};
 use edge_core::{
-    CollectionTask, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, PointAddress,
-    ProtocolConnection, SerialConnectionSettings, TelemetryPointMapping, TelemetryType,
+    CollectionTask, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, OpcUaConnectionSettings,
+    PointAddress, ProtocolConnection, SerialConnectionSettings, TelemetryPointMapping,
+    TelemetryType,
 };
 use serde_json::json;
 use tower::ServiceExt;
@@ -521,6 +522,36 @@ async fn edge_point_mapping_save_updates_selected_edge_draft() {
         .unwrap();
     assert_eq!(running["address"], "coil:00009");
     assert_eq!(running["interval"], "1500ms");
+}
+
+#[tokio::test]
+async fn edge_point_mapping_rejects_writable_modbus_input_areas() {
+    let response = app(AppState::default())
+        .oneshot(
+            Request::put("/api/edges/edge-dev/point-mappings/running")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "addressKind": "input_register",
+                        "addressValue": "30001",
+                        "intervalMs": 1000,
+                        "unit": "-",
+                        "readWrite": "read_write"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["message"]
+        .as_str()
+        .unwrap()
+        .contains("input_register points are protocol-level read-only"));
 }
 
 #[tokio::test]
@@ -1737,6 +1768,16 @@ async fn management_action_endpoints_return_computed_results() {
     assert_eq!(validation["action"], "validate_config");
     assert_eq!(validation["status"], "已通过");
     assert_eq!(validation["details"][0], "协议连接 1 个");
+    assert!(validation["details"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|detail| detail == "数据上报 1 个"));
+    assert!(validation["details"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|detail| detail.as_str().unwrap().starts_with("指令编排 ")));
 
     let diff_response = router
         .clone()
@@ -1754,6 +1795,11 @@ async fn management_action_endpoints_return_computed_results() {
     let diff: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(diff["action"], "release_diff");
     assert_eq!(diff["message"], "配置差异摘要已生成");
+    assert!(diff["details"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|detail| detail == "MQTT 连接 1 个"));
 
     let safety_response = router
         .clone()
@@ -1992,7 +2038,7 @@ async fn agent_chat_uses_scoped_backend_context_without_execution_side_effects()
     assert!(response["message"]
         .as_str()
         .unwrap()
-        .contains("不会自动发布配置"));
+        .contains("有效配置会自动同步到 Runtime"));
     assert_eq!(
         state
             .store
@@ -2519,6 +2565,8 @@ async fn edge_protocol_connections_endpoint_returns_selected_edge_connections() 
     assert_eq!(payload[0]["connectionId"], "modbus-line-a");
     assert_eq!(payload[0]["protocolType"], "ModbusTcp");
     assert_eq!(payload[0]["endpoint"], "10.12.0.20:502");
+    assert_eq!(payload[0]["circuitBreaker"]["failureThreshold"], 5);
+    assert_eq!(payload[0]["circuitBreaker"]["openDurationMs"], 30_000);
 }
 
 #[tokio::test]
@@ -2533,7 +2581,21 @@ async fn edge_protocol_connection_save_updates_selected_edge_draft() {
                 .body(Body::from(
                     json!({
                         "protocolType": "OpcUa",
-                        "endpoint": "opc.tcp://10.12.0.80:4840"
+                        "endpoint": "opc.tcp://10.12.0.80:4840",
+                        "opcUa": {
+                            "securityPolicy": "basic256_sha256",
+                            "messageSecurityMode": "sign_and_encrypt",
+                            "authMode": "username",
+                            "username": "operator",
+                            "passwordEnv": "VELAEDGE_OPCUA_PASSWORD",
+                            "pkiDir": "/etc/velaedge/opcua-pki",
+                            "trustServerCerts": true,
+                            "verifyServerCerts": true,
+                            "connectTimeoutMs": 8000,
+                            "requestTimeoutMs": 6000,
+                            "sessionTimeoutMs": 120000,
+                            "sessionRetryLimit": 8
+                        }
                     })
                     .to_string(),
                 ))
@@ -2551,6 +2613,11 @@ async fn edge_protocol_connection_save_updates_selected_edge_draft() {
     assert_eq!(saved["protocolType"], "OpcUa");
     assert_eq!(saved["protocol"], "OPC UA");
     assert_eq!(saved["endpoint"], "opc.tcp://10.12.0.80:4840");
+    assert_eq!(saved["opcUa"]["securityPolicy"], "basic256_sha256");
+    assert_eq!(saved["opcUa"]["messageSecurityMode"], "sign_and_encrypt");
+    assert_eq!(saved["opcUa"]["authMode"], "username");
+    assert_eq!(saved["opcUa"]["passwordEnv"], "VELAEDGE_OPCUA_PASSWORD");
+    assert_eq!(saved["opcUa"]["sessionTimeoutMs"], 120_000);
 
     let response = router
         .oneshot(
@@ -2573,6 +2640,262 @@ async fn edge_protocol_connection_save_updates_selected_edge_draft() {
         config["package"]["protocol_connections"][0]["endpoint"],
         "opc.tcp://10.12.0.80:4840"
     );
+    assert_eq!(
+        config["package"]["protocol_connections"][0]["opc_ua"]["securityPolicy"],
+        "basic256_sha256"
+    );
+    assert_eq!(
+        config["package"]["protocol_connections"][0]["opc_ua"]["username"],
+        "operator"
+    );
+    assert_eq!(
+        config["package"]["protocol_connections"][0]["opc_ua"]["requestTimeoutMs"],
+        6000
+    );
+}
+
+#[tokio::test]
+async fn edge_protocol_connection_rejects_incompatible_opc_ua_security() {
+    let response = app(AppState::default())
+        .oneshot(
+            Request::post("/api/edges/edge-dev/protocol-connections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "protocolType": "OpcUa",
+                        "endpoint": "opc.tcp://10.12.0.80:4840",
+                        "opcUa": {
+                            "securityPolicy": "none",
+                            "messageSecurityMode": "sign",
+                            "authMode": "anonymous"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["message"],
+        "OPC UA None security policy requires None message mode"
+    );
+}
+
+#[tokio::test]
+async fn edge_protocol_connection_create_persists_bacnet_ip_transport_settings() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/protocol-connections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "protocolType": "BacnetIp",
+                        "endpoint": "10.12.0.40:47808",
+                        "bacnetIp": {
+                            "bindAddress": "0.0.0.0",
+                            "localPort": 47809,
+                            "broadcastAddress": "10.12.0.255",
+                            "maxApduLength": 1476,
+                            "apduTimeoutMs": 2400,
+                            "apduRetries": 4,
+                            "discoveryTimeoutMs": 3200,
+                            "foreignDevice": {
+                                "bbmdAddress": "10.12.0.10:47808",
+                                "ttlSeconds": 120
+                            },
+                            "cov": {
+                                "lifetimeSeconds": 300,
+                                "confirmedNotifications": false,
+                                "fallbackPollIntervalMs": 60000
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(created["protocolType"], "BacnetIp");
+    assert_eq!(created["protocol"], "BACnet/IP");
+    assert_eq!(created["endpoint"], "10.12.0.40:47808");
+    assert_eq!(created["bacnetIp"]["localPort"], 47809);
+    assert_eq!(created["bacnetIp"]["apduTimeoutMs"], 2400);
+    assert_eq!(created["bacnetIp"]["apduRetries"], 4);
+    assert_eq!(
+        created["bacnetIp"]["foreignDevice"]["bbmdAddress"],
+        "10.12.0.10:47808"
+    );
+    assert_eq!(created["bacnetIp"]["foreignDevice"]["ttlSeconds"], 120);
+    assert_eq!(created["bacnetIp"]["cov"]["lifetimeSeconds"], 300);
+    assert_eq!(created["bacnetIp"]["cov"]["fallbackPollIntervalMs"], 60_000);
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/desired-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let connection = config["package"]["protocol_connections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|connection| connection["protocol"] == "BacnetIp")
+        .unwrap();
+    assert_eq!(connection["bacnet_ip"]["bindAddress"], "0.0.0.0");
+    assert_eq!(connection["bacnet_ip"]["broadcastAddress"], "10.12.0.255");
+    assert_eq!(connection["bacnet_ip"]["discoveryTimeoutMs"], 3200);
+    assert_eq!(
+        connection["bacnet_ip"]["foreignDevice"]["bbmdAddress"],
+        "10.12.0.10:47808"
+    );
+    assert_eq!(connection["bacnet_ip"]["cov"]["lifetimeSeconds"], 300);
+}
+
+#[tokio::test]
+async fn edge_protocol_connection_create_persists_siemens_s7_transport_settings() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/protocol-connections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "protocolType": "SiemensS7",
+                        "endpoint": "10.12.0.30:102",
+                        "siemensS7": {
+                            "rack": 1,
+                            "slot": 2,
+                            "pduSize": 960,
+                            "connectTimeoutMs": 7000,
+                            "requestTimeoutMs": 12000
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(created["protocolType"], "SiemensS7");
+    assert_eq!(created["protocol"], "Siemens S7");
+    assert_eq!(created["endpoint"], "10.12.0.30:102");
+    assert_eq!(created["siemensS7"]["rack"], 1);
+    assert_eq!(created["siemensS7"]["slot"], 2);
+    assert_eq!(created["siemensS7"]["pduSize"], 960);
+    assert_eq!(created["siemensS7"]["requestTimeoutMs"], 12_000);
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/desired-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let connection = config["package"]["protocol_connections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|connection| connection["protocol"] == "SiemensS7")
+        .unwrap();
+    assert_eq!(connection["siemens_s7"]["rack"], 1);
+    assert_eq!(connection["siemens_s7"]["slot"], 2);
+    assert_eq!(connection["siemens_s7"]["pduSize"], 960);
+    assert_eq!(connection["siemens_s7"]["connectTimeoutMs"], 7000);
+    assert_eq!(connection["siemens_s7"]["requestTimeoutMs"], 12000);
+}
+
+#[tokio::test]
+async fn edge_protocol_connection_create_persists_omron_fins_tcp_transport_settings() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/protocol-connections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "protocolType": "OmronFins",
+                        "endpoint": "10.12.0.31:9600",
+                        "omronFins": {
+                            "transport": "tcp",
+                            "sourceNetwork": 1,
+                            "sourceNode": 0,
+                            "sourceUnit": 0,
+                            "destinationNetwork": 2,
+                            "destinationNode": 0,
+                            "destinationUnit": 0,
+                            "timeoutMs": 4200,
+                            "wordOrder": "high_word_first"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(created["protocolType"], "OmronFins");
+    assert_eq!(created["protocol"], "Omron FINS");
+    assert_eq!(created["endpoint"], "10.12.0.31:9600");
+    assert_eq!(created["omronFins"]["transport"], "tcp");
+    assert_eq!(created["omronFins"]["sourceNode"], 0);
+    assert_eq!(created["omronFins"]["destinationNode"], 0);
+    assert_eq!(created["omronFins"]["wordOrder"], "high_word_first");
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/desired-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let connection = config["package"]["protocol_connections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|connection| connection["protocol"] == "OmronFins")
+        .unwrap();
+    assert_eq!(connection["omron_fins"]["sourceNetwork"], 1);
+    assert_eq!(connection["omron_fins"]["transport"], "tcp");
+    assert_eq!(connection["omron_fins"]["sourceNode"], 0);
+    assert_eq!(connection["omron_fins"]["destinationNetwork"], 2);
+    assert_eq!(connection["omron_fins"]["destinationNode"], 0);
+    assert_eq!(connection["omron_fins"]["timeoutMs"], 4200);
+    assert_eq!(connection["omron_fins"]["wordOrder"], "high_word_first");
 }
 
 #[tokio::test]
@@ -2594,6 +2917,13 @@ async fn edge_protocol_connection_create_adds_selected_edge_draft() {
                             "dataBits": 8,
                             "stopBits": 1,
                             "parity": "even"
+                        },
+                        "iec101": { "cp56TimeZoneOffsetMinutes": 480 },
+                        "circuitBreaker": {
+                            "enabled": true,
+                            "failureThreshold": 3,
+                            "openDurationMs": 15000,
+                            "halfOpenSuccessThreshold": 2
                         }
                     })
                     .to_string(),
@@ -2614,7 +2944,13 @@ async fn edge_protocol_connection_create_adds_selected_edge_draft() {
     assert_eq!(created["endpoint"], "/dev/ttyUSB0");
     assert_eq!(created["serial"]["baudRate"], 19200);
     assert_eq!(created["serial"]["parity"], "even");
-    assert_eq!(created["policy"], "19200 baud · 8E1");
+    assert_eq!(created["iec101"]["cp56TimeZoneOffsetMinutes"], 480);
+    assert_eq!(created["circuitBreaker"]["failureThreshold"], 3);
+    assert_eq!(created["circuitBreaker"]["halfOpenSuccessThreshold"], 2);
+    assert_eq!(
+        created["policy"],
+        "19200 baud · 8E1 · 连续 3 次失败 / 冷却 15s"
+    );
 
     let response = router
         .oneshot(
@@ -2645,6 +2981,291 @@ async fn edge_protocol_connection_create_adds_selected_edge_draft() {
         config["package"]["protocol_connections"][1]["serial"]["parity"],
         "even"
     );
+    assert_eq!(
+        config["package"]["protocol_connections"][1]["iec101"]["cp56TimeZoneOffsetMinutes"],
+        480
+    );
+    assert_eq!(
+        config["package"]["protocol_connections"][1]["circuit_breaker"]["failureThreshold"],
+        3
+    );
+}
+
+#[tokio::test]
+async fn edge_protocol_connection_rejects_invalid_iec101_station_timezone() {
+    let response = app(AppState::default())
+        .oneshot(
+            Request::post("/api/edges/edge-dev/protocol-connections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "protocolType": "Iec101",
+                        "endpoint": "/dev/ttyUSB0",
+                        "serial": {
+                            "port": "/dev/ttyUSB0",
+                            "baudRate": 9600,
+                            "dataBits": 8,
+                            "stopBits": 1,
+                            "parity": "even"
+                        },
+                        "iec101": { "cp56TimeZoneOffsetMinutes": -841 }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["message"]
+        .as_str()
+        .unwrap()
+        .contains("IEC 101 CP56Time2a timezone offset"));
+}
+
+#[tokio::test]
+async fn edge_protocol_connection_save_preserves_iec101_station_timezone() {
+    let router = app(AppState::default());
+    let create_response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/protocol-connections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "protocolType": "Iec101",
+                        "endpoint": "/dev/ttyUSB2",
+                        "serial": {
+                            "port": "/dev/ttyUSB2",
+                            "baudRate": 9600,
+                            "dataBits": 8,
+                            "stopBits": 1,
+                            "parity": "even"
+                        },
+                        "iec101": { "cp56TimeZoneOffsetMinutes": 480 }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+    let body = to_bytes(create_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let connection_id = created["connectionId"].as_str().unwrap();
+
+    let save_response = router
+        .oneshot(
+            Request::put(format!(
+                "/api/edges/edge-dev/protocol-connections/{connection_id}"
+            ))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "protocolType": "Iec101",
+                    "endpoint": "/dev/ttyUSB2",
+                    "serial": {
+                        "port": "/dev/ttyUSB2",
+                        "baudRate": 19200,
+                        "dataBits": 8,
+                        "stopBits": 1,
+                        "parity": "even"
+                    }
+                })
+                .to_string(),
+            ))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(save_response.status(), StatusCode::OK);
+    let body = to_bytes(save_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(saved["serial"]["baudRate"], 19200);
+    assert_eq!(saved["iec101"]["cp56TimeZoneOffsetMinutes"], 480);
+}
+
+#[tokio::test]
+async fn edge_protocol_connection_create_accepts_iec104_tcp_endpoint() {
+    let router = app(AppState::default());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/protocol-connections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "protocolType": "Iec104",
+                        "endpoint": "127.0.0.1:2404"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(created["protocolType"], "Iec104");
+    assert_eq!(created["protocol"], "IEC-104");
+    assert_eq!(created["endpoint"], "127.0.0.1:2404");
+    assert!(created["serial"].is_null());
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/desired-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let connection = config["package"]["protocol_connections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|connection| connection["protocol"] == "Iec104")
+        .unwrap();
+    assert_eq!(connection["endpoint"], "127.0.0.1:2404");
+}
+
+#[tokio::test]
+async fn edge_protocol_connection_rejects_invalid_iec104_endpoint() {
+    let response = app(AppState::default())
+        .oneshot(
+            Request::post("/api/edges/edge-dev/protocol-connections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "protocolType": "Iec104",
+                        "endpoint": "127.0.0.1:not-a-port"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["message"].as_str().unwrap().contains("IEC 104"));
+}
+
+#[tokio::test]
+async fn edge_protocol_connection_persists_iec104_station_timezone() {
+    let router = app(AppState::default());
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/edges/edge-dev/protocol-connections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "protocolType": "Iec104",
+                        "endpoint": "127.0.0.1:2404",
+                        "iec104": { "cp56TimeZoneOffsetMinutes": 480 }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(saved["iec104"]["cp56TimeZoneOffsetMinutes"], 480);
+
+    let response = router
+        .oneshot(
+            Request::get("/api/edges/edge-dev/desired-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let desired: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let connection = desired["package"]["protocol_connections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|connection| connection["protocol"] == "Iec104")
+        .expect("materialized IEC 104 connection");
+    assert_eq!(connection["iec104"]["cp56TimeZoneOffsetMinutes"], 480);
+}
+
+#[tokio::test]
+async fn edge_protocol_connection_rejects_invalid_iec104_station_timezone() {
+    let response = app(AppState::default())
+        .oneshot(
+            Request::post("/api/edges/edge-dev/protocol-connections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "protocolType": "Iec104",
+                        "endpoint": "127.0.0.1:2404",
+                        "iec104": { "cp56TimeZoneOffsetMinutes": 841 }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["message"]
+        .as_str()
+        .unwrap()
+        .contains("timezone offset"));
+}
+
+#[tokio::test]
+async fn edge_protocol_connection_rejects_invalid_circuit_breaker_settings() {
+    let response = app(AppState::default())
+        .oneshot(
+            Request::post("/api/edges/edge-dev/protocol-connections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "protocolType": "ModbusTcp",
+                        "endpoint": "10.12.0.20:502",
+                        "circuitBreaker": {
+                            "enabled": true,
+                            "failureThreshold": 0,
+                            "openDurationMs": 30000,
+                            "halfOpenSuccessThreshold": 1
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -2707,6 +3328,34 @@ async fn mqtt_uplink_endpoints_manage_velamq_northbound_config() {
                         "sinkId": "velamq-prod",
                         "broker": "mqtts://velamq.prod:8883",
                         "clientId": "edge-dev-runtime-dev",
+                        "protocolVersion": "5.0",
+                        "keepAliveSeconds": 45,
+                        "cleanSession": true,
+                        "cleanStart": false,
+                        "sessionExpiryIntervalSeconds": 3600,
+                        "receiveMaximum": 32,
+                        "maximumPacketSizeBytes": 1048576,
+                        "topicAliasMaximum": 16,
+                        "requestResponseInformation": true,
+                        "requestProblemInformation": true,
+                        "userProperties": [
+                            {"key": "tenant", "value": "factory-a"}
+                        ],
+                        "lastWill": {
+                            "topic": "edge/edge-dev/status",
+                            "payload": "{\"status\":\"offline\"}",
+                            "qos": 1,
+                            "retain": true,
+                            "delayIntervalSeconds": 10,
+                            "payloadFormatUtf8": true,
+                            "messageExpiryIntervalSeconds": 300,
+                            "contentType": "application/json",
+                            "responseTopic": "edge/edge-dev/status/ack",
+                            "correlationData": "runtime-dev",
+                            "userProperties": [
+                                {"key": "reason", "value": "disconnect"}
+                            ]
+                        },
                         "username": "edge-device",
                         "passwordEnv": "EDGEOPS_MQTT_PASSWORD",
                         "tlsCaPath": "/etc/edgeops/velamq-ca.pem",
@@ -2726,6 +3375,19 @@ async fn mqtt_uplink_endpoints_manage_velamq_northbound_config() {
     let saved: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(saved["sinkId"], "velamq-prod");
     assert_eq!(saved["broker"], "mqtts://velamq.prod:8883");
+    assert_eq!(saved["protocolVersion"], "5.0");
+    assert_eq!(saved["keepAliveSeconds"], 45);
+    assert_eq!(saved["cleanStart"], false);
+    assert_eq!(saved["sessionExpiryIntervalSeconds"], 3600);
+    assert_eq!(saved["receiveMaximum"], 32);
+    assert_eq!(saved["maximumPacketSizeBytes"], 1_048_576);
+    assert_eq!(saved["topicAliasMaximum"], 16);
+    assert_eq!(saved["requestResponseInformation"], true);
+    assert_eq!(saved["userProperties"][0]["key"], "tenant");
+    assert_eq!(saved["lastWill"]["topic"], "edge/edge-dev/status");
+    assert_eq!(saved["lastWill"]["qos"], 1);
+    assert_eq!(saved["lastWill"]["delayIntervalSeconds"], 10);
+    assert_eq!(saved["lastWill"]["contentType"], "application/json");
     assert_eq!(saved["username"], "edge-device");
     assert_eq!(saved["passwordEnv"], "EDGEOPS_MQTT_PASSWORD");
     assert_eq!(saved["tlsCaPath"], "/etc/edgeops/velamq-ca.pem");
@@ -2748,6 +3410,18 @@ async fn mqtt_uplink_endpoints_manage_velamq_northbound_config() {
     assert_eq!(
         config["package"]["mqtt_uplinks"][0]["password_env"],
         "EDGEOPS_MQTT_PASSWORD"
+    );
+    assert_eq!(
+        config["package"]["mqtt_uplinks"][0]["protocol_version"],
+        "5.0"
+    );
+    assert_eq!(
+        config["package"]["mqtt_uplinks"][0]["maximum_packet_size_bytes"],
+        1_048_576
+    );
+    assert_eq!(
+        config["package"]["mqtt_uplinks"][0]["last_will"]["response_topic"],
+        "edge/edge-dev/status/ack"
     );
 }
 
@@ -2993,6 +3667,91 @@ async fn discovery_run_rejects_unbounded_ranges_before_runtime_dispatch() {
 }
 
 #[tokio::test]
+async fn discovery_run_accepts_bounded_opc_ua_browse_parameters() {
+    let state = AppState::default();
+    {
+        let mut store = state.store.lock().unwrap();
+        let mut package = store
+            .latest_config_package_for_edge("edge-dev")
+            .unwrap()
+            .clone();
+        package
+            .protocol_connections
+            .push(ProtocolConnection::opc_ua(
+                "opcua-main",
+                "opc.tcp://127.0.0.1:4840",
+                OpcUaConnectionSettings::default(),
+            ));
+        store.upsert_config_package(package);
+    }
+
+    let response = app(state)
+        .oneshot(
+            Request::post("/api/edges/edge-dev/discovery/run")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "connectionId": "opcua-main",
+                        "rootNodeId": "ns=2;s=Factory/Line1",
+                        "maxDepth": 4,
+                        "includeStandardNamespace": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(error["message"]
+        .as_str()
+        .unwrap()
+        .contains("runtime is not connected"));
+}
+
+#[tokio::test]
+async fn discovery_run_rejects_unbounded_opc_ua_depth_before_runtime_dispatch() {
+    let state = AppState::default();
+    {
+        let mut store = state.store.lock().unwrap();
+        let mut package = store
+            .latest_config_package_for_edge("edge-dev")
+            .unwrap()
+            .clone();
+        package
+            .protocol_connections
+            .push(ProtocolConnection::opc_ua(
+                "opcua-main",
+                "opc.tcp://127.0.0.1:4840",
+                OpcUaConnectionSettings::default(),
+            ));
+        store.upsert_config_package(package);
+    }
+
+    let response = app(state)
+        .oneshot(
+            Request::post("/api/edges/edge-dev/discovery/run")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "connectionId": "opcua-main",
+                        "rootNodeId": "i=85",
+                        "maxDepth": 9
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn edge_collection_tasks_endpoint_returns_selected_edge_tasks() {
     let response = app(AppState::default())
         .oneshot(
@@ -3174,6 +3933,28 @@ async fn runtime_metrics_endpoint_accepts_edge_snapshot_and_returns_status() {
             "disk_usage_percent": 36.0
         },
         "algorithms": [],
+        "mqtt": {
+            "configured_sink_count": 1,
+            "connected_sink_count": 1,
+            "connection_generation": 2,
+            "publish_success_count": 12,
+            "publish_failure_count": 1,
+            "published_bytes": 2048,
+            "sinks": [{
+                "sink_id": "velamq-main",
+                "broker": "mqtt://127.0.0.1:1883",
+                "client_id": "runtime-dev",
+                "connected": true,
+                "publish_success_count": 12,
+                "publish_failure_count": 1,
+                "published_bytes": 2048,
+                "average_ack_latency_ms": 7,
+                "last_ack_latency_ms": 6,
+                "last_publish_at": chrono::Utc::now().to_rfc3339(),
+                "last_topic": "factory/edge-dev/telemetry",
+                "last_error": null
+            }]
+        },
         "cloud_sync": {
             "connected": true,
             "last_sync_seconds_ago": 5,
@@ -3203,6 +3984,12 @@ async fn runtime_metrics_endpoint_accepts_edge_snapshot_and_returns_status() {
     assert_eq!(payload["averageCollectionLatencyMs"], 41);
     assert_eq!(payload["edges"][0]["health"], "Degraded");
     assert_eq!(payload["edges"][0]["system"]["cpu_percent"], 72.5);
+    assert_eq!(payload["edges"][0]["mqtt"]["connected_sink_count"], 1);
+    assert_eq!(payload["edges"][0]["mqtt"]["publish_success_count"], 12);
+    assert_eq!(
+        payload["edges"][0]["mqtt"]["sinks"][0]["last_topic"],
+        "factory/edge-dev/telemetry"
+    );
 }
 
 #[tokio::test]
@@ -3242,6 +4029,28 @@ async fn runtime_status_marks_stale_snapshots_offline() {
             "disk_usage_percent": 61.0
         },
         "algorithms": [],
+        "mqtt": {
+            "configured_sink_count": 1,
+            "connected_sink_count": 1,
+            "connection_generation": 1,
+            "publish_success_count": 1,
+            "publish_failure_count": 0,
+            "published_bytes": 32,
+            "sinks": [{
+                "sink_id": "velamq-main",
+                "broker": "mqtt://127.0.0.1:1883",
+                "client_id": "runtime-stale",
+                "connected": true,
+                "publish_success_count": 1,
+                "publish_failure_count": 0,
+                "published_bytes": 32,
+                "average_ack_latency_ms": 4,
+                "last_ack_latency_ms": 4,
+                "last_publish_at": "2026-06-26T10:00:00Z",
+                "last_topic": "factory/edge-dev/telemetry",
+                "last_error": null
+            }]
+        },
         "cloud_sync": {
             "connected": true,
             "last_sync_seconds_ago": 0,
@@ -3270,6 +4079,8 @@ async fn runtime_status_marks_stale_snapshots_offline() {
     assert_eq!(payload["edges"][0]["health"], "Offline");
     assert_eq!(payload["edges"][0]["cloud_sync"]["connected"], false);
     assert_eq!(payload["edges"][0]["protocols"][0]["connected"], false);
+    assert_eq!(payload["edges"][0]["mqtt"]["connected_sink_count"], 0);
+    assert_eq!(payload["edges"][0]["mqtt"]["sinks"][0]["connected"], false);
 }
 
 #[tokio::test]
@@ -3605,7 +4416,7 @@ async fn edge_reported_config_endpoint_marks_release_applied() {
 }
 
 #[tokio::test]
-async fn edge_reported_config_requires_and_uses_exact_desired_version_when_pending_is_ambiguous() {
+async fn newer_config_revision_supersedes_the_previous_pending_revision() {
     let router = app(AppState::default());
     let package = |version: &str| {
         json!({
@@ -3650,25 +4461,23 @@ async fn edge_reported_config_requires_and_uses_exact_desired_version_when_pendi
         assert_eq!(response.status(), StatusCode::CREATED);
     }
 
-    let ambiguous = router
+    let before_report = router
         .clone()
-        .oneshot(
-            Request::post("/api/edges/edge-dev/reported-config")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({"reportedVersion": "not-a-pending-version"}).to_string(),
-                ))
-                .unwrap(),
-        )
+        .oneshot(Request::get("/api/releases").body(Body::empty()).unwrap())
         .await
         .unwrap();
-    assert_eq!(ambiguous.status(), StatusCode::CONFLICT);
-    let body = to_bytes(ambiguous.into_body(), usize::MAX).await.unwrap();
-    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(
-        error["message"],
-        "multiple pending releases require desiredVersion"
-    );
+    assert_eq!(before_report.status(), StatusCode::OK);
+    let body = to_bytes(before_report.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let releases: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let results = releases["applyResults"].as_array().unwrap();
+    assert!(results.iter().any(|release| {
+        release["desiredVersion"] == "2026.06.26-010" && release["result"] == "已取代"
+    }));
+    assert!(results.iter().any(|release| {
+        release["desiredVersion"] == "2026.06.26-011" && release["result"] == "等待下发"
+    }));
 
     let exact = router
         .oneshot(
@@ -3676,8 +4485,8 @@ async fn edge_reported_config_requires_and_uses_exact_desired_version_when_pendi
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "desiredVersion": "2026.06.26-010",
-                        "reportedVersion": "2026.06.26-010"
+                        "desiredVersion": "2026.06.26-011",
+                        "reportedVersion": "2026.06.26-011"
                     })
                     .to_string(),
                 ))
@@ -3690,9 +4499,6 @@ async fn edge_reported_config_requires_and_uses_exact_desired_version_when_pendi
     let releases: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let results = releases["applyResults"].as_array().unwrap();
     assert!(results.iter().any(|release| {
-        release["desiredVersion"] == "2026.06.26-010" && release["result"] == "已应用"
-    }));
-    assert!(results.iter().any(|release| {
-        release["desiredVersion"] == "2026.06.26-011" && release["result"] == "等待下发"
+        release["desiredVersion"] == "2026.06.26-011" && release["result"] == "已应用"
     }));
 }

@@ -37,6 +37,22 @@ const runtimeStatus: RuntimeStatusResponse = {
           timeout_count: 0,
           error_count: 0,
           reconnect_count: 0,
+          collection_attempt_count: 120,
+          collection_success_count: 119,
+          write_attempt_count: 4,
+          write_success_count: 3,
+          circuit_state: 'Closed',
+          consecutive_failure_count: 0,
+          circuit_open_count: 0,
+          circuit_rejected_count: 0,
+          last_quality_code: 'uncertain_out_of_range',
+          good_value_count: 12,
+          uncertain_value_count: 1,
+          bad_value_count: 0,
+          subscription_count: 2,
+          notification_count: 18,
+          subscription_error_count: 1,
+          fallback_poll_count: 3,
         },
       ],
       local_store: {
@@ -45,7 +61,39 @@ const runtimeStatus: RuntimeStatusResponse = {
         oldest_buffer_age_seconds: 0,
         disk_usage_percent: 35,
       },
-      algorithms: [],
+      algorithms: [
+        {
+          algorithm_id: 'pressure-window',
+          healthy: true,
+          last_run_latency_ms: 4,
+          error_count: 0,
+          alert_count: 1,
+        },
+      ],
+      mqtt: {
+        configured_sink_count: 1,
+        connected_sink_count: 1,
+        connection_generation: 1,
+        publish_success_count: 42,
+        publish_failure_count: 1,
+        published_bytes: 2048,
+        sinks: [
+          {
+            sink_id: 'velamq-main',
+            broker: 'mqtt://127.0.0.1:1883',
+            client_id: 'runtime-dev',
+            connected: true,
+            publish_success_count: 42,
+            publish_failure_count: 1,
+            published_bytes: 2048,
+            average_ack_latency_ms: 8,
+            last_ack_latency_ms: 6,
+            last_publish_at: '2026-06-26T10:01:00Z',
+            last_topic: 'factory/edge-dev/pump/telemetry',
+            last_error: null,
+          },
+        ],
+      },
       cloud_sync: {
         connected: true,
         last_sync_seconds_ago: 8,
@@ -76,6 +124,19 @@ describe('RuntimeStatusPage', () => {
     expect(screen.getByText('18.5%')).toBeInTheDocument();
     expect(screen.getByText('99.5%')).toBeInTheDocument();
     expect(screen.getByText('Modbus TCP')).toBeInTheDocument();
+    expect(screen.getByText('采集 119/120 · 写入 3/4')).toBeInTheDocument();
+    expect(screen.getByText('超量程 · G 12 / U 1 / B 0')).toBeInTheDocument();
+    expect(screen.getByText('2 订阅 · 18 通知 · 1 错误 · 3 次降级')).toBeInTheDocument();
+    expect(screen.getByText('MQTT 传输')).toBeInTheDocument();
+    expect(screen.getByText('factory/edge-dev/pump/telemetry')).toBeInTheDocument();
+    expect(screen.getByText('pressure-window')).toBeInTheDocument();
     expect(screen.getByText('modbus.timeout')).toBeInTheDocument();
+  });
+
+  it('does not fall back to unrelated edges when a focused runtime has no metrics', () => {
+    render(<RuntimeStatusPage focusedEdgeId="edge-missing" runtimeStatus={runtimeStatus} />);
+
+    expect(screen.getByText('尚未收到 edge-missing 的运行指标')).toBeInTheDocument();
+    expect(screen.queryByText('modbus-line-a')).not.toBeInTheDocument();
   });
 });

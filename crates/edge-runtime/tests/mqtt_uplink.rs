@@ -4,16 +4,18 @@ use chrono::{TimeZone, Utc};
 use edge_core::{
     AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
     AlgorithmReportPolicy, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger, CollectionTask,
-    DataConfig, DataConfigCollection, DataConfigGraphEdge, DataConfigGraphNode,
+    CommandFlowConfig, DataConfig, DataConfigCollection, DataConfigGraphEdge, DataConfigGraphNode,
     DataConfigGraphNodeKind, DataConfigPayload, DataConfigPoint, DataConfigPublish,
-    DataConfigVisualGraph, DataQuality, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig,
-    PointAddress, ProtocolConnection, TelemetryPointMapping, TelemetryType, TelemetryValue,
+    DataConfigVisualGraph, DataQuality, DataQualityCode, DeviceInstance, EdgeConfigPackage,
+    MqttProtocolVersion, MqttUplinkConfig, PointAddress, ProtocolConnection, TelemetryPointMapping,
+    TelemetryType, TelemetryValue,
 };
 use edge_runtime::{
-    build_data_config_mqtt_publish_messages, build_mqtt_publish_messages, flush_mqtt_outbox,
-    parse_mqtt_broker_target, AppliedEdgeConfig, ConfiguredSimulatedRuntime, MqttPublishMessage,
-    MqttPublisher, MultiBrokerMqttPublisher, RecordingMqttPublisher, RocksEdgeRuntimeStore,
-    RumqttcMqttPublisher,
+    build_data_config_mqtt_publish_messages, build_mqtt_publish_messages,
+    configured_data_mqtt_output_routes, flush_mqtt_outbox, mqtt_topic_matches,
+    parse_mqtt_broker_target, validate_mqtt_uplink_runtime_environment, AppliedEdgeConfig,
+    ConfiguredSimulatedRuntime, MqttCommandSubscriber, MqttPublishMessage, MqttPublisher,
+    MultiBrokerMqttPublisher, RecordingMqttPublisher, RocksEdgeRuntimeStore, RumqttcMqttPublisher,
 };
 use tempfile::tempdir;
 use tokio::{
@@ -87,6 +89,7 @@ fn mqtt_uplink_builds_velamq_publish_messages_from_cloud_config() {
     assert_eq!(payload["config_version"], "2026.06.28-001");
     assert_eq!(payload["value"], serde_json::json!({"Float": 2.4}));
     assert_eq!(payload["quality"], "Good");
+    assert_eq!(payload["quality_code"], "good");
 }
 
 #[test]
@@ -134,7 +137,8 @@ fn data_config_builds_one_json_message_per_config() {
             TelemetryValue::Float(0.82),
             DataQuality::Good,
             Utc.with_ymd_and_hms(2026, 6, 30, 8, 30, 0).unwrap(),
-        ),
+        )
+        .with_quality_code(DataQualityCode::UncertainOutOfRange),
         edge_core::TelemetrySample::new(
             "pump-1",
             "running",
@@ -153,7 +157,11 @@ fn data_config_builds_one_json_message_per_config() {
     assert_eq!(payload["device_id"], "pump-1");
     assert_eq!(payload["values"]["pressure"], 0.82);
     assert_eq!(payload["values"]["running"], true);
-    assert_eq!(payload["quality"]["pressure"], "good");
+    assert_eq!(payload["quality"]["pressure"], "uncertain");
+    assert_eq!(
+        payload["quality_code"]["pressure"],
+        "uncertain_out_of_range"
+    );
 }
 
 #[test]
@@ -355,6 +363,228 @@ fn data_config_visual_graph_limits_runtime_payload_to_connected_output_inputs() 
 }
 
 #[test]
+fn data_config_business_payload_contains_only_configured_fields_and_uses_latest_sample() {
+    let mut data_config = DataConfig::new(
+        "pump_status",
+        "泵运行状态上报",
+        "pump-1",
+        "modbus-line-a",
+        DataConfigCollection::new(1000),
+        DataConfigPublish::new(
+            "velamq-main",
+            "factory/{edge_id}/{device_id}/status",
+            DataConfigPayload::object(),
+        ),
+    )
+    .with_point(DataConfigPoint::new(
+        "pressure",
+        "pump.pressure",
+        PointAddress::modbus_holding_register(40001),
+        TelemetryType::Float,
+        "pressure",
+    ));
+    data_config.visual_graph = DataConfigVisualGraph {
+        nodes: vec![
+            DataConfigGraphNode {
+                node_id: "point-pressure".to_string(),
+                kind: DataConfigGraphNodeKind::Point,
+                label: "pressure".to_string(),
+                ref_id: Some("pressure".to_string()),
+                params: Default::default(),
+                x: 72,
+                y: 80,
+            },
+            DataConfigGraphNode {
+                node_id: "mqtt-output".to_string(),
+                kind: DataConfigGraphNodeKind::Mqtt,
+                label: "业务 JSON".to_string(),
+                ref_id: Some("factory/{edge_id}/{device_id}/status".to_string()),
+                params: [
+                    ("payloadLayout".to_string(), serde_json::json!("business")),
+                    ("includeTimestamp".to_string(), serde_json::json!(false)),
+                    ("includeQuality".to_string(), serde_json::json!(false)),
+                ]
+                .into_iter()
+                .collect(),
+                x: 680,
+                y: 120,
+            },
+        ],
+        edges: vec![DataConfigGraphEdge {
+            edge_id: "pressure-to-output".to_string(),
+            from: "point-pressure".to_string(),
+            from_port: Some("value".to_string()),
+            to: "mqtt-output".to_string(),
+            to_port: Some("payload".to_string()),
+        }],
+    };
+    let package = EdgeConfigPackage::new("edge-dev", "v1")
+        .with_device(DeviceInstance::new("pump-1", "pump"))
+        .with_mqtt_uplink(MqttUplinkConfig::velamq(
+            "velamq-main",
+            "mqtt://velamq.local:1883",
+            "edge-dev-runtime",
+        ))
+        .with_data_config(data_config);
+    let started = Utc.with_ymd_and_hms(2026, 8, 5, 8, 30, 0).unwrap();
+    let samples = vec![
+        edge_core::TelemetrySample::new(
+            "pump-1",
+            "pressure",
+            TelemetryValue::Float(2.1),
+            DataQuality::Good,
+            started,
+        ),
+        edge_core::TelemetrySample::new(
+            "pump-1",
+            "pressure",
+            TelemetryValue::Float(2.6),
+            DataQuality::Good,
+            started + chrono::Duration::seconds(1),
+        ),
+    ];
+
+    let messages = build_data_config_mqtt_publish_messages(&package, &samples).unwrap();
+
+    let payload: serde_json::Value = serde_json::from_slice(&messages[0].payload).unwrap();
+    assert_eq!(payload, serde_json::json!({"pressure": 2.6}));
+}
+
+#[test]
+fn data_config_business_window_payload_exposes_statistics_and_sample_count() {
+    let algorithm = AlgorithmSpec::dsl(
+        "pressure-window",
+        "v1",
+        AlgorithmKind::WindowAggregate,
+        AlgorithmDsl {
+            inputs: vec![AlgorithmInputBinding::new("pressure", "pressure")],
+            trigger: AlgorithmTrigger::window(5_000),
+            steps: vec![AlgorithmStep::window_aggregate(
+                "pressure",
+                vec![
+                    edge_core::WindowAggregateFunction::Avg {
+                        output: "avg".to_string(),
+                    },
+                    edge_core::WindowAggregateFunction::Count {
+                        output: "count".to_string(),
+                    },
+                ],
+            )],
+            outputs: vec![
+                AlgorithmOutput::virtual_point("avg", "pressure.avg"),
+                AlgorithmOutput::virtual_point("count", "pressure.count"),
+            ],
+            report: AlgorithmReportPolicy::new(AlgorithmReportMode::WindowResult, "velamq-main"),
+        },
+    );
+    let mut data_config = DataConfig::new(
+        "pressure_window",
+        "压力窗口",
+        "pump-1",
+        "modbus-line-a",
+        DataConfigCollection::new(1000),
+        DataConfigPublish::new(
+            "velamq-main",
+            "factory/{edge_id}/{device_id}/aggregate",
+            DataConfigPayload::object(),
+        ),
+    )
+    .with_point(DataConfigPoint::new(
+        "pressure",
+        "pump.pressure",
+        PointAddress::modbus_holding_register(40001),
+        TelemetryType::Float,
+        "pressure",
+    ))
+    .with_algorithm("pressure-window");
+    let business_params = [
+        ("payloadLayout".to_string(), serde_json::json!("business")),
+        ("includeTimestamp".to_string(), serde_json::json!(false)),
+        ("includeQuality".to_string(), serde_json::json!(false)),
+    ]
+    .into_iter()
+    .collect();
+    data_config.visual_graph = DataConfigVisualGraph {
+        nodes: vec![
+            DataConfigGraphNode {
+                node_id: "point-pressure".to_string(),
+                kind: DataConfigGraphNodeKind::Point,
+                label: "pressure".to_string(),
+                ref_id: Some("pressure".to_string()),
+                params: Default::default(),
+                x: 72,
+                y: 80,
+            },
+            DataConfigGraphNode {
+                node_id: "pressure-window".to_string(),
+                kind: DataConfigGraphNodeKind::Algorithm,
+                label: "5 秒窗口".to_string(),
+                ref_id: Some("pressure-window".to_string()),
+                params: Default::default(),
+                x: 360,
+                y: 80,
+            },
+            DataConfigGraphNode {
+                node_id: "mqtt-output".to_string(),
+                kind: DataConfigGraphNodeKind::Mqtt,
+                label: "压力聚合".to_string(),
+                ref_id: Some("factory/{edge_id}/{device_id}/aggregate".to_string()),
+                params: business_params,
+                x: 680,
+                y: 80,
+            },
+        ],
+        edges: vec![
+            DataConfigGraphEdge {
+                edge_id: "point-to-window".to_string(),
+                from: "point-pressure".to_string(),
+                from_port: Some("value".to_string()),
+                to: "pressure-window".to_string(),
+                to_port: Some("input".to_string()),
+            },
+            DataConfigGraphEdge {
+                edge_id: "window-to-output".to_string(),
+                from: "pressure-window".to_string(),
+                from_port: Some("output".to_string()),
+                to: "mqtt-output".to_string(),
+                to_port: Some("payload".to_string()),
+            },
+        ],
+    };
+    let package = EdgeConfigPackage::new("edge-dev", "v1")
+        .with_device(DeviceInstance::new("pump-1", "pump"))
+        .with_mqtt_uplink(MqttUplinkConfig::velamq(
+            "velamq-main",
+            "mqtt://velamq.local:1883",
+            "edge-dev-runtime",
+        ))
+        .with_algorithm(algorithm)
+        .with_data_config(data_config);
+    let timestamp = Utc.with_ymd_and_hms(2026, 8, 5, 8, 30, 5).unwrap();
+    let samples = vec![
+        edge_core::TelemetrySample::new(
+            "pump-1",
+            "pressure.avg",
+            TelemetryValue::Float(2.4),
+            DataQuality::Good,
+            timestamp,
+        ),
+        edge_core::TelemetrySample::new(
+            "pump-1",
+            "pressure.count",
+            TelemetryValue::Integer(6),
+            DataQuality::Good,
+            timestamp,
+        ),
+    ];
+
+    let messages = build_data_config_mqtt_publish_messages(&package, &samples).unwrap();
+
+    let payload: serde_json::Value = serde_json::from_slice(&messages[0].payload).unwrap();
+    assert_eq!(payload, serde_json::json!({"avg": 2.4, "count": 6}));
+}
+
+#[test]
 fn data_config_visual_graph_publishes_each_mqtt_output_to_its_own_topic() {
     let mut data_config = DataConfig::new(
         "pump_telemetry",
@@ -482,6 +712,88 @@ fn data_config_visual_graph_publishes_each_mqtt_output_to_its_own_topic() {
     assert!(pressure_payload["values"].get("running").is_none());
     assert_eq!(status_payload["values"]["running"], true);
     assert!(status_payload["values"].get("pressure").is_none());
+}
+
+#[test]
+fn configured_output_routes_expand_multi_output_graphs_and_multiple_sinks() {
+    let mut live = DataConfig::new(
+        "pump-live",
+        "实时数据",
+        "pump-1",
+        "modbus-line-a",
+        DataConfigCollection::new(1000),
+        DataConfigPublish::new(
+            "primary",
+            "factory/{edge_id}/{device_id}/fallback",
+            DataConfigPayload::object(),
+        )
+        .with_qos(1),
+    );
+    live.visual_graph = DataConfigVisualGraph {
+        nodes: vec![
+            DataConfigGraphNode {
+                node_id: "mqtt-telemetry".to_string(),
+                kind: DataConfigGraphNodeKind::Mqtt,
+                label: "遥测".to_string(),
+                ref_id: Some("factory/{edge_id}/{device_id}/telemetry".to_string()),
+                params: Default::default(),
+                x: 600,
+                y: 80,
+            },
+            DataConfigGraphNode {
+                node_id: "mqtt-status".to_string(),
+                kind: DataConfigGraphNodeKind::Mqtt,
+                label: "状态".to_string(),
+                ref_id: Some("factory/{edge_id}/{device_id}/status".to_string()),
+                params: Default::default(),
+                x: 600,
+                y: 180,
+            },
+        ],
+        edges: vec![DataConfigGraphEdge {
+            edge_id: "placeholder-edge".to_string(),
+            from: "mqtt-telemetry".to_string(),
+            from_port: Some("payload".to_string()),
+            to: "mqtt-status".to_string(),
+            to_port: Some("payload".to_string()),
+        }],
+    };
+    let archive = DataConfig::new(
+        "pump-archive",
+        "归档数据",
+        "pump-1",
+        "modbus-line-a",
+        DataConfigCollection::new(60_000),
+        DataConfigPublish::new(
+            "archive",
+            "archive/{edge_id}/{config_id}",
+            DataConfigPayload::object(),
+        )
+        .with_qos(2),
+    );
+    let package = EdgeConfigPackage::new("edge-field-1", "v7")
+        .with_mqtt_uplink(MqttUplinkConfig::velamq(
+            "primary",
+            "mqtt://primary.example:1883",
+            "runtime-primary",
+        ))
+        .with_mqtt_uplink(MqttUplinkConfig::velamq(
+            "archive",
+            "mqtts://archive.example:8883",
+            "runtime-archive",
+        ))
+        .with_data_config(live)
+        .with_data_config(archive);
+
+    let routes = configured_data_mqtt_output_routes(&package).unwrap();
+
+    assert_eq!(routes.len(), 3);
+    assert_eq!(routes[0].sink_id, "archive");
+    assert_eq!(routes[0].topic, "archive/edge-field-1/pump-archive");
+    assert_eq!(routes[0].qos, 2);
+    assert_eq!(routes[1].topic, "factory/edge-field-1/pump-1/status");
+    assert_eq!(routes[2].topic, "factory/edge-field-1/pump-1/telemetry");
+    assert_eq!(routes[2].broker, "mqtt://primary.example:1883");
 }
 
 #[test]
@@ -755,6 +1067,33 @@ fn mqtt_broker_target_parses_tcp_and_tls_urls() {
     assert!(mqtts.tls);
 }
 
+#[test]
+fn mqtt_runtime_environment_preflight_checks_secrets_and_custom_ca() {
+    let missing_secret = format!(
+        "VELAEDGE_MISSING_MQTT_SECRET_{}",
+        uuid::Uuid::new_v4().simple()
+    );
+    let uplink = MqttUplinkConfig::velamq("secure", "mqtt://127.0.0.1:1883", "edge-a")
+        .with_credentials_env("operator", &missing_secret);
+    let error = validate_mqtt_uplink_runtime_environment(&uplink).unwrap_err();
+    assert!(error.to_string().contains(&missing_secret));
+
+    let directory = tempdir().unwrap();
+    let empty_ca = directory.path().join("empty-ca.pem");
+    std::fs::write(&empty_ca, b"").unwrap();
+    let uplink = MqttUplinkConfig::velamq("secure", "mqtts://127.0.0.1:8883", "edge-a")
+        .with_tls_ca_path(empty_ca.to_string_lossy());
+    let error = validate_mqtt_uplink_runtime_environment(&uplink).unwrap_err();
+    assert!(error.to_string().contains("certificate is empty"));
+
+    let ca = directory.path().join("ca.pem");
+    std::fs::write(&ca, b"not-empty-for-static-preflight").unwrap();
+    let uplink = MqttUplinkConfig::velamq("plaintext", "mqtt://127.0.0.1:1883", "edge-a")
+        .with_tls_ca_path(ca.to_string_lossy());
+    let error = validate_mqtt_uplink_runtime_environment(&uplink).unwrap_err();
+    assert!(error.to_string().contains("requires an mqtts:// broker"));
+}
+
 #[tokio::test]
 async fn mqtt_outbox_survives_failure_and_replays_multiple_topics_in_order() {
     let dir = tempdir().unwrap();
@@ -858,12 +1197,54 @@ async fn rumqttc_publisher_waits_for_qos_broker_confirmation() {
         assert_eq!(
             observed.await.unwrap(),
             ObservedPublish {
-                topic,
+                topic: topic.clone(),
                 qos,
                 payload: b"confirmed".to_vec(),
             }
         );
+        let status = publisher.runtime_status();
+        assert_eq!(status.publish_success_count, 1);
+        assert_eq!(status.publish_failure_count, 0);
+        assert_eq!(status.published_bytes, 9);
+        assert_eq!(status.last_topic.as_deref(), Some(topic.as_str()));
+        assert!(status.last_publish_at.is_some());
+        assert!(status.last_error.is_none());
     }
+}
+
+#[tokio::test]
+async fn rumqttc_publisher_uses_a_real_mqtt_5_connection_and_publish_flow() {
+    let (broker, observed) = spawn_test_mqtt_v5_broker().await;
+    let mut uplink = MqttUplinkConfig::velamq("velamq-main", broker, "edge-mqtt-v5")
+        .with_protocol_version(MqttProtocolVersion::V5_0)
+        .with_qos(1);
+    uplink.clean_start = false;
+    uplink.session_expiry_interval_seconds = 3600;
+    let mut publisher =
+        RumqttcMqttPublisher::connect_from_uplink_with_ack_timeout(&uplink, Duration::from_secs(2))
+            .unwrap();
+
+    publisher
+        .publish(MqttPublishMessage {
+            sink_id: uplink.sink_id.clone(),
+            broker: uplink.broker.clone(),
+            client_id: uplink.client_id.clone(),
+            topic: "factory/edge-dev/v5".to_string(),
+            qos: 1,
+            payload: b"mqtt-v5".to_vec(),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        observed.await.unwrap(),
+        ObservedPublish {
+            topic: "factory/edge-dev/v5".to_string(),
+            qos: 1,
+            payload: b"mqtt-v5".to_vec(),
+        }
+    );
+    assert_eq!(publisher.runtime_status().publish_success_count, 1);
 }
 
 #[tokio::test]
@@ -944,8 +1325,11 @@ async fn mqtt_publisher_rejects_messages_for_a_different_route() {
 
 #[tokio::test]
 async fn mqtt_tls_transport_builds_with_the_selected_crypto_provider() {
+    let ca = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../cloud-api/tests/fixtures/edgelink/ca.pem");
     let uplink =
-        MqttUplinkConfig::velamq("tls-sink", "mqtts://127.0.0.1:1", "edge-tls-construction");
+        MqttUplinkConfig::velamq("tls-sink", "mqtts://127.0.0.1:1", "edge-tls-construction")
+            .with_tls_ca_path(ca.to_string_lossy());
 
     let publisher = RumqttcMqttPublisher::connect_from_uplink(&uplink);
 
@@ -1017,6 +1401,14 @@ async fn broker_ack_timeout_keeps_message_in_rocksdb_outbox() {
     assert!(error
         .to_string()
         .contains("failed to publish queued mqtt message 1"));
+    let status = publisher.runtime_status();
+    assert_eq!(status.publish_success_count, 0);
+    assert_eq!(status.publish_failure_count, 1);
+    assert_eq!(
+        status.last_topic.as_deref(),
+        Some("factory/edge-dev/unconfirmed")
+    );
+    assert!(status.last_error.is_some());
     assert_eq!(
         observed.await.unwrap().topic,
         "factory/edge-dev/unconfirmed"
@@ -1028,6 +1420,104 @@ async fn broker_ack_timeout_keeps_message_in_rocksdb_outbox() {
         .last_error
         .as_deref()
         .is_some_and(|error| error.contains("acknowledgement timed out")));
+}
+
+#[test]
+fn mqtt_command_topic_matching_supports_single_and_multi_level_wildcards() {
+    assert!(mqtt_topic_matches(
+        "factory/+/commands/#",
+        "factory/edge-1/commands/pump/start"
+    ));
+    assert!(mqtt_topic_matches("factory/edge-1/#", "factory/edge-1"));
+    assert!(!mqtt_topic_matches(
+        "factory/+/commands",
+        "factory/edge-1/commands/start"
+    ));
+    assert!(!mqtt_topic_matches("#", "$SYS/broker/uptime"));
+    assert!(mqtt_topic_matches("$SYS/#", "$SYS/broker/uptime"));
+}
+
+#[tokio::test]
+async fn command_subscriber_routes_one_mqtt_message_to_all_matching_flows() {
+    let broker = spawn_command_mqtt_broker(
+        "factory/edge-live/commands/pump/start",
+        br#"{"commandId":"cmd-500","value":true}"#,
+    )
+    .await;
+    let command_flow = |flow_id: &str| {
+        let mut flow = CommandFlowConfig::new(
+            flow_id,
+            flow_id,
+            "velamq-main",
+            "factory/{edge_id}/commands/#",
+            "factory/{edge_id}/replies/{command_id}",
+        );
+        flow.qos = 0;
+        flow
+    };
+    let package = EdgeConfigPackage::new("edge-live", "command-v1")
+        .with_mqtt_uplink(MqttUplinkConfig::velamq(
+            "velamq-main",
+            broker,
+            "runtime-command-subscription",
+        ))
+        .with_command_flow(command_flow("start-pump"))
+        .with_command_flow(command_flow("audit-start"));
+    let mut subscriber = MqttCommandSubscriber::connect_from_package(&package)
+        .await
+        .unwrap();
+
+    let message = tokio::time::timeout(Duration::from_secs(2), subscriber.recv())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(message.sink_id, "velamq-main");
+    assert_eq!(message.topic, "factory/edge-live/commands/pump/start");
+    assert_eq!(
+        message.flow_ids,
+        vec!["start-pump".to_string(), "audit-start".to_string()]
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&message.payload).unwrap()["commandId"],
+        "cmd-500"
+    );
+    assert_eq!(subscriber.configured_connection_count(), 1);
+    assert_eq!(subscriber.connected_connection_count(), 1);
+}
+
+async fn spawn_command_mqtt_broker(topic: &str, payload: &[u8]) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let broker = format!("mqtt://{}", listener.local_addr().unwrap());
+    let topic = topic.to_string();
+    let payload = payload.to_vec();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let (connect_header, _) = read_mqtt_packet(&mut stream).await;
+        assert_eq!(connect_header >> 4, 1);
+        stream.write_all(&[0x20, 0x02, 0x00, 0x00]).await.unwrap();
+
+        let (subscribe_header, body) = read_mqtt_packet(&mut stream).await;
+        assert_eq!(subscribe_header, 0x82);
+        let packet_id = [body[0], body[1]];
+        stream
+            .write_all(&[0x90, 0x03, packet_id[0], packet_id[1], 0x00])
+            .await
+            .unwrap();
+
+        let mut publish = Vec::new();
+        publish.extend((topic.len() as u16).to_be_bytes());
+        publish.extend(topic.as_bytes());
+        publish.extend(payload);
+        assert!(publish.len() < 128);
+        stream
+            .write_all(&[0x30, publish.len() as u8])
+            .await
+            .unwrap();
+        stream.write_all(&publish).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    });
+    broker
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1096,6 +1586,53 @@ async fn spawn_test_mqtt_broker(acknowledge: bool) -> (String, oneshot::Receiver
             }
             _ => panic!("unexpected qos {qos}"),
         }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    });
+
+    (broker, observed_rx)
+}
+
+async fn spawn_test_mqtt_v5_broker() -> (String, oneshot::Receiver<ObservedPublish>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let broker = format!("mqtt://{}", listener.local_addr().unwrap());
+    let (observed_tx, observed_rx) = oneshot::channel();
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let (connect_header, connect_body) = read_mqtt_packet(&mut stream).await;
+        assert_eq!(connect_header >> 4, 1);
+        assert_eq!(connect_body[6], 5, "CONNECT must use MQTT protocol level 5");
+        assert_eq!(connect_body[7] & 0x02, 0, "clean start should be disabled");
+        stream
+            .write_all(&[0x20, 0x03, 0x00, 0x00, 0x00])
+            .await
+            .unwrap();
+
+        let (publish_header, body) = read_mqtt_packet(&mut stream).await;
+        assert_eq!(publish_header >> 4, 3);
+        let qos = (publish_header >> 1) & 0x03;
+        let topic_len = usize::from(u16::from_be_bytes([body[0], body[1]]));
+        let topic = String::from_utf8(body[2..2 + topic_len].to_vec()).unwrap();
+        let packet_id_start = 2 + topic_len;
+        let packet_id = u16::from_be_bytes([body[packet_id_start], body[packet_id_start + 1]]);
+        let properties_start = packet_id_start + 2;
+        assert_eq!(
+            body[properties_start], 0,
+            "test publish has no MQTT 5 properties"
+        );
+        let payload = body[properties_start + 1..].to_vec();
+        observed_tx
+            .send(ObservedPublish {
+                topic,
+                qos,
+                payload,
+            })
+            .ok();
+
+        stream
+            .write_all(&[0x40, 0x02, (packet_id >> 8) as u8, packet_id as u8])
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
     });
 

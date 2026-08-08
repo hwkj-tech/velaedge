@@ -114,6 +114,8 @@ pub struct TelemetrySample {
     pub telemetry_id: String,
     pub value: TelemetryValue,
     pub quality: DataQuality,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_code: Option<DataQualityCode>,
     pub timestamp: DateTime<Utc>,
 }
 
@@ -130,8 +132,21 @@ impl TelemetrySample {
             telemetry_id: telemetry_id.into(),
             value,
             quality,
+            quality_code: Some(DataQualityCode::default_for(quality)),
             timestamp,
         }
+    }
+
+    pub fn with_quality_code(mut self, quality_code: DataQualityCode) -> Self {
+        self.quality = quality_code.quality();
+        self.quality_code = Some(quality_code);
+        self
+    }
+
+    pub fn inherit_quality(mut self, source: &TelemetrySample) -> Self {
+        self.quality = source.quality;
+        self.quality_code = source.quality_code;
+        self
     }
 }
 
@@ -158,6 +173,68 @@ pub enum DataQuality {
     Good,
     Uncertain,
     Bad,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DataQualityCode {
+    #[default]
+    Good,
+    UncertainProtocol,
+    UncertainLastKnown,
+    UncertainOutOfRange,
+    UncertainSubstituted,
+    UncertainOverflow,
+    BadCommunication,
+    BadTimeout,
+    BadProtocol,
+    BadDecode,
+    BadConfiguration,
+    BadOutOfService,
+}
+
+impl DataQualityCode {
+    pub const fn quality(self) -> DataQuality {
+        match self {
+            Self::Good => DataQuality::Good,
+            Self::UncertainProtocol
+            | Self::UncertainLastKnown
+            | Self::UncertainOutOfRange
+            | Self::UncertainSubstituted
+            | Self::UncertainOverflow => DataQuality::Uncertain,
+            Self::BadCommunication
+            | Self::BadTimeout
+            | Self::BadProtocol
+            | Self::BadDecode
+            | Self::BadConfiguration
+            | Self::BadOutOfService => DataQuality::Bad,
+        }
+    }
+
+    pub const fn default_for(quality: DataQuality) -> Self {
+        match quality {
+            DataQuality::Good => Self::Good,
+            DataQuality::Uncertain => Self::UncertainProtocol,
+            DataQuality::Bad => Self::BadProtocol,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Good => "good",
+            Self::UncertainProtocol => "uncertain_protocol",
+            Self::UncertainLastKnown => "uncertain_last_known",
+            Self::UncertainOutOfRange => "uncertain_out_of_range",
+            Self::UncertainSubstituted => "uncertain_substituted",
+            Self::UncertainOverflow => "uncertain_overflow",
+            Self::BadCommunication => "bad_communication",
+            Self::BadTimeout => "bad_timeout",
+            Self::BadProtocol => "bad_protocol",
+            Self::BadDecode => "bad_decode",
+            Self::BadConfiguration => "bad_configuration",
+            Self::BadOutOfService => "bad_out_of_service",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

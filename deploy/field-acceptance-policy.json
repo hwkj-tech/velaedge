@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "minimumDurationSeconds": 86400,
+  "maximumFailureRatio": 0.01,
+  "maximumProgressGapSeconds": 300,
+  "protocols": [
+    {
+      "protocol": "Modbus TCP",
+      "minimumManufacturers": 1,
+      "minimumModels": 1
+    },
+    {
+      "protocol": "Modbus RTU",
+      "minimumManufacturers": 1,
+      "minimumModels": 1
+    },
+    {
+      "protocol": "DL/T 645-2007",
+      "minimumManufacturers": 2,
+      "minimumModels": 2
+    },
+    {
+      "protocol": "IEC-101",
+      "minimumManufacturers": 2,
+      "minimumModels": 2
+    },
+    {
+      "protocol": "IEC-104",
+      "minimumManufacturers": 2,
+      "minimumModels": 2
+    },
+    {
+      "protocol": "Custom Serial",
+      "minimumManufacturers": 1,
+      "minimumModels": 1
+    },
+    {
+      "protocol": "OPC UA",
+      "minimumManufacturers": 2,
+      "minimumModels": 2
+    },
+    {
+      "protocol": "BACnet/IP",
+      "minimumManufacturers": 1,
+      "minimumModels": 1
+    },
+    {
+      "protocol": "Siemens S7",
+      "minimumManufacturers": 1,
+      "minimumModels": 2
+    },
+    {
+      "protocol": "Omron FINS",
+      "minimumManufacturers": 1,
+      "minimumModels": 2
+    }
+  ]
+}

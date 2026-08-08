@@ -6,9 +6,10 @@ use std::{
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use cloud_control::{
-    AgentConversation, AgentProposal, AuditRecord, CloudControlStore, EdgeAccessCredential,
-    EdgeNode, KnowledgeDocument, PointSet, PointSetPoint, Product, ProductVersion,
-    ProductVersionStatus, Project, ReleaseRecord, ReleaseService, SqliteCloudStore,
+    manufacturer_product_templates, AgentConversation, AgentProposal, AuditRecord,
+    CloudControlStore, EdgeAccessCredential, EdgeNode, KnowledgeDocument, PointSet, PointSetPoint,
+    Product, ProductVersion, ProductVersionStatus, Project, ReleaseRecord, ReleaseService,
+    ReleaseStatus, SqliteCloudStore,
 };
 use edge_core::{
     AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
@@ -16,9 +17,9 @@ use edge_core::{
     CollectionRuntimeMetrics, CollectionTask, CommandRisk, CommandSpec, DataConfig,
     DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish, DeviceInstance,
     DeviceSpec, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot,
-    EventSeverity, EventSpec, LocalStoreMetrics, MqttUplinkConfig, NumberRange, PointAddress,
-    ProtocolConnection, ProtocolRuntimeMetrics, ProtocolType, SystemRuntimeMetrics, TelemetryPoint,
-    TelemetryPointMapping, TelemetryType,
+    EventSeverity, EventSpec, LocalStoreMetrics, MqttUplinkConfig, NumberRange, PointAccess,
+    PointAddress, ProtocolConnection, ProtocolRuntimeMetrics, ProtocolType, SystemRuntimeMetrics,
+    TelemetryPoint, TelemetryPointMapping, TelemetryType,
 };
 
 use crate::{
@@ -102,9 +103,62 @@ impl AppState {
     }
 
     pub async fn persist_config_package(&self, package: EdgeConfigPackage) -> Result<()> {
+        let Ok(pending_release) = ReleaseService::prepare_release(&package) else {
+            if let Some(store) = &self.sqlite_store {
+                store.upsert_config_package(package.clone()).await?;
+            }
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("cloud control store mutex poisoned"))?;
+            store.upsert_config_package(package);
+            return Ok(());
+        };
+        let mut revision_states = {
+            let store = self
+                .store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("cloud control store mutex poisoned"))?;
+            store
+                .releases()
+                .filter(|release| {
+                    release.edge_id == package.edge_id && release.status == ReleaseStatus::Pending
+                })
+                .cloned()
+                .map(|mut release| {
+                    release.status = ReleaseStatus::Superseded;
+                    release
+                })
+                .collect::<Vec<_>>()
+        };
+        revision_states.push(pending_release.clone());
+
         if let Some(store) = &self.sqlite_store {
-            store.upsert_config_package(package).await?;
+            store
+                .apply_config_revision(package.clone(), revision_states.clone())
+                .await?;
         }
+
+        {
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("cloud control store mutex poisoned"))?;
+            store.upsert_config_package(package.clone());
+            for release in revision_states {
+                store.insert_release(release);
+            }
+            store.push_audit(
+                cloud_control::AuditAction::CreateRelease,
+                format!("config-revision:{}:{}", package.edge_id, package.version),
+            );
+        }
+
+        // Offline nodes retain the pending revision and receive it on their next connection.
+        let _ = self
+            .gateway_commands
+            .notify_config_changed(&package.edge_id)
+            .await;
         Ok(())
     }
 
@@ -402,6 +456,13 @@ fn demo_store() -> CloudControlStore {
             protocol: ProtocolType::ModbusTcp,
             endpoint: Some("10.12.0.20:502".to_string()),
             serial: None,
+            iec101: None,
+            iec104: None,
+            opc_ua: None,
+            bacnet_ip: None,
+            siemens_s7: None,
+            omron_fins: None,
+            circuit_breaker: Default::default(),
         })
         .with_mqtt_uplink(MqttUplinkConfig::velamq(
             "velamq-main",
@@ -429,6 +490,7 @@ fn demo_store() -> CloudControlStore {
                 PointAddress {
                     kind: "coil".to_string(),
                     value: "00001".to_string(),
+                    modbus: None,
                 },
                 TelemetryType::Boolean,
             )
@@ -469,6 +531,7 @@ fn demo_store() -> CloudControlStore {
                 PointAddress {
                     kind: "coil".to_string(),
                     value: "00001".to_string(),
+                    modbus: None,
                 },
                 TelemetryType::Boolean,
                 "running",
@@ -528,6 +591,22 @@ fn demo_store() -> CloudControlStore {
             timeout_count: 0,
             error_count: 0,
             reconnect_count: 0,
+            collection_attempt_count: 100,
+            collection_success_count: 100,
+            write_attempt_count: 2,
+            write_success_count: 2,
+            circuit_state: Default::default(),
+            consecutive_failure_count: 0,
+            circuit_open_count: 0,
+            circuit_rejected_count: 0,
+            last_quality_code: None,
+            good_value_count: 0,
+            uncertain_value_count: 0,
+            bad_value_count: 0,
+            subscription_count: 0,
+            notification_count: 0,
+            subscription_error_count: 0,
+            fallback_poll_count: 0,
         }],
         local_store: LocalStoreMetrics {
             backend: "jsonl".to_string(),
@@ -536,6 +615,7 @@ fn demo_store() -> CloudControlStore {
             disk_usage_percent: 35.0,
         },
         algorithms: Vec::new(),
+        mqtt: Default::default(),
         cloud_sync: CloudSyncMetrics {
             connected: true,
             last_sync_seconds_ago: 8,
@@ -555,7 +635,7 @@ async fn ensure_default_catalog(
     store: &mut CloudControlStore,
 ) -> Result<()> {
     if store.projects().next().is_some() {
-        return Ok(());
+        return ensure_manufacturer_product_templates(sqlite_store, store, "demo-plant").await;
     }
     seed_default_catalog(store);
     for project in store.projects().cloned().collect::<Vec<_>>() {
@@ -570,6 +650,38 @@ async fn ensure_default_catalog(
     for version in store.product_versions().cloned().collect::<Vec<_>>() {
         sqlite_store.upsert_product_version(version).await?;
     }
+    Ok(())
+}
+
+async fn ensure_manufacturer_product_templates(
+    sqlite_store: &SqliteCloudStore,
+    store: &mut CloudControlStore,
+    project_id: &str,
+) -> Result<()> {
+    if store.project(project_id).is_none() {
+        return Ok(());
+    }
+
+    for template in manufacturer_product_templates(project_id) {
+        if store.point_set(&template.point_set.point_set_id).is_none() {
+            store.upsert_point_set(template.point_set.clone());
+            sqlite_store.upsert_point_set(template.point_set).await?;
+        }
+        if store.product(&template.product.product_id).is_none() {
+            store.upsert_product(template.product.clone());
+            sqlite_store.upsert_product(template.product).await?;
+        }
+        if store
+            .product_version(&template.version.product_id, &template.version.version)
+            .is_none()
+        {
+            store.upsert_product_version(template.version.clone());
+            sqlite_store
+                .upsert_product_version(template.version)
+                .await?;
+        }
+    }
+
     Ok(())
 }
 
@@ -633,6 +745,11 @@ fn seed_default_catalog(store: &mut CloudControlStore) {
             semantic_id: "pump.pressure".to_string(),
             address: PointAddress::modbus_holding_register(40011),
             value_type: TelemetryType::Float,
+            access: PointAccess::ReadOnly,
+            opc_ua: None,
+            iec101: None,
+            iec104: None,
+            bacnet: None,
             unit: Some("MPa".to_string()),
             interval_ms: 1000,
         },
@@ -642,8 +759,14 @@ fn seed_default_catalog(store: &mut CloudControlStore) {
             address: PointAddress {
                 kind: "coil".to_string(),
                 value: "00001".to_string(),
+                modbus: None,
             },
             value_type: TelemetryType::Boolean,
+            access: PointAccess::ReadWrite,
+            opc_ua: None,
+            iec101: None,
+            iec104: None,
+            bacnet: None,
             unit: None,
             interval_ms: 1000,
         },
@@ -662,6 +785,11 @@ fn seed_default_catalog(store: &mut CloudControlStore) {
             semantic_id: "electric.voltage_a".to_string(),
             address: PointAddress::modbus_holding_register(40001),
             value_type: TelemetryType::Float,
+            access: PointAccess::ReadOnly,
+            opc_ua: None,
+            iec101: None,
+            iec104: None,
+            bacnet: None,
             unit: Some("V".to_string()),
             interval_ms: 1000,
         },
@@ -670,6 +798,11 @@ fn seed_default_catalog(store: &mut CloudControlStore) {
             semantic_id: "electric.current_a".to_string(),
             address: PointAddress::modbus_holding_register(40003),
             value_type: TelemetryType::Float,
+            access: PointAccess::ReadOnly,
+            opc_ua: None,
+            iec101: None,
+            iec104: None,
+            bacnet: None,
             unit: Some("A".to_string()),
             interval_ms: 1000,
         },
@@ -687,6 +820,11 @@ fn seed_default_catalog(store: &mut CloudControlStore) {
         semantic_id: "energy.power".to_string(),
         address: PointAddress::modbus_holding_register(40101),
         value_type: TelemetryType::Float,
+        access: PointAccess::ReadOnly,
+        opc_ua: None,
+        iec101: None,
+        iec104: None,
+        bacnet: None,
         unit: Some("kW".to_string()),
         interval_ms: 5000,
     }];
@@ -736,6 +874,12 @@ fn seed_default_catalog(store: &mut CloudControlStore) {
             }
         }
         store.upsert_product_version(product_version);
+    }
+
+    for template in manufacturer_product_templates("demo-plant") {
+        store.upsert_point_set(template.point_set);
+        store.upsert_product(template.product);
+        store.upsert_product_version(template.version);
     }
 }
 

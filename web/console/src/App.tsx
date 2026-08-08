@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type DragEvent, type MouseEvent, type PointerEvent } from 'react';
-import { Check, Trash2, X } from 'lucide-react';
+import { Fragment, useEffect, useRef, useState, type DragEvent, type MouseEvent, type PointerEvent } from 'react';
+import { AlertTriangle, Check, Pencil, Plus, Trash2, X } from 'lucide-react';
 
 import {
   bindEdgeProduct,
@@ -22,6 +22,7 @@ import {
   fetchAgentKnowledgeDocuments,
   fetchAgentConversations,
   fetchDeviceModels,
+  fetchDlt645DataIdentifiers,
   fetchEdgeAlgorithms,
   fetchEdgeCollectionTasks,
   fetchEdgeDataConfigs,
@@ -29,6 +30,7 @@ import {
   fetchEdgeProtocolConnections,
   fetchEdgeNodes,
   fetchPointSets,
+  fetchProtocolCatalog,
   fetchProducts,
   fetchProductVersions,
   fetchProjects,
@@ -39,9 +41,6 @@ import {
   fetchDiscoverySuggestions,
   generateEdgeAccessToken as generateEdgeAccessTokenApi,
   generateAgentSuggestions,
-  publishLatestRelease,
-  publishProductVersion as publishProductVersionApi,
-  rollbackProductVersion as rollbackProductVersionApi,
   runAgentSafetyCheck,
   runConfigValidation,
   runReleaseDiff,
@@ -87,6 +86,7 @@ import type {
   AuditRecordResponse,
   AuthStatusResponse,
   CollectionTaskResponse,
+  CommandFlowConfig,
   CreateAlgorithmRequest,
   CreateAgentProposalRequest,
   CreateCollectionTaskRequest,
@@ -97,6 +97,7 @@ import type {
   DataConfigPoint,
   DataConfigResponse,
   DataConfigVisualGraph,
+  Dlt645DataIdentifierTemplateResponse,
   EdgeNodeResponse,
   ManagementActionResponse,
   MqttUplinkResponse,
@@ -107,6 +108,7 @@ import type {
   ProductVersionResponse,
   ProjectResponse,
   ProtocolConnectionResponse,
+  RuntimeProtocolDescriptor,
   ReleaseListResponse,
   RunDiscoveryRequest,
   RuntimeStatusResponse,
@@ -144,8 +146,8 @@ import { CollectionTasksPage } from './pages/CollectionTasksPage';
 import { MqttUplinkPage } from './pages/MqttUplinkPage';
 import { PointMappingsPage } from './pages/PointMappingsPage';
 import { PointSetsPage } from './pages/PointSetsPage';
+import { ProductCommandFlowsEditor } from './pages/ProductCommandFlowsEditor';
 import { ProtocolConnectionsPage } from './pages/ProtocolConnectionsPage';
-import { ReleasesPage } from './pages/ReleasesPage';
 import { RuntimeStatusPage } from './pages/RuntimeStatusPage';
 import { Modal } from './components/Modal';
 import { AuthGate } from './components/AuthGate';
@@ -159,11 +161,8 @@ const initialSummary: SummaryResponse = {
 const defaultConfigEdgeId = 'edge-dev';
 type EdgeConfigurationMode = 'configure' | 'list';
 type EdgeTemplateId = string;
-type ProductConfigTab =
-  | 'basic'
-  | 'points'
-  | 'collection'
-  | 'release';
+type ProductConfigTab = 'basic' | 'connections';
+type ProductConnectionWorkspaceTab = 'parameters' | 'points' | 'collection' | 'commands';
 
 interface ProjectDefinition {
   description: string;
@@ -175,7 +174,12 @@ interface ProjectDefinition {
 
 export interface EdgeTemplateDefinition {
   algorithm: CreateAlgorithmRequest & { algorithmId: string };
+  commandFlows?: CommandFlowConfig[];
   connection: CreateProtocolConnectionRequest;
+  protocolConnections?: ProductProtocolConnectionDefinition[];
+  collectionFlows?: ProductCollectionFlowDefinition[];
+  dataConfigBindings?: ProductDataConfigBinding[];
+  versionResources?: ProductVersionResources;
   dataConfig: Omit<SaveDataConfigRequest, 'protocolConnectionId'>;
   description: string;
   highlights: string[];
@@ -189,6 +193,31 @@ export interface EdgeTemplateDefinition {
   task: CreateCollectionTaskRequest & { taskId: string };
   templateId: EdgeTemplateId;
   version: string;
+}
+
+interface ProductProtocolConnectionDefinition
+  extends CreateProtocolConnectionRequest {
+  connectionId: string;
+}
+
+interface ProductDataConfigBinding {
+  configId: string;
+  name: string;
+  pointIds: string[];
+  protocolConnectionId: string;
+}
+
+interface ProductCollectionFlowDefinition
+  extends Omit<SaveDataConfigRequest, 'protocolConnectionId'> {
+  protocolConnectionId: string;
+}
+
+interface ProductVersionResources {
+  algorithms: unknown[];
+  collectionTasks: unknown[];
+  dataConfigs: unknown[];
+  devices: unknown[];
+  mqttUplinks: unknown[];
 }
 
 interface EdgeProductBinding {
@@ -207,7 +236,6 @@ const configurationPages = new Set<PageKey>(['edgeConfig']);
 const deprecatedGlobalConfigurationPages = new Set<PageKey>([
   'protocolConnections',
   'dataConfigs',
-  'releases',
 ]);
 
 interface ConsoleSnapshot {
@@ -216,6 +244,8 @@ interface ConsoleSnapshot {
   collectionTasks: CollectionTaskResponse[];
   dataConfigs: DataConfigResponse[];
   deviceModels: DeviceModelResponse[];
+  dlt645DataIdentifiers: Dlt645DataIdentifierTemplateResponse[];
+  protocolCatalog: RuntimeProtocolDescriptor[];
   edgeNodes: EdgeNodeResponse[];
   pointMappings: PointMappingResponse[];
   pointSets: PointSetResponse[];
@@ -319,6 +349,10 @@ export function ConsoleApp({
   const [edgeTemplates, setEdgeTemplates] = useState<EdgeTemplateDefinition[]>([]);
   const [projects, setProjects] = useState<ProjectDefinition[]>([]);
   const [pointSets, setPointSets] = useState<PointSetResponse[]>([]);
+  const [dlt645DataIdentifiers, setDlt645DataIdentifiers] = useState<
+    Dlt645DataIdentifierTemplateResponse[]
+  >([]);
+  const [protocolCatalog, setProtocolCatalog] = useState<RuntimeProtocolDescriptor[]>([]);
   const [productVersions, setProductVersions] = useState<
     Record<string, ProductVersionResponse[]>
   >({});
@@ -340,6 +374,8 @@ export function ConsoleApp({
     setDiscoverySuggestions(snapshot.discoverySuggestions);
     setPointMappings(snapshot.pointMappings);
     setPointSets(snapshot.pointSets);
+    setDlt645DataIdentifiers(snapshot.dlt645DataIdentifiers);
+    setProtocolCatalog(snapshot.protocolCatalog);
     setProductVersions(snapshot.productVersions);
     setProjects(snapshot.projects.map(projectResponseToDefinition));
     setEdgeTemplates((current) =>
@@ -725,11 +761,6 @@ export function ConsoleApp({
     setAlgorithms(await fetchEdgeAlgorithms(edgeId));
   };
 
-  const handlePublishLatestRelease = async (edgeId: string) => {
-    await publishLatestRelease(edgeId);
-    await refreshConsoleData();
-  };
-
   const handleReleaseDiff = async (
     edgeId: string,
   ): Promise<ManagementActionResponse> => runReleaseDiff(edgeId);
@@ -963,18 +994,47 @@ export function ConsoleApp({
     const source = edgeTemplates.find(
       (template) => template.templateId === DEFAULT_EDGE_TEMPLATE_ID,
     ) ?? edgeTemplates[0] ?? EDGE_CONFIG_TEMPLATES[0];
+    const protocolConnection = defaultProductProtocolConnection(
+      `product-connection-${sequence}`,
+      source.connection.protocolType,
+    );
+    const { connectionId: _connectionId, ...connection } = protocolConnection;
+    const deviceId = `product-device-${sequence}`;
     const nextTemplate: EdgeTemplateDefinition = {
       ...source,
+      commandFlows: [],
+      collectionFlows: [],
+      connection,
       dataConfig: {
         ...source.dataConfig,
+        algorithmIds: [],
         configId: `product_data_${sequence}`,
+        deviceId,
         name: `自定义产品上报 ${sequence}`,
+        points: [],
+        visualGraph: { edges: [], nodes: [] },
       },
+      dataConfigBindings: [],
       name: `自定义边端产品 ${sequence}`,
       pointSetIds: [],
+      points: [],
       productType: source.productType,
       projectId: projects[0].projectId,
+      protocolConnections: [protocolConnection],
+      task: {
+        ...source.task,
+        deviceId,
+        pointIds: [],
+        taskId: `product-task-${sequence}`,
+      },
       templateId: `custom-product-${Date.now()}`,
+      versionResources: {
+        algorithms: [],
+        collectionTasks: [],
+        dataConfigs: [],
+        devices: [],
+        mqttUplinks: [],
+      },
       version: 'v1.0.0',
     };
     const productRequest: SaveProductRequest = {
@@ -1036,6 +1096,7 @@ export function ConsoleApp({
         template.templateId === templateId ? savedTemplate : template,
       ),
     );
+    await refreshProductRollout(templateId);
     return savedTemplate;
   };
 
@@ -1063,24 +1124,6 @@ export function ConsoleApp({
     setEdgeProductBindings(nextEdges.map(edgeProductBindingFromNode));
     setSummary(nextSummary);
     setReleaseList(nextReleaseList);
-  };
-
-  const handlePublishProductVersion = async (
-    productId: string,
-    version: string,
-  ) => {
-    const published = await publishProductVersionApi(productId, version);
-    await refreshProductRollout(productId);
-    return published;
-  };
-
-  const handleRollbackProductVersion = async (
-    productId: string,
-    version: string,
-  ) => {
-    const published = await rollbackProductVersionApi(productId, version);
-    await refreshProductRollout(productId);
-    return published;
   };
 
   const handleDeleteEdgeTemplate = async (templateId: EdgeTemplateId) => {
@@ -1172,9 +1215,13 @@ export function ConsoleApp({
     let mounted = true;
     const refreshRuntimeStatus = async () => {
       try {
-        const nextRuntimeStatus = await fetchRuntimeStatus();
+        const [nextRuntimeStatus, nextEdgeNodes] = await Promise.all([
+          fetchRuntimeStatus(),
+          fetchEdgeNodes(),
+        ]);
         if (mounted) {
           setRuntimeStatus(nextRuntimeStatus);
+          setEdgeNodes(nextEdgeNodes);
         }
       } catch {
         // Keep the last known runtime snapshot visible if polling misses once.
@@ -1219,6 +1266,8 @@ export function ConsoleApp({
         handleSaveProject,
         handleDeleteProject,
         pointSets,
+        dlt645DataIdentifiers,
+        protocolCatalog,
         handleCreatePointSet,
         handleSavePointSet,
         handleDeletePointSet,
@@ -1226,8 +1275,6 @@ export function ConsoleApp({
         handleSaveEdgeTemplate,
         handleDeleteEdgeTemplate,
         productVersions,
-        handlePublishProductVersion,
-        handleRollbackProductVersion,
         handleAgentSafetyCheck,
         handleAssessAlgorithmRisk,
         loadEdgeConfig,
@@ -1275,7 +1322,6 @@ export function ConsoleApp({
         handleDeleteProtocolConnection,
         selectedProtocolEdgeId,
         handleSaveMqttUplink,
-        handlePublishLatestRelease,
         handleValidateConfig,
         edgeNodes,
         deviceModels,
@@ -1300,6 +1346,8 @@ async function loadConsoleSnapshot(): Promise<ConsoleSnapshot> {
     summary,
     edgeNodes,
     deviceModels,
+    dlt645DataIdentifiers,
+    protocolCatalog,
     pointSets,
     products,
     projects,
@@ -1310,6 +1358,8 @@ async function loadConsoleSnapshot(): Promise<ConsoleSnapshot> {
     fetchSummary(),
     fetchEdgeNodes(),
     fetchDeviceModels(),
+    fetchDlt645DataIdentifiers(),
+    fetchProtocolCatalog(),
     fetchPointSets(),
     fetchProducts(),
     fetchProjects(),
@@ -1354,6 +1404,8 @@ async function loadConsoleSnapshot(): Promise<ConsoleSnapshot> {
     collectionTasks,
     dataConfigs,
     deviceModels,
+    dlt645DataIdentifiers,
+    protocolCatalog,
     edgeNodes,
     pointMappings,
     pointSets,
@@ -1389,6 +1441,20 @@ function projectDefinitionToRequest(project: ProjectDefinition): SaveProjectRequ
   };
 }
 
+const catalogProductPresentation: Record<
+  string,
+  Pick<EdgeTemplateDefinition, 'highlights' | 'recommendedFor'>
+> = {
+  'siemens-s7-pump-basic': {
+    highlights: ['Siemens S7 TCP', 'DB/M/I/Q 点位', '可写启停命令', 'MQTT JSON 上报'],
+    recommendedFor: 'S7-1200、S7-1500、泵站与产线 PLC',
+  },
+  'omron-fins-machine-basic': {
+    highlights: ['Omron FINS/TCP', 'CIO/WR/HR/DM 点位', '安全指令下发', 'MQTT JSON 上报'],
+    recommendedFor: 'Omron CP、CJ、CS、NJ/NX 系列 PLC 与机台控制',
+  },
+};
+
 function mergeCatalogProducts(
   products: ProductResponse[],
   versions: Record<string, ProductVersionResponse[]>,
@@ -1402,11 +1468,14 @@ function mergeCatalogProducts(
     EDGE_CONFIG_TEMPLATES[0];
 
   return products.map((product) => {
-    const configured = current.find(
-      (template) => template.templateId === product.productId,
-    );
+    const configured =
+      current.find((template) => template.templateId === product.productId) ??
+      EDGE_CONFIG_TEMPLATES.find(
+        (template) => template.templateId === product.productId,
+      );
     const base = {
       ...(configured ?? fallback),
+      ...catalogProductPresentation[product.productId],
       description: product.description,
       name: product.name,
       productType: product.productType,
@@ -1439,6 +1508,41 @@ interface CoreDataConfigPoint {
   value_type: string;
 }
 
+interface CoreStoredDataConfig {
+  algorithm_ids?: string[];
+  collection?: { period_ms?: number; retry_count?: number; timeout_ms?: number };
+  config_id?: string;
+  device_id?: string;
+  enabled?: boolean;
+  name?: string;
+  points?: CoreDataConfigPoint[];
+  protocol_connection_id?: string;
+  publish?: {
+    payload?: { include_quality?: boolean; mode?: string; timestamp_field?: string };
+    qos?: number;
+    sink_id?: string;
+    topic_template?: string;
+  };
+  visual_graph?: {
+    edges?: Array<{
+      edge_id: string;
+      from: string;
+      from_port?: string | null;
+      to: string;
+      to_port?: string | null;
+    }>;
+    nodes?: Array<{
+      kind: string;
+      label: string;
+      node_id: string;
+      params?: Record<string, boolean | number | string | string[]>;
+      ref_id?: string | null;
+      x: number;
+      y: number;
+    }>;
+  };
+}
+
 interface CoreProductAlgorithmSpec {
   dsl?: CreateAlgorithmRequest['dsl'];
   id?: string;
@@ -1446,14 +1550,264 @@ interface CoreProductAlgorithmSpec {
   version?: string;
 }
 
+interface CoreProtocolConnection {
+  connection_id?: string;
+  endpoint?: string | null;
+  protocol?: string;
+  serial?: {
+    baud_rate: number;
+    data_bits: number;
+    parity: 'none' | 'even' | 'odd';
+    port: string;
+    stop_bits: number;
+  } | null;
+  opc_ua?: NonNullable<CreateProtocolConnectionRequest['opcUa']> | null;
+  bacnet_ip?: NonNullable<CreateProtocolConnectionRequest['bacnetIp']> | null;
+  iec101?: NonNullable<CreateProtocolConnectionRequest['iec101']> | null;
+  iec104?: NonNullable<CreateProtocolConnectionRequest['iec104']> | null;
+  siemens_s7?: NonNullable<CreateProtocolConnectionRequest['siemensS7']> | null;
+  omron_fins?: NonNullable<CreateProtocolConnectionRequest['omronFins']> | null;
+  circuit_breaker?: {
+    enabled: boolean;
+    failure_threshold: number;
+    half_open_success_threshold: number;
+    open_duration_ms: number;
+  };
+}
+
+function hydrateProductProtocolConnection(
+  connection: CoreProtocolConnection,
+  index: number,
+): ProductProtocolConnectionDefinition {
+  return {
+    bacnetIp: connection.bacnet_ip ?? undefined,
+    circuitBreaker: connection.circuit_breaker
+      ? {
+          enabled: connection.circuit_breaker.enabled,
+          failureThreshold: connection.circuit_breaker.failure_threshold,
+          halfOpenSuccessThreshold:
+            connection.circuit_breaker.half_open_success_threshold,
+          openDurationMs: connection.circuit_breaker.open_duration_ms,
+        }
+      : undefined,
+    connectionId: connection.connection_id ?? `connection-${index + 1}`,
+    endpoint: connection.endpoint ?? null,
+    iec101: connection.iec101 ?? undefined,
+    iec104: connection.iec104 ?? undefined,
+    omronFins: connection.omron_fins ?? undefined,
+    opcUa: connection.opc_ua ?? undefined,
+    protocolType: connection.protocol ?? 'ModbusTcp',
+    serial: connection.serial
+      ? {
+          baudRate: connection.serial.baud_rate,
+          dataBits: connection.serial.data_bits,
+          parity: connection.serial.parity,
+          port: connection.serial.port,
+          stopBits: connection.serial.stop_bits,
+        }
+      : undefined,
+    siemensS7: connection.siemens_s7 ?? undefined,
+  };
+}
+
+function productConnectionRequest(
+  connection: ProductProtocolConnectionDefinition,
+): Record<string, unknown> {
+  return {
+    bacnet_ip: connection.bacnetIp,
+    circuit_breaker: connection.circuitBreaker
+      ? {
+          enabled: connection.circuitBreaker.enabled,
+          failure_threshold: connection.circuitBreaker.failureThreshold,
+          half_open_success_threshold:
+            connection.circuitBreaker.halfOpenSuccessThreshold,
+          open_duration_ms: connection.circuitBreaker.openDurationMs,
+        }
+      : undefined,
+    connection_id: connection.connectionId,
+    endpoint: connection.endpoint,
+    iec101: connection.iec101,
+    iec104: connection.iec104,
+    omron_fins: connection.omronFins,
+    opc_ua: connection.opcUa,
+    protocol: connection.protocolType,
+    serial: connection.serial
+      ? {
+          baud_rate: connection.serial.baudRate,
+          data_bits: connection.serial.dataBits,
+          parity: connection.serial.parity,
+          port: connection.serial.port,
+          stop_bits: connection.serial.stopBits,
+        }
+      : undefined,
+    siemens_s7: connection.siemensS7,
+  };
+}
+
+function hydrateProductCollectionFlow(
+  candidate: CoreStoredDataConfig,
+  index: number,
+  base: EdgeTemplateDefinition,
+  algorithmKindsById: Map<string, string>,
+  task?: {
+    device_id?: string;
+    enabled?: boolean;
+    interval_ms?: number;
+    point_ids?: string[];
+    task_id?: string;
+  },
+): ProductCollectionFlowDefinition {
+  return {
+    algorithmIds: candidate.algorithm_ids ?? [],
+    collection: {
+      periodMs: candidate.collection?.period_ms ?? task?.interval_ms ?? 1000,
+      retryCount: candidate.collection?.retry_count ?? 2,
+      timeoutMs: candidate.collection?.timeout_ms ?? 800,
+    },
+    configId: candidate.config_id ?? `data-config-${index + 1}`,
+    deviceId: candidate.device_id ?? task?.device_id ?? base.task.deviceId,
+    enabled: candidate.enabled ?? true,
+    name: candidate.name ?? `采集配置 ${index + 1}`,
+    points: (candidate.points ?? []).map((point) => ({
+      addressKind: point.address.kind,
+      addressValue: point.address.value,
+      jsonField: point.json_field,
+      pointId: point.point_id,
+      semanticId: point.semantic_id,
+      unit: point.unit ?? '',
+      valueType: coreTelemetryTypeToConsole(point.value_type),
+    })),
+    protocolConnectionId: candidate.protocol_connection_id ?? '',
+    publish: {
+      payload: {
+        includeQuality: candidate.publish?.payload?.include_quality ?? true,
+        mode: candidate.publish?.payload?.mode === 'Array' ? 'array' : 'object',
+        timestampField: candidate.publish?.payload?.timestamp_field ?? 'ts',
+      },
+      qos: candidate.publish?.qos ?? 1,
+      sinkId: candidate.publish?.sink_id ?? base.mqtt.sinkId,
+      topicTemplate:
+        candidate.publish?.topic_template ?? base.dataConfig.publish.topicTemplate,
+    },
+    visualGraph: {
+      edges: (candidate.visual_graph?.edges ?? []).map((edge) => ({
+        edgeId: edge.edge_id,
+        from: edge.from,
+        fromPort: edge.from_port,
+        to: edge.to,
+        toPort: edge.to_port,
+      })),
+      nodes: (candidate.visual_graph?.nodes ?? []).map((node) => ({
+        kind: node.kind.toLowerCase() as DataConfigVisualGraph['nodes'][number]['kind'],
+        label: node.label,
+        nodeId: node.node_id,
+        params: node.params ?? {},
+        refId:
+          node.kind.toLowerCase() === 'algorithm' && node.ref_id
+            ? algorithmKindsById.get(node.ref_id) ?? node.ref_id
+            : node.ref_id,
+        x: node.x,
+        y: node.y,
+      })),
+    },
+  };
+}
+
+function withoutProductFlowConnection(
+  flow: ProductCollectionFlowDefinition,
+): EdgeTemplateDefinition['dataConfig'] {
+  const { protocolConnectionId: _protocolConnectionId, ...dataConfig } = flow;
+  return dataConfig;
+}
+
+function productCollectionFlows(
+  template: EdgeTemplateDefinition,
+): ProductCollectionFlowDefinition[] {
+  if (template.collectionFlows) return template.collectionFlows;
+  const primaryConnectionId = template.dataConfigBindings?.find(
+    (binding) => binding.configId === template.dataConfig.configId,
+  )?.protocolConnectionId ?? template.protocolConnections?.[0]?.connectionId ?? '';
+  return [{ ...template.dataConfig, protocolConnectionId: primaryConnectionId }];
+}
+
+function productCollectionFlowBinding(
+  flow: ProductCollectionFlowDefinition,
+): ProductDataConfigBinding {
+  return {
+    configId: flow.configId,
+    name: flow.name,
+    pointIds: flow.points.map((point) => point.pointId),
+    protocolConnectionId: flow.protocolConnectionId,
+  };
+}
+
+function removeProductGraphPoints(
+  graph: DataConfigVisualGraph | undefined,
+  removedPointIds: string[],
+): DataConfigVisualGraph {
+  const removed = new Set(removedPointIds);
+  const removedNodeIds = new Set(
+    (graph?.nodes ?? [])
+      .filter((node) => node.kind === 'point' && node.refId && removed.has(node.refId))
+      .map((node) => node.nodeId),
+  );
+  return {
+    edges: (graph?.edges ?? []).filter(
+      (edge) => !removedNodeIds.has(edge.from) && !removedNodeIds.has(edge.to),
+    ),
+    nodes: (graph?.nodes ?? []).filter((node) => !removedNodeIds.has(node.nodeId)),
+  };
+}
+
+function commandFlowConnectionId(
+  flow: CommandFlowConfig,
+  template: EdgeTemplateDefinition,
+) {
+  if (flow.protocol_connection_id) return flow.protocol_connection_id;
+  const writePointIds = new Set(
+    flow.nodes
+      .filter((node) => node.kind === 'point_write' && node.ref_id)
+      .map((node) => node.ref_id as string),
+  );
+  const connectionIds = new Set(
+    (template.dataConfigBindings ?? [])
+      .filter((binding) => binding.pointIds.some((pointId) => writePointIds.has(pointId)))
+      .map((binding) => binding.protocolConnectionId)
+      .filter(Boolean),
+  );
+  return connectionIds.size === 1 ? Array.from(connectionIds)[0] : '';
+}
+
+function productConnectionPointIds(
+  template: EdgeTemplateDefinition,
+  protocolConnectionId: string,
+) {
+  return new Set(
+    productCollectionFlows(template)
+      .filter((flow) => flow.protocolConnectionId === protocolConnectionId)
+      .flatMap((flow) => flow.points.map((point) => point.pointId)),
+  );
+}
+
+function productTopicSummary(template: EdgeTemplateDefinition) {
+  const topics = Array.from(new Set(
+    productCollectionFlows(template)
+      .map((flow) => flow.publish.topicTemplate)
+      .filter(Boolean),
+  ));
+  if (topics.length === 0) return '未配置';
+  if (topics.length === 1) return topics[0];
+  return `${topics.length} 个 Topic`;
+}
+
 export function hydrateProductTemplate(
   base: EdgeTemplateDefinition,
   version: ProductVersionResponse,
   pointSets: PointSetResponse[],
 ): EdgeTemplateDefinition {
-  const connection = version.protocolConnections[0] as
-    | { endpoint?: string | null; protocol?: string }
-    | undefined;
+  const protocolConnections = (version.protocolConnections as CoreProtocolConnection[])
+    .map(hydrateProductProtocolConnection);
+  const connection = protocolConnections[0];
   const task = version.collectionTasks[0] as
     | {
         device_id?: string;
@@ -1463,41 +1817,18 @@ export function hydrateProductTemplate(
         task_id?: string;
       }
     | undefined;
-  const dataConfig = version.dataConfigs[0] as
-    | {
-        algorithm_ids?: string[];
-        collection?: { period_ms?: number; retry_count?: number; timeout_ms?: number };
-        config_id?: string;
-        device_id?: string;
-        enabled?: boolean;
-        name?: string;
-        points?: CoreDataConfigPoint[];
-        publish?: {
-          payload?: { include_quality?: boolean; mode?: string; timestamp_field?: string };
-          qos?: number;
-          sink_id?: string;
-          topic_template?: string;
-        };
-        visual_graph?: {
-          edges?: Array<{
-            edge_id: string;
-            from: string;
-            from_port?: string | null;
-            to: string;
-            to_port?: string | null;
-          }>;
-          nodes?: Array<{
-            kind: string;
-            label: string;
-            node_id: string;
-            params?: Record<string, boolean | number | string | string[]>;
-            ref_id?: string | null;
-            x: number;
-            y: number;
-          }>;
-        };
-      }
-    | undefined;
+  const dataConfig = version.dataConfigs[0] as CoreStoredDataConfig | undefined;
+  const dataConfigBindings = (version.dataConfigs as Array<{
+    config_id?: string;
+    name?: string;
+    points?: CoreDataConfigPoint[];
+    protocol_connection_id?: string;
+  }>).map((candidate, index) => ({
+    configId: candidate.config_id ?? `data-config-${index + 1}`,
+    name: candidate.name ?? `采集配置 ${index + 1}`,
+    pointIds: (candidate.points ?? []).map((point) => point.point_id),
+    protocolConnectionId: candidate.protocol_connection_id ?? '',
+  }));
   const algorithms = version.algorithms as CoreProductAlgorithmSpec[];
   const algorithm = algorithms[0];
   const algorithmKindsById = new Map(
@@ -1509,11 +1840,35 @@ export function hydrateProductTemplate(
     | {
         batch_size?: number;
         broker?: string;
+        clean_session?: boolean;
+        clean_start?: boolean;
         client_id?: string;
         flush_interval_ms?: number;
+        keep_alive_seconds?: number;
+        last_will?: {
+          content_type?: string;
+          correlation_data?: string;
+          delay_interval_seconds?: number;
+          message_expiry_interval_seconds?: number;
+          payload: string;
+          payload_format_utf8?: boolean;
+          qos: number;
+          response_topic?: string;
+          retain: boolean;
+          topic: string;
+          user_properties?: Array<{ key: string; value: string }>;
+        };
+        maximum_packet_size_bytes?: number;
+        protocol_version?: '3.1.1' | '5.0';
         qos?: number;
+        receive_maximum?: number;
+        request_problem_information?: boolean;
+        request_response_information?: boolean;
+        session_expiry_interval_seconds?: number;
         sink_id?: string;
+        topic_alias_maximum?: number;
         topic_template?: string;
+        user_properties?: Array<{ key: string; value: string }>;
       }
     | undefined;
 
@@ -1532,6 +1887,10 @@ export function hydrateProductTemplate(
           ? point.intervalMs
           : task?.interval_ms ?? dataConfig?.collection?.period_ms ?? 1000,
       pointId: 'pointId' in point ? point.pointId : point.point_id,
+      readWrite:
+        'access' in point
+          ? pointAccessToMappingMode(point.access)
+          : 'read',
       semanticId: 'semanticId' in point ? point.semanticId : point.semantic_id,
       unit: point.unit ?? '',
       valueType: coreTelemetryTypeToConsole(
@@ -1539,15 +1898,19 @@ export function hydrateProductTemplate(
       ),
     }),
   );
-  const dataPoints: DataConfigPoint[] = rawDataPoints.map((point) => ({
-    addressKind: point.address.kind,
-    addressValue: point.address.value,
-    jsonField: point.json_field,
-    pointId: point.point_id,
-    semanticId: point.semantic_id,
-    unit: point.unit ?? '',
-    valueType: coreTelemetryTypeToConsole(point.value_type),
-  }));
+  const collectionFlows = (version.dataConfigs as CoreStoredDataConfig[]).map(
+    (candidate, index) => hydrateProductCollectionFlow(
+      candidate,
+      index,
+      base,
+      algorithmKindsById,
+      task,
+    ),
+  );
+  const primaryCollectionFlow = collectionFlows[0];
+  const primaryDataConfig = primaryCollectionFlow
+    ? withoutProductFlowConnection(primaryCollectionFlow)
+    : base.dataConfig;
 
   return {
     ...base,
@@ -1560,69 +1923,71 @@ export function hydrateProductTemplate(
             version: algorithm.version ?? version.version,
           }
         : base.algorithm,
-    connection: {
-      endpoint: connection?.endpoint ?? base.connection.endpoint ?? null,
-      protocolType: connection?.protocol ?? base.connection.protocolType,
-    },
-    dataConfig: dataConfig
+    connection: connection
       ? {
-          algorithmIds: dataConfig.algorithm_ids ?? [],
-          collection: {
-            periodMs: dataConfig.collection?.period_ms ?? 1000,
-            retryCount: dataConfig.collection?.retry_count ?? 2,
-            timeoutMs: dataConfig.collection?.timeout_ms ?? 800,
-          },
-          configId: dataConfig.config_id ?? base.dataConfig.configId,
-          deviceId,
-          enabled: dataConfig.enabled ?? true,
-          name: dataConfig.name ?? base.dataConfig.name,
-          points: dataPoints,
-          publish: {
-            payload: {
-              includeQuality: dataConfig.publish?.payload?.include_quality ?? true,
-              mode:
-                dataConfig.publish?.payload?.mode === 'Array' ? 'array' : 'object',
-              timestampField: dataConfig.publish?.payload?.timestamp_field ?? 'ts',
-            },
-            qos: dataConfig.publish?.qos ?? 1,
-            sinkId: dataConfig.publish?.sink_id ?? 'velamq-main',
-            topicTemplate:
-              dataConfig.publish?.topic_template ?? base.dataConfig.publish.topicTemplate,
-          },
-          visualGraph: {
-            edges: (dataConfig.visual_graph?.edges ?? []).map((edge) => ({
-              edgeId: edge.edge_id,
-              from: edge.from,
-              fromPort: edge.from_port,
-              to: edge.to,
-              toPort: edge.to_port,
-            })),
-            nodes: (dataConfig.visual_graph?.nodes ?? []).map((node) => ({
-              kind: node.kind.toLowerCase() as DataConfigVisualGraph['nodes'][number]['kind'],
-              label: node.label,
-              nodeId: node.node_id,
-              params: node.params ?? {},
-              refId:
-                node.kind.toLowerCase() === 'algorithm' && node.ref_id
-                  ? algorithmKindsById.get(node.ref_id) ?? node.ref_id
-                  : node.ref_id,
-              x: node.x,
-              y: node.y,
-            })),
-          },
+          bacnetIp: connection.bacnetIp,
+          circuitBreaker: connection.circuitBreaker,
+          endpoint: connection.endpoint,
+          iec101: connection.iec101,
+          iec104: connection.iec104,
+          omronFins: connection.omronFins,
+          opcUa: connection.opcUa,
+          protocolType: connection.protocolType,
+          serial: connection.serial,
+          siemensS7: connection.siemensS7,
         }
-      : base.dataConfig,
+      : base.connection,
+    protocolConnections:
+      protocolConnections.length > 0
+        ? protocolConnections
+        : [
+            {
+              ...base.connection,
+              connectionId: `${base.templateId}-connection`,
+            },
+          ],
+    dataConfigBindings,
+    collectionFlows: collectionFlows.length > 0 ? collectionFlows : undefined,
+    dataConfig: primaryDataConfig,
     mqtt: mqtt
       ? {
           batchSize: mqtt.batch_size ?? 100,
           broker: mqtt.broker ?? base.mqtt.broker,
+          cleanSession: mqtt.clean_session ?? true,
+          cleanStart: mqtt.clean_start ?? true,
           clientId: mqtt.client_id ?? base.mqtt.clientId,
           flushIntervalMs: mqtt.flush_interval_ms ?? 1000,
+          keepAliveSeconds: mqtt.keep_alive_seconds ?? 60,
+          lastWill: mqtt.last_will
+            ? {
+                contentType: mqtt.last_will.content_type,
+                correlationData: mqtt.last_will.correlation_data,
+                delayIntervalSeconds: mqtt.last_will.delay_interval_seconds ?? 0,
+                messageExpiryIntervalSeconds:
+                  mqtt.last_will.message_expiry_interval_seconds ?? 0,
+                payload: mqtt.last_will.payload,
+                payloadFormatUtf8: mqtt.last_will.payload_format_utf8 ?? true,
+                qos: mqtt.last_will.qos,
+                responseTopic: mqtt.last_will.response_topic,
+                retain: mqtt.last_will.retain,
+                topic: mqtt.last_will.topic,
+                userProperties: mqtt.last_will.user_properties ?? [],
+              }
+            : undefined,
+          maximumPacketSizeBytes: mqtt.maximum_packet_size_bytes,
+          protocolVersion: mqtt.protocol_version ?? '3.1.1',
           qos: mqtt.qos ?? 1,
+          receiveMaximum: mqtt.receive_maximum,
+          requestProblemInformation: mqtt.request_problem_information ?? true,
+          requestResponseInformation: mqtt.request_response_information ?? false,
+          sessionExpiryIntervalSeconds: mqtt.session_expiry_interval_seconds ?? 0,
           sinkId: mqtt.sink_id ?? 'velamq-main',
+          topicAliasMaximum: mqtt.topic_alias_maximum,
           topicTemplate: mqtt.topic_template ?? base.mqtt.topicTemplate,
+          userProperties: mqtt.user_properties ?? [],
         }
       : base.mqtt,
+    commandFlows: version.commandFlows ?? [],
     pointSetIds: [...version.pointSetIds],
     points: points.length > 0 ? points : base.points,
     task: {
@@ -1631,6 +1996,13 @@ export function hydrateProductTemplate(
       intervalMs: task?.interval_ms ?? dataConfig?.collection?.period_ms ?? 1000,
       pointIds: task?.point_ids ?? points.map((point) => point.pointId),
       taskId: task?.task_id ?? base.task.taskId,
+    },
+    versionResources: {
+      algorithms: [...version.algorithms],
+      collectionTasks: [...version.collectionTasks],
+      dataConfigs: [...version.dataConfigs],
+      devices: [...version.devices],
+      mqttUplinks: [...version.mqttUplinks],
     },
     version: version.version,
   };
@@ -1700,13 +2072,150 @@ function nextProductVersion(version: string) {
   return `v${match[1]}.${match[2]}.${Number.parseInt(match[3], 10) + 1}`;
 }
 
+function mergeProductResourceList(
+  existing: unknown[] | undefined,
+  current: Array<Record<string, unknown>>,
+  identityKey: string,
+): unknown[] {
+  const merged: unknown[] = [];
+  const indexesByIdentity = new Map<string, number>();
+  const upsert = (item: unknown) => {
+    const record = item as Record<string, unknown>;
+    const identity = String(record[identityKey] ?? '').trim();
+    if (!identity) {
+      merged.push(item);
+      return;
+    }
+    const existingIndex = indexesByIdentity.get(identity);
+    if (existingIndex === undefined) {
+      indexesByIdentity.set(identity, merged.length);
+      merged.push(item);
+      return;
+    }
+    merged[existingIndex] = item;
+  };
+
+  (existing ?? []).forEach(upsert);
+  current.forEach(upsert);
+  return merged;
+}
+
+function applyProductDataConfigBindings(
+  dataConfigs: unknown[],
+  bindings: ProductDataConfigBinding[] | undefined,
+): unknown[] {
+  if (!bindings || bindings.length === 0) return dataConfigs;
+  const connectionByConfigId = new Map(
+    bindings.map((binding) => [binding.configId, binding.protocolConnectionId]),
+  );
+  return dataConfigs.map((dataConfig) => {
+    const record = dataConfig as Record<string, unknown>;
+    const connectionId = connectionByConfigId.get(String(record.config_id ?? ''));
+    return connectionId
+      ? { ...record, protocol_connection_id: connectionId }
+      : dataConfig;
+  });
+}
+
+function productDataConfigRequest(
+  dataConfig: SaveDataConfigRequest,
+  protocolConnectionId: string,
+): Record<string, unknown> {
+  return {
+    algorithm_ids: dataConfig.algorithmIds ?? [],
+    collection: {
+      period_ms: dataConfig.collection.periodMs,
+      retry_count: dataConfig.collection.retryCount,
+      timeout_ms: dataConfig.collection.timeoutMs,
+    },
+    config_id: dataConfig.configId,
+    device_id: dataConfig.deviceId,
+    enabled: dataConfig.enabled,
+    name: dataConfig.name,
+    points: dataConfig.points.map((point) => ({
+      address: { kind: point.addressKind, value: point.addressValue },
+      json_field: point.jsonField,
+      point_id: point.pointId,
+      semantic_id: point.semanticId,
+      unit: point.unit || null,
+      value_type: telemetryTypeToCore(point.valueType),
+    })),
+    protocol_connection_id: protocolConnectionId,
+    publish: {
+      payload: {
+        include_quality: dataConfig.publish.payload.includeQuality,
+        mode: dataConfig.publish.payload.mode === 'array' ? 'Array' : 'Object',
+        timestamp_field: dataConfig.publish.payload.timestampField,
+      },
+      qos: dataConfig.publish.qos,
+      sink_id: dataConfig.publish.sinkId,
+      topic_template: dataConfig.publish.topicTemplate,
+    },
+    visual_graph: {
+      edges: (dataConfig.visualGraph?.edges ?? []).map((edge) => ({
+        edge_id: edge.edgeId,
+        from: edge.from,
+        from_port: edge.fromPort ?? null,
+        to: edge.to,
+        to_port: edge.toPort ?? null,
+      })),
+      nodes: (dataConfig.visualGraph?.nodes ?? []).map((node) => ({
+        kind:
+          node.kind === 'point'
+            ? 'Point'
+            : node.kind === 'algorithm'
+              ? 'Algorithm'
+              : node.kind === 'mqtt'
+                ? 'Mqtt'
+                : 'Json',
+        label: node.label,
+        node_id: node.nodeId,
+        params: node.params ?? {},
+        ref_id: node.refId ?? null,
+        x: Math.round(node.x),
+        y: Math.round(node.y),
+      })),
+    },
+  };
+}
+
 export function buildProductVersionRequest(
   template: EdgeTemplateDefinition,
   version: string,
   pointSets: PointSetResponse[],
 ): SaveProductVersionRequest {
-  const connectionId = `${template.templateId}-connection`;
-  const runtime = materializeProductRuntime(template, connectionId);
+  const protocolConnections =
+    template.protocolConnections && template.protocolConnections.length > 0
+      ? template.protocolConnections
+      : [
+          {
+            ...template.connection,
+            connectionId: `${template.templateId}-connection`,
+          },
+        ];
+  const connectionId = protocolConnections[0].connectionId;
+  const collectionFlows = productCollectionFlows(template).map((flow) => ({
+    ...flow,
+    protocolConnectionId: flow.protocolConnectionId || connectionId,
+  }));
+  const flowRuntimes = collectionFlows.map((flow) => ({
+    connectionId: flow.protocolConnectionId,
+    runtime: materializeProductRuntime(
+      { ...template, dataConfig: withoutProductFlowConnection(flow) },
+      flow.protocolConnectionId,
+    ),
+  }));
+  const runtime = flowRuntimes[0]?.runtime ?? materializeProductRuntime(template, connectionId);
+  const storedCollectionTasks = (template.versionResources?.collectionTasks ?? []) as Array<{
+    task_id?: string;
+  }>;
+  const mergedDataConfigs = mergeProductResourceList(
+    template.versionResources?.dataConfigs,
+    flowRuntimes.map(({ connectionId: flowConnectionId, runtime: flowRuntime }) =>
+      productDataConfigRequest(flowRuntime.dataConfig, flowConnectionId),
+    ),
+    'config_id',
+  );
   const pointSetIds = template.pointSetIds
     ? pointSets
         .filter(
@@ -1727,109 +2236,96 @@ export function buildProductVersionRequest(
         .map((pointSet) => pointSet.pointSetId);
 
   return {
-    algorithms: runtime.algorithms.map((algorithm) => ({
-      dsl: algorithm.dsl,
-      id: algorithm.algorithmId,
-      inputs: algorithm.dsl.inputs.map((input) => input.pointId),
-      kind: algorithm.algorithmKind,
-      outputs: algorithm.dsl.outputs.map((output) => output.pointId),
-      runtime: 'Rule',
-      version: algorithm.version,
-    })),
-    collectionTasks: [
-      {
-        device_id: template.task.deviceId,
-        enabled: template.task.enabled ?? true,
-        interval_ms: template.task.intervalMs,
-        point_ids: template.task.pointIds,
-        task_id: template.task.taskId,
-      },
-    ],
-    dataConfigs: [
-      {
-        algorithm_ids: runtime.dataConfig.algorithmIds ?? [],
-        collection: {
-          period_ms: runtime.dataConfig.collection.periodMs,
-          retry_count: runtime.dataConfig.collection.retryCount,
-          timeout_ms: runtime.dataConfig.collection.timeoutMs,
-        },
-        config_id: runtime.dataConfig.configId,
-        device_id: runtime.dataConfig.deviceId,
-        enabled: runtime.dataConfig.enabled,
-        name: runtime.dataConfig.name,
-        points: runtime.dataConfig.points.map((point) => ({
-          address: { kind: point.addressKind, value: point.addressValue },
-          json_field: point.jsonField,
-          point_id: point.pointId,
-          semantic_id: point.semanticId,
-          unit: point.unit || null,
-          value_type: telemetryTypeToCore(point.valueType),
-        })),
-        protocol_connection_id: connectionId,
-        publish: {
-          payload: {
-            include_quality: runtime.dataConfig.publish.payload.includeQuality,
-            mode:
-              runtime.dataConfig.publish.payload.mode === 'array' ? 'Array' : 'Object',
-            timestamp_field: runtime.dataConfig.publish.payload.timestampField,
-          },
-          qos: runtime.dataConfig.publish.qos,
-          sink_id: runtime.dataConfig.publish.sinkId,
-          topic_template: runtime.dataConfig.publish.topicTemplate,
-        },
-        visual_graph: {
-          edges: (runtime.dataConfig.visualGraph?.edges ?? []).map((edge) => ({
-            edge_id: edge.edgeId,
-            from: edge.from,
-            from_port: edge.fromPort ?? null,
-            to: edge.to,
-            to_port: edge.toPort ?? null,
-          })),
-          nodes: (runtime.dataConfig.visualGraph?.nodes ?? []).map((node) => ({
-            kind:
-              node.kind === 'point'
-                ? 'Point'
-                : node.kind === 'algorithm'
-                  ? 'Algorithm'
-                  : node.kind === 'mqtt'
-                    ? 'Mqtt'
-                    : 'Json',
-            label: node.label,
-            node_id: node.nodeId,
-            params: node.params ?? {},
-            ref_id: node.refId ?? null,
-            x: Math.round(node.x),
-            y: Math.round(node.y),
-          })),
-        },
-      },
-    ],
+    algorithms: mergeProductResourceList(
+      template.versionResources?.algorithms,
+      flowRuntimes.flatMap(({ runtime: flowRuntime }) => flowRuntime.algorithms).map((algorithm) => ({
+        dsl: algorithm.dsl,
+        id: algorithm.algorithmId,
+        inputs: algorithm.dsl.inputs.map((input) => input.pointId),
+        kind: algorithm.algorithmKind,
+        outputs: algorithm.dsl.outputs.map((output) => output.pointId),
+        runtime: 'Rule',
+        version: algorithm.version,
+      })),
+      'id',
+    ),
+    collectionTasks: mergeProductResourceList(
+      template.versionResources?.collectionTasks,
+      collectionFlows.map((flow, index) => ({
+        device_id: flow.deviceId,
+        enabled: flow.enabled,
+        interval_ms: flow.collection.periodMs,
+        point_ids: flow.points.map((point) => point.pointId),
+        task_id: collectionFlows.length === 1
+          ? template.task.taskId
+          : storedCollectionTasks[index]?.task_id
+            ?? `${flow.configId || `collection-${index + 1}`}-task`,
+      })),
+      'task_id',
+    ),
+    dataConfigs: applyProductDataConfigBindings(
+      mergedDataConfigs,
+      template.dataConfigBindings,
+    ),
+    commandFlows: template.commandFlows ?? [],
     deviceModels: [],
-    devices: [
+    devices: mergeProductResourceList(
+      template.versionResources?.devices,
+      [
       {
         device_id: template.task.deviceId,
         device_type: template.productType,
       },
-    ],
-    mqttUplinks: [
+      ],
+      'device_id',
+    ),
+    mqttUplinks: mergeProductResourceList(
+      template.versionResources?.mqttUplinks,
+      [
       {
         batch_size: template.mqtt.batchSize,
         broker: template.mqtt.broker,
+        clean_session: template.mqtt.cleanSession ?? true,
+        clean_start: template.mqtt.cleanStart ?? true,
         client_id: template.mqtt.clientId,
         flush_interval_ms: template.mqtt.flushIntervalMs,
+        keep_alive_seconds: template.mqtt.keepAliveSeconds ?? 60,
+        last_will: template.mqtt.lastWill
+          ? {
+              content_type: template.mqtt.lastWill.contentType,
+              correlation_data: template.mqtt.lastWill.correlationData,
+              delay_interval_seconds: template.mqtt.lastWill.delayIntervalSeconds ?? 0,
+              message_expiry_interval_seconds:
+                template.mqtt.lastWill.messageExpiryIntervalSeconds ?? 0,
+              payload: template.mqtt.lastWill.payload,
+              payload_format_utf8: template.mqtt.lastWill.payloadFormatUtf8 ?? true,
+              qos: template.mqtt.lastWill.qos,
+              response_topic: template.mqtt.lastWill.responseTopic,
+              retain: template.mqtt.lastWill.retain,
+              topic: template.mqtt.lastWill.topic,
+              user_properties: template.mqtt.lastWill.userProperties ?? [],
+            }
+          : undefined,
+        maximum_packet_size_bytes: template.mqtt.maximumPacketSizeBytes,
+        protocol_version: template.mqtt.protocolVersion ?? '3.1.1',
         qos: template.mqtt.qos,
+        receive_maximum: template.mqtt.receiveMaximum,
+        request_problem_information:
+          template.mqtt.requestProblemInformation ?? true,
+        request_response_information:
+          template.mqtt.requestResponseInformation ?? false,
+        session_expiry_interval_seconds:
+          template.mqtt.sessionExpiryIntervalSeconds ?? 0,
         sink_id: template.mqtt.sinkId,
+        topic_alias_maximum: template.mqtt.topicAliasMaximum,
         topic_template: template.mqtt.topicTemplate,
+        user_properties: template.mqtt.userProperties ?? [],
       },
-    ],
+      ],
+      'sink_id',
+    ),
     pointSetIds,
-    protocolConnections: [
-      {
-        connection_id: connectionId,
-        endpoint: template.connection.endpoint,
-        protocol: template.connection.protocolType,
-      },
-    ],
+    protocolConnections: protocolConnections.map(productConnectionRequest),
     version,
   };
 }
@@ -1848,6 +2344,14 @@ function telemetryTypeToCore(valueType: string) {
     default:
       return 'Float';
   }
+}
+
+function pointAccessToMappingMode(
+  access: PointSetResponse['points'][number]['access'],
+): 'read' | 'read_write' | 'write' {
+  if (access === 'read_write') return 'read_write';
+  if (access === 'write_only') return 'write';
+  return 'read';
 }
 
 function suggestionToPointRequest(
@@ -2693,6 +3197,8 @@ function renderPage(
   ) => Promise<ProjectDefinition>,
   onDeleteProject: (projectId: string) => Promise<void>,
   pointSets: PointSetResponse[],
+  dlt645DataIdentifiers: Dlt645DataIdentifierTemplateResponse[],
+  protocolCatalog: RuntimeProtocolDescriptor[],
   onCreatePointSet: (request: SavePointSetRequest) => Promise<PointSetResponse>,
   onSavePointSet: (
     pointSetId: string,
@@ -2706,14 +3212,6 @@ function renderPage(
   ) => Promise<EdgeTemplateDefinition>,
   onDeleteEdgeTemplate: (templateId: EdgeTemplateId) => Promise<void>,
   productVersions: Record<string, ProductVersionResponse[]>,
-  onPublishProductVersion: (
-    productId: string,
-    version: string,
-  ) => Promise<ProductVersionResponse>,
-  onRollbackProductVersion: (
-    productId: string,
-    version: string,
-  ) => Promise<ProductVersionResponse>,
   onAgentSafetyCheck: () => Promise<AgentActionResponse>,
   onAssessAlgorithmRisk: (edgeId: string) => Promise<ManagementActionResponse>,
   onPrepareConfigSection: (edgeId: string) => Promise<void>,
@@ -2821,7 +3319,6 @@ function renderPage(
     edgeId: string,
     request: MqttUplinkResponse,
   ) => Promise<MqttUplinkResponse>,
-  onPublish: (edgeId: string) => Promise<void>,
   onValidateConfig: (edgeId?: string) => Promise<ManagementActionResponse>,
   edgeNodes?: EdgeNodeResponse[],
   deviceModels?: DeviceModelResponse[],
@@ -2909,7 +3406,6 @@ function renderPage(
           onGenerateSchedule={onGenerateSchedule}
           onApplyEdgeTemplate={onApplyEdgeTemplate}
           onImportPoints={onImportPoints}
-          onPublish={onPublish}
           onReleaseDiff={onReleaseDiff}
           onRunDiscovery={onRunDiscovery}
           onSaveAlgorithm={onSaveAlgorithm}
@@ -2921,6 +3417,7 @@ function renderPage(
           onValidateConfig={onValidateConfig}
           pointMappings={pointMappings}
           protocolConnections={protocolConnections}
+          protocolCatalog={protocolCatalog}
           releaseList={releaseList}
         />
       );
@@ -2932,6 +3429,7 @@ function renderPage(
           onCreateProject={onCreateProject}
           onDeleteProject={onDeleteProject}
           onSaveProject={onSaveProject}
+          pointSets={pointSets}
           products={edgeTemplates}
           projects={projects}
         />
@@ -2940,10 +3438,9 @@ function renderPage(
       return (
         <ProductManagementPage
           dataConfigs={dataConfigs}
+          bindings={edgeProductBindings}
           onCreateTemplate={onCreateEdgeTemplate}
           onDeleteTemplate={onDeleteEdgeTemplate}
-          onPublishVersion={onPublishProductVersion}
-          onRollbackVersion={onRollbackProductVersion}
           onSaveTemplate={onSaveEdgeTemplate}
           pointSets={pointSets}
           projects={projects}
@@ -2954,10 +3451,12 @@ function renderPage(
     case 'points':
       return (
         <PointSetsPage
+          dlt645DataIdentifiers={dlt645DataIdentifiers}
           onCreate={onCreatePointSet}
           onDelete={onDeletePointSet}
           onSave={onSavePointSet}
           pointSets={pointSets}
+          protocolCatalog={protocolCatalog}
           projects={projects.map((project) => ({
             name: project.projectName,
             projectId: project.projectId,
@@ -2983,6 +3482,7 @@ function renderPage(
           onDeleteConnection={onDeleteProtocolConnection}
           onSaveConnection={onSaveProtocolConnection}
           onValidateConnection={onValidateConfig}
+          protocolCatalog={protocolCatalog}
           selectedEdgeId={selectedProtocolEdgeId}
         />
       );
@@ -3003,19 +3503,11 @@ function renderPage(
     case 'discovery':
       return (
         <DiscoveryPage
+          connections={protocolConnections}
           onRunDiscovery={onRunDiscovery}
           selectedEdgeId={defaultConfigEdgeId}
+          protocolCatalog={protocolCatalog}
           suggestions={discoverySuggestions}
-        />
-      );
-    case 'releases':
-      return (
-        <ReleasesPage
-          edges={edgeNodes}
-          onPublish={onPublish}
-          onShowDiff={onReleaseDiff}
-          onValidateRelease={onValidateConfig}
-          releaseList={releaseList}
         />
       );
     case 'runtimeStatus':
@@ -3026,7 +3518,12 @@ function renderPage(
         />
       );
     case 'auditLog':
-      return <AuditLogPage auditRecords={auditRecords} />;
+      return (
+        <AuditLogPage
+          auditRecords={auditRecords}
+          onRefresh={fetchAuditRecords}
+        />
+      );
     case 'agentAssistant':
       return (
         <AgentAssistantPage
@@ -3060,14 +3557,12 @@ type EdgeConfigTab =
   | 'algorithms'
   | 'reports'
   | 'mqtt'
-  | 'discovery'
-  | 'release';
+  | 'discovery';
 
 function EdgeConfigVersionPanel({
   edgeId,
   onReleaseDiff,
   onApplyTemplate,
-  onPublish,
   onValidateConfig,
   productBinding,
   projects,
@@ -3080,7 +3575,6 @@ function EdgeConfigVersionPanel({
     edgeId: string,
     templateId: EdgeTemplateId,
   ) => Promise<ManagementActionResponse>;
-  onPublish: (edgeId: string) => Promise<void>;
   onValidateConfig: (edgeId?: string) => Promise<ManagementActionResponse>;
   productBinding?: EdgeProductBinding;
   projects: ProjectDefinition[];
@@ -3137,8 +3631,8 @@ function EdgeConfigVersionPanel({
       const result = await action();
       setActionResult(
         result ?? {
-          action: 'publish_release',
-          details: ['配置包已生成，等待 runtime 拉取并回报应用结果'],
+          action: 'sync_config',
+          details: ['配置已保存，Cloud 正在等待 runtime 回报应用结果'],
           message: fallbackMessage,
           status: '已提交',
         },
@@ -3160,8 +3654,8 @@ function EdgeConfigVersionPanel({
       <section className="edge-version-hero">
         <div>
           <span>边端产品绑定</span>
-          <h3>关联产品、加载默认配置、校验并下发</h3>
-          <p>选择项目和产品，生成当前边端的待发布配置。</p>
+          <h3>关联产品并自动同步运行配置</h3>
+          <p>绑定后自动生成配置修订；在线 runtime 立即刷新，离线 runtime 重连后补偿同步。</p>
         </div>
         <div className="edge-version-actions">
           <button
@@ -3178,15 +3672,7 @@ function EdgeConfigVersionPanel({
             onClick={() => void runAction(() => onReleaseDiff(edgeId), '配置差异已生成')}
             type="button"
           >
-            查看差异
-          </button>
-          <button
-            className="primary-button"
-            disabled={actionState === 'running'}
-            onClick={() => void runAction(() => onPublish(edgeId), '已创建发布，等待 runtime 回报')}
-            type="button"
-          >
-            发布下发
+            查看变更
           </button>
         </div>
       </section>
@@ -3210,9 +3696,9 @@ function EdgeConfigVersionPanel({
 
           <div className="edge-version-timeline">
             <PreviewStep title="1. 绑定产品" value={productBinding?.bindingStatus ?? '待绑定'} />
-            <PreviewStep title="2. 加载配置" value="产品配置生成实例草稿" />
-            <PreviewStep title="3. 校验差异" value={releaseList?.validationStatus ?? '待校验'} />
-            <PreviewStep title="4. 发布下发" value={releaseResult?.result ?? '待发布'} />
+            <PreviewStep title="2. 生成修订" value="产品配置生成边端实例" />
+            <PreviewStep title="3. 自动校验" value={releaseList?.validationStatus ?? '等待配置'} />
+            <PreviewStep title="4. Runtime 应用" value={releaseResult?.result ?? '等待同步'} />
           </div>
 
           <div className="edge-version-release">
@@ -3227,7 +3713,7 @@ function EdgeConfigVersionPanel({
                 <dd>{productBinding?.desiredVersion ?? selectedTemplate.version}</dd>
               </div>
               <div>
-                <dt>草稿版本</dt>
+                <dt>待同步修订</dt>
                 <dd>{releaseList?.draftVersion ?? '未生成'}</dd>
               </div>
               <div>
@@ -3287,7 +3773,7 @@ function EdgeConfigVersionPanel({
               onClick={applyTemplate}
               type="button"
             >
-              {actionState === 'running' ? '加载中...' : '加载产品配置'}
+              {actionState === 'running' ? '同步中...' : '绑定并同步'}
             </button>
           </div>
 
@@ -3349,6 +3835,7 @@ function ProjectManagementPage({
   onCreateProject,
   onDeleteProject,
   onSaveProject,
+  pointSets,
   products,
   projects,
 }: {
@@ -3360,11 +3847,13 @@ function ProjectManagementPage({
     projectId: string,
     nextProject: ProjectDefinition,
   ) => Promise<ProjectDefinition>;
+  pointSets: PointSetResponse[];
   products: EdgeTemplateDefinition[];
   projects: ProjectDefinition[];
 }) {
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
   const [projectDraft, setProjectDraft] = useState<ProjectDefinition>();
+  const [deleteArmed, setDeleteArmed] = useState(false);
   const [saveState, setSaveState] = useState<
     'idle' | 'saving' | 'saved' | 'deleted' | 'error'
   >('idle');
@@ -3372,6 +3861,9 @@ function ProjectManagementPage({
   const selectedProject = projects.find((project) => project.projectId === selectedProjectId);
   const selectedProjectProducts = selectedProject
     ? products.filter((product) => product.projectId === selectedProject.projectId)
+    : [];
+  const selectedProjectPointSets = selectedProject
+    ? pointSets.filter((pointSet) => pointSet.projectId === selectedProject.projectId)
     : [];
   const selectedProjectEdgeIds = new Set(
     selectedProject
@@ -3383,10 +3875,22 @@ function ProjectManagementPage({
   const selectedProjectEdges = edgeNodes.filter((edge) =>
     selectedProjectEdgeIds.has(edge.edgeId),
   );
+  const projectDeleteBlockers = [
+    selectedProjectProducts.length > 0 ? `${selectedProjectProducts.length} 个产品` : '',
+    selectedProjectPointSets.length > 0 ? `${selectedProjectPointSets.length} 个点位集` : '',
+    selectedProjectEdges.length > 0 ? `${selectedProjectEdges.length} 个边端` : '',
+  ].filter(Boolean);
+  const canDeleteProject = projectDeleteBlockers.length === 0;
+  const isProjectDirty = Boolean(
+    selectedProject &&
+    projectDraft &&
+    JSON.stringify(projectDraft) !== JSON.stringify(selectedProject),
+  );
 
   const updateProject = (patch: Partial<ProjectDefinition>) => {
     if (!projectDraft) return;
     setProjectDraft({ ...projectDraft, ...patch });
+    setDeleteArmed(false);
     setSaveState('idle');
     setActionError('');
   };
@@ -3407,6 +3911,7 @@ function ProjectManagementPage({
               const created = await onCreateProject();
               setSelectedProjectId(created.projectId);
               setProjectDraft(created);
+              setDeleteArmed(false);
               setSaveState('saved');
             } catch (error) {
               setSaveState('error');
@@ -3469,6 +3974,7 @@ function ProjectManagementPage({
                           onClick={() => {
                             setSelectedProjectId(project.projectId);
                             setProjectDraft(project);
+                            setDeleteArmed(false);
                             setSaveState('idle');
                             setActionError('');
                           }}
@@ -3491,6 +3997,7 @@ function ProjectManagementPage({
           onClose={() => {
             setSelectedProjectId(undefined);
             setProjectDraft(undefined);
+            setDeleteArmed(false);
           }}
         >
           <section
@@ -3509,10 +4016,11 @@ function ProjectManagementPage({
                 onClick={() => {
                   setSelectedProjectId(undefined);
                   setProjectDraft(undefined);
+                  setDeleteArmed(false);
                 }}
                 type="button"
               >
-                ×
+                <X aria-hidden="true" size={16} />
               </button>
             </div>
             <div className="form-grid">
@@ -3543,17 +4051,47 @@ function ProjectManagementPage({
               <h4>项目资源</h4>
               <div className="template-preview-flow">
                 <PreviewStep title="产品" value={`${selectedProjectProducts.length} 个`} />
+                <PreviewStep title="点位集" value={`${selectedProjectPointSets.length} 个`} />
                 <PreviewStep title="边端" value={`${selectedProjectEdges.length} 个`} />
                 <PreviewStep
                   title="在线"
                   value={`${selectedProjectEdges.filter((edge) => edge.status === '健康').length} 个`}
                 />
-                <PreviewStep
-                  title="配置版本"
-                  value={bindings.find((binding) => binding.projectId === selectedProject.projectId)?.desiredVersion ?? '-'}
-                />
               </div>
             </section>
+            {deleteArmed ? (
+              <div className="destructive-confirmation" role="alertdialog" aria-label="确认删除项目">
+                <AlertTriangle aria-hidden="true" size={18} />
+                <div>
+                  <strong>永久删除项目“{selectedProject.projectName}”？</strong>
+                  <span>项目删除后无法恢复。</span>
+                </div>
+                <button className="secondary-button" onClick={() => setDeleteArmed(false)} type="button">
+                  取消
+                </button>
+                <button
+                  className="danger-button"
+                  disabled={saveState === 'saving'}
+                  onClick={async () => {
+                    setSaveState('saving');
+                    setActionError('');
+                    try {
+                      await onDeleteProject(selectedProject.projectId);
+                      setSelectedProjectId(undefined);
+                      setProjectDraft(undefined);
+                      setDeleteArmed(false);
+                      setSaveState('deleted');
+                    } catch (error) {
+                      setSaveState('error');
+                      setActionError(displayError(error));
+                    }
+                  }}
+                  type="button"
+                >
+                  确认删除
+                </button>
+              </div>
+            ) : null}
             <div className="drawer-footer">
               <span className="editor-status" role="status">
                 {saveState === 'saved'
@@ -3564,13 +4102,18 @@ function ProjectManagementPage({
                       ? '保存中'
                       : saveState === 'error'
                         ? actionError
-                        : '有未保存修改'}
+                        : isProjectDirty
+                          ? '有未保存修改'
+                          : canDeleteProject
+                            ? '未修改'
+                            : `删除前需先清理：${projectDeleteBlockers.join('、')}`}
               </span>
               <button
                 className="secondary-button"
                 onClick={() => {
                   setSelectedProjectId(undefined);
                   setProjectDraft(undefined);
+                  setDeleteArmed(false);
                 }}
                 type="button"
               >
@@ -3578,7 +4121,7 @@ function ProjectManagementPage({
               </button>
               <button
                 className="primary-button"
-                disabled={saveState === 'saving'}
+                disabled={saveState === 'saving' || !isProjectDirty}
                 onClick={async () => {
                   setSaveState('saving');
                   setActionError('');
@@ -3600,23 +4143,9 @@ function ProjectManagementPage({
               </button>
               <button
                 className="danger-button"
-                disabled={
-                  projects.length <= 1 ||
-                  products.some((product) => product.projectId === selectedProject.projectId)
-                }
-                onClick={async () => {
-                  setSaveState('saving');
-                  setActionError('');
-                  try {
-                    await onDeleteProject(selectedProject.projectId);
-                    setSelectedProjectId(undefined);
-                    setProjectDraft(undefined);
-                    setSaveState('deleted');
-                  } catch (error) {
-                    setSaveState('error');
-                    setActionError(displayError(error));
-                  }
-                }}
+                disabled={!canDeleteProject || saveState === 'saving'}
+                onClick={() => setDeleteArmed(true)}
+                title={canDeleteProject ? '删除项目' : `请先清理${projectDeleteBlockers.join('、')}`}
                 type="button"
               >
                 删除
@@ -3631,34 +4160,24 @@ function ProjectManagementPage({
 
 const PRODUCT_CONFIG_TABS: Array<{ key: ProductConfigTab; label: string }> = [
   { key: 'basic', label: '基础信息' },
-  { key: 'points', label: '绑定点位' },
-  { key: 'collection', label: '采集编排' },
-  { key: 'release', label: '发布策略' },
+  { key: 'connections', label: '协议连接' },
 ];
 
 function ProductManagementPage({
+  bindings,
   dataConfigs = [],
   onCreateTemplate,
   onDeleteTemplate,
-  onPublishVersion,
-  onRollbackVersion,
   onSaveTemplate,
   pointSets = [],
   projects,
   templates,
   versions = {},
 }: {
+  bindings: EdgeProductBinding[];
   dataConfigs?: DataConfigResponse[];
   onCreateTemplate: () => Promise<EdgeTemplateDefinition>;
   onDeleteTemplate: (templateId: EdgeTemplateId) => Promise<void>;
-  onPublishVersion: (
-    productId: string,
-    version: string,
-  ) => Promise<ProductVersionResponse>;
-  onRollbackVersion: (
-    productId: string,
-    version: string,
-  ) => Promise<ProductVersionResponse>;
   onSaveTemplate: (
     templateId: EdgeTemplateId,
     nextTemplate: EdgeTemplateDefinition,
@@ -3671,6 +4190,7 @@ function ProductManagementPage({
   const [selectedTemplateId, setSelectedTemplateId] = useState<EdgeTemplateId>();
   const [templateDraft, setTemplateDraft] = useState<EdgeTemplateDefinition>();
   const [activeProductTab, setActiveProductTab] = useState<ProductConfigTab>('basic');
+  const [deleteArmed, setDeleteArmed] = useState(false);
   const [saveState, setSaveState] = useState<
     'idle' | 'saving' | 'saved' | 'deleted' | 'error'
   >('idle');
@@ -3682,16 +4202,28 @@ function ProductManagementPage({
     templateDraft?.templateId === selectedTemplateId
       ? templateDraft
       : persistedTemplate;
-  const selectedVersions = selectedTemplate
-    ? [...(versions[selectedTemplate.templateId] ?? [])].sort((left, right) =>
-        right.createdAt.localeCompare(left.createdAt),
-      )
-    : [];
+  const selectedProductEdgeCount = selectedTemplate
+    ? new Set(
+        bindings
+          .filter((binding) => binding.productId === selectedTemplate.templateId)
+          .map((binding) => binding.edgeId),
+      ).size
+    : 0;
+  const productDeleteBlockers = [
+    selectedProductEdgeCount > 0 ? `${selectedProductEdgeCount} 个已绑定边端` : '',
+  ].filter(Boolean);
+  const canDeleteProduct = productDeleteBlockers.length === 0;
+  const isProductDirty = Boolean(
+    persistedTemplate &&
+    selectedTemplate &&
+    JSON.stringify(selectedTemplate) !== JSON.stringify(persistedTemplate),
+  );
 
   const updateTemplate = (patch: Partial<EdgeTemplateDefinition>) => {
     if (!selectedTemplate) return;
     const nextTemplate = { ...selectedTemplate, ...patch };
     setTemplateDraft(nextTemplate);
+    setDeleteArmed(false);
     setSaveState('idle');
     setActionError('');
   };
@@ -3789,38 +4321,82 @@ function ProductManagementPage({
     });
   };
 
-  const bindPointSetResource = (pointSet: PointSetResponse) => {
+  const bindPointSetResource = (
+    pointSet: PointSetResponse,
+    protocolConnectionId: string,
+  ) => {
     if (!selectedTemplate) return;
     const newTemplatePoints = pointSet.points
       .filter((point) => !selectedTemplate.points.some((item) => item.pointId === point.pointId))
       .map((point) => ({
         addressKind: point.address.kind,
         addressValue: point.address.value,
+        connectionId: protocolConnectionId,
         deviceId: selectedTemplate.task.deviceId,
         intervalMs: point.intervalMs,
         pointId: point.pointId,
+        readWrite: pointAccessToMappingMode(point.access),
         semanticId: point.semanticId,
         unit: point.unit ?? '',
         valueType: point.valueType,
       }));
-    const newDataPoints = newTemplatePoints.map((point) => ({
-      addressKind: point.addressKind,
-      addressValue: point.addressValue,
+    const newDataPoints = pointSet.points.map((point) => ({
+      addressKind: point.address.kind,
+      addressValue: point.address.value,
       jsonField: point.pointId,
       pointId: point.pointId,
       semanticId: point.semanticId,
-      unit: point.unit,
+      unit: point.unit ?? '',
       valueType: point.valueType,
     }));
+    const currentFlows = productCollectionFlows(selectedTemplate);
+    const flowIndex = currentFlows.findIndex(
+      (flow) => flow.protocolConnectionId === protocolConnectionId,
+    );
+    const fallbackTopic = `factory/{edge_id}/${protocolConnectionId}/{device_id}/telemetry`;
+    const nextFlow: ProductCollectionFlowDefinition = flowIndex >= 0
+      ? {
+          ...currentFlows[flowIndex],
+          points: mergeDataConfigPoints(currentFlows[flowIndex].points, newDataPoints),
+        }
+      : {
+          algorithmIds: [],
+          collection: {
+            periodMs: pointSet.points[0]?.intervalMs ?? selectedTemplate.task.intervalMs,
+            retryCount: 2,
+            timeoutMs: 800,
+          },
+          configId: `${protocolConnectionId}-collection`,
+          deviceId: selectedTemplate.task.deviceId,
+          enabled: true,
+          name: `${pointSet.name}采集`,
+          points: newDataPoints,
+          protocolConnectionId,
+          publish: {
+            ...selectedTemplate.dataConfig.publish,
+            topicTemplate: fallbackTopic,
+          },
+          visualGraph: { edges: [], nodes: [] },
+        };
+    if (!nextFlow.visualGraph?.nodes.length) {
+      nextFlow.visualGraph = buildProductPlannerGraph(
+        selectedTemplate,
+        withoutProductFlowConnection(nextFlow),
+        nextFlow.visualGraph,
+      );
+    }
+    const collectionFlows = flowIndex >= 0
+      ? currentFlows.map((flow, index) => index === flowIndex ? nextFlow : flow)
+      : [...currentFlows, nextFlow];
+    const dataConfigBindings = collectionFlows.map(productCollectionFlowBinding);
     updateTemplate({
+      collectionFlows,
+      dataConfig: withoutProductFlowConnection(collectionFlows[0]),
+      dataConfigBindings,
       pointSetIds: Array.from(
         new Set([...(selectedTemplate.pointSetIds ?? []), pointSet.pointSetId]),
       ),
       points: [...selectedTemplate.points, ...newTemplatePoints],
-      dataConfig: {
-        ...selectedTemplate.dataConfig,
-        points: mergeDataConfigPoints(selectedTemplate.dataConfig.points, newDataPoints),
-      },
       task: {
         ...selectedTemplate.task,
         pointIds: Array.from(
@@ -3833,7 +4409,10 @@ function ProductManagementPage({
     });
   };
 
-  const unbindPointSetResource = (pointSet: PointSetResponse) => {
+  const unbindPointSetResource = (
+    pointSet: PointSetResponse,
+    protocolConnectionId: string,
+  ) => {
     if (!selectedTemplate) return;
     const remainingPointSetIds = (selectedTemplate.pointSetIds ?? []).filter(
       (pointSetId) => pointSetId !== pointSet.pointSetId,
@@ -3846,21 +4425,64 @@ function ProductManagementPage({
     const removedPointIds = pointSet.points
       .map((point) => point.pointId)
       .filter((pointId) => !retainedPointIds.has(pointId));
+    const collectionFlows = productCollectionFlows(selectedTemplate).map((flow) =>
+      flow.protocolConnectionId === protocolConnectionId
+        ? {
+            ...flow,
+            points: flow.points.filter((point) => !removedPointIds.includes(point.pointId)),
+            visualGraph: removeProductGraphPoints(flow.visualGraph, removedPointIds),
+          }
+        : flow,
+    );
     updateTemplate({
+      collectionFlows,
+      dataConfig: withoutProductFlowConnection(collectionFlows[0]),
+      dataConfigBindings: collectionFlows.map(productCollectionFlowBinding),
       pointSetIds: remainingPointSetIds,
       points: selectedTemplate.points.filter((point) => !removedPointIds.includes(point.pointId)),
-      dataConfig: {
-        ...selectedTemplate.dataConfig,
-        points: selectedTemplate.dataConfig.points.filter(
-          (point) => !removedPointIds.includes(point.pointId),
-        ),
-      },
       task: {
         ...selectedTemplate.task,
         pointIds: selectedTemplate.task.pointIds.filter(
           (pointId) => !removedPointIds.includes(pointId),
         ),
       },
+    });
+  };
+
+  const updateCollectionFlow = (
+    protocolConnectionId: string,
+    dataConfig: EdgeTemplateDefinition['dataConfig'],
+  ) => {
+    if (!selectedTemplate) return;
+    const flows = productCollectionFlows(selectedTemplate);
+    const collectionFlows = flows.map((flow) =>
+      flow.protocolConnectionId === protocolConnectionId
+        ? { ...dataConfig, protocolConnectionId }
+        : flow,
+    );
+    updateTemplate({
+      collectionFlows,
+      dataConfig: withoutProductFlowConnection(collectionFlows[0]),
+      dataConfigBindings: collectionFlows.map(productCollectionFlowBinding),
+    });
+  };
+
+  const updateConnectionCommandFlows = (
+    protocolConnectionId: string,
+    connectionFlows: CommandFlowConfig[],
+  ) => {
+    if (!selectedTemplate) return;
+    const retained = (selectedTemplate.commandFlows ?? []).filter(
+      (flow) => commandFlowConnectionId(flow, selectedTemplate) !== protocolConnectionId,
+    );
+    updateTemplate({
+      commandFlows: [
+        ...retained,
+        ...connectionFlows.map((flow) => ({
+          ...flow,
+          protocol_connection_id: protocolConnectionId,
+        })),
+      ],
     });
   };
 
@@ -3897,33 +4519,12 @@ function ProductManagementPage({
     });
   };
 
-  const runVersionAction = async (
-    action: 'publish' | 'rollback',
-    version: string,
-  ) => {
-    if (!selectedTemplate) return;
-    setSaveState('saving');
-    setActionError('');
-    try {
-      if (action === 'publish') {
-        await onPublishVersion(selectedTemplate.templateId, version);
-      } else {
-        await onRollbackVersion(selectedTemplate.templateId, version);
-      }
-      setTemplateDraft(undefined);
-      setSaveState('saved');
-    } catch (error) {
-      setSaveState('error');
-      setActionError(displayError(error));
-    }
-  };
-
   return (
     <div className="page-stack">
       <section className="page-intro">
         <div>
           <h2>产品管理</h2>
-          <p>产品统一维护点位资源、采集编排和上报策略，边端只绑定产品并继承版本化配置。</p>
+          <p>产品按设备连接组织协议参数、点位、采集与指令，边端绑定产品后继承版本化配置。</p>
         </div>
         <button
           className="primary-button"
@@ -3935,6 +4536,7 @@ function ProductManagementPage({
               const created = await onCreateTemplate();
               setSelectedTemplateId(created.templateId);
               setTemplateDraft(created);
+              setDeleteArmed(false);
               setSaveState('saved');
             } catch (error) {
               setSaveState('error');
@@ -3988,10 +4590,16 @@ function ProductManagementPage({
                   <td>{template.productType}</td>
                   <td>{template.version}</td>
                   <td>{productVersionStatusText(versions[template.templateId] ?? [])}</td>
-                  <td>{template.connection.protocolType}</td>
+                  <td>
+                    {(template.protocolConnections ?? [
+                      { ...template.connection, connectionId: 'primary' },
+                    ])
+                      .map((connection) => productProtocolLabel(connection.protocolType))
+                      .join(' / ')}
+                  </td>
                   <td>{template.points.length} 个点位</td>
-                  <td>{template.dataConfig.name}</td>
-                  <td>{template.dataConfig.publish.topicTemplate}</td>
+                  <td>{productCollectionFlows(template).length} 套</td>
+                  <td>{productTopicSummary(template)}</td>
                   <td>
                     <div className="row-actions">
                       <button
@@ -4000,6 +4608,7 @@ function ProductManagementPage({
                           setSelectedTemplateId(template.templateId);
                           setTemplateDraft(template);
                           setActiveProductTab('basic');
+                          setDeleteArmed(false);
                           setSaveState('idle');
                           setActionError('');
                         }}
@@ -4021,6 +4630,7 @@ function ProductManagementPage({
           onClose={() => {
             setSelectedTemplateId(undefined);
             setTemplateDraft(undefined);
+            setDeleteArmed(false);
           }}
         >
           <section
@@ -4042,10 +4652,11 @@ function ProductManagementPage({
                 onClick={() => {
                   setSelectedTemplateId(undefined);
                   setTemplateDraft(undefined);
+                  setDeleteArmed(false);
                 }}
                 type="button"
               >
-                ×
+                <X aria-hidden="true" size={16} />
               </button>
             </div>
 
@@ -4126,124 +4737,118 @@ function ProductManagementPage({
                   </div>
                 </section>
               ) : null}
-              {activeProductTab === 'points' ? (
+              {activeProductTab === 'connections' ? (
                 <section className="detail-section product-tab-section">
                   <div className="product-section-title">
                     <div>
-                      <h4>绑定点位资源</h4>
-                      <span>从点位管理选择可复用输入点位，产品只保存引用关系</span>
+                      <h4>协议连接</h4>
+                      <span>每个连接独立维护设备参数、点位、上行采集和下行指令。</span>
                     </div>
                   </div>
-                  <ProductPointBindingList
-                    boundPointSetIds={selectedTemplate.pointSetIds ?? []}
-                    onBindSet={bindPointSetResource}
-                    onUnbindSet={unbindPointSetResource}
+                  <ProductProtocolConnectionsEditor
+                    commandFlows={selectedTemplate.commandFlows ?? []}
+                    connections={selectedTemplate.protocolConnections ?? [
+                      {
+                        ...selectedTemplate.connection,
+                        connectionId: `${selectedTemplate.templateId}-connection`,
+                      },
+                    ]}
+                    collectionFlows={productCollectionFlows(selectedTemplate)}
+                    onBindPointSet={bindPointSetResource}
+                    onChange={(protocolConnections) => {
+                      const primary = protocolConnections[0];
+                      updateTemplate({
+                        connection: primary
+                          ? {
+                              bacnetIp: primary.bacnetIp,
+                              circuitBreaker: primary.circuitBreaker,
+                              endpoint: primary.endpoint,
+                              iec101: primary.iec101,
+                              iec104: primary.iec104,
+                              omronFins: primary.omronFins,
+                              opcUa: primary.opcUa,
+                              protocolType: primary.protocolType,
+                              serial: primary.serial,
+                              siemensS7: primary.siemensS7,
+                            }
+                          : selectedTemplate.connection,
+                        protocolConnections,
+                      });
+                    }}
+                    onCollectionChange={updateCollectionFlow}
+                    onCommandFlowsChange={updateConnectionCommandFlows}
+                    onUnbindPointSet={unbindPointSetResource}
                     pointSets={pointSets.filter(
                       (pointSet) => pointSet.projectId === selectedTemplate.projectId,
                     )}
-                  />
-                </section>
-              ) : null}
-              {activeProductTab === 'collection' ? (
-                <section className="detail-section product-tab-section">
-                  <div className="product-section-title">
-                    <div>
-                      <h4>采集编排</h4>
-                      <span>自动使用当前产品绑定点位，拖拽节点并连线形成点位输入、计算节点与 MQTT 输出链路</span>
-                    </div>
-                  </div>
-                  <ProductCollectionPlanner
-                    onChange={(dataConfig) => updateTemplate({ dataConfig })}
                     template={selectedTemplate}
                   />
                 </section>
               ) : null}
-              {activeProductTab === 'release' ? (
-                <section className="detail-section product-tab-section">
-                  <div className="product-section-title">
-                    <h4>发布策略</h4>
-                    <span>产品配置保存后形成版本，边端绑定产品后从 Cloud 拉取对应版本</span>
-                  </div>
-                  <div className="product-release-summary">
-                    <PreviewStep title="版本" value={selectedTemplate.version} />
-                    <PreviewStep title="协议" value={selectedTemplate.connection.protocolType} />
-                    <PreviewStep title="点位" value={`${selectedTemplate.points.length} 个点位`} />
-                    <PreviewStep title="采集" value={`${selectedTemplate.task.intervalMs}ms`} />
-                    <PreviewStep title="上报" value={selectedTemplate.dataConfig.publish.topicTemplate} />
-                  </div>
-                  <div className="table-wrap product-version-table">
-                    <table className="ops-table">
-                      <thead>
-                        <tr>
-                          <th>版本</th>
-                          <th>状态</th>
-                          <th>点位集</th>
-                          <th>采集配置</th>
-                          <th>创建时间</th>
-                          <th>操作</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {selectedVersions.map((version) => (
-                          <tr key={version.version}>
-                            <td>{version.version}</td>
-                            <td>
-                              <span className={`tag ${version.status === 'published' ? 'ok' : version.status === 'draft' ? 'warn' : ''}`}>
-                                {productVersionStatusLabel(version.status)}
-                              </span>
-                            </td>
-                            <td>{version.pointSetIds.length} 个</td>
-                            <td>{version.dataConfigs.length} 套</td>
-                            <td>{formatCatalogTime(version.createdAt)}</td>
-                            <td>
-                              {version.status === 'draft' ? (
-                                <button
-                                  className="primary-button compact"
-                                  disabled={saveState === 'saving'}
-                                  onClick={() => void runVersionAction('publish', version.version)}
-                                  type="button"
-                                >
-                                  发布此版本
-                                </button>
-                              ) : null}
-                              {version.status === 'retired' ? (
-                                <button
-                                  className="secondary-button compact"
-                                  disabled={saveState === 'saving'}
-                                  onClick={() => void runVersionAction('rollback', version.version)}
-                                  type="button"
-                                >
-                                  回滚到此版本
-                                </button>
-                              ) : null}
-                              {version.status === 'published' ? <span>当前版本</span> : null}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-              ) : null}
             </section>
+
+            {deleteArmed ? (
+              <div className="destructive-confirmation" role="alertdialog" aria-label="确认删除产品">
+                <AlertTriangle aria-hidden="true" size={18} />
+                <div>
+                  <strong>永久删除产品“{selectedTemplate.name}”？</strong>
+                  <span>同时删除该产品的配置版本，操作无法恢复。</span>
+                </div>
+                <button className="secondary-button" onClick={() => setDeleteArmed(false)} type="button">
+                  取消
+                </button>
+                <button
+                  className="danger-button"
+                  disabled={saveState === 'saving'}
+                  onClick={async () => {
+                    setSaveState('saving');
+                    setActionError('');
+                    try {
+                      await onDeleteTemplate(selectedTemplate.templateId);
+                      setSelectedTemplateId(undefined);
+                      setTemplateDraft(undefined);
+                      setDeleteArmed(false);
+                      setSaveState('deleted');
+                    } catch (error) {
+                      setSaveState('error');
+                      setActionError(displayError(error));
+                    }
+                  }}
+                  type="button"
+                >
+                  确认删除
+                </button>
+              </div>
+            ) : null}
 
             <div className="drawer-footer">
               <span className="editor-status" role="status">
                 {saveState === 'saved'
-                  ? '已保存'
+                  ? (versions[selectedTemplate.templateId] ?? []).some(
+                      (version) =>
+                        version.version === selectedTemplate.version &&
+                        version.status === 'published',
+                    )
+                    ? '已保存并触发自动同步'
+                    : '已保存，配置待完善'
                   : saveState === 'deleted'
                     ? '已删除'
                     : saveState === 'saving'
                       ? '保存中'
                       : saveState === 'error'
                         ? actionError
-                        : '有未保存修改'}
+                        : isProductDirty
+                          ? '有未保存修改'
+                          : canDeleteProduct
+                            ? '未修改'
+                            : `删除前需先处理：${productDeleteBlockers.join('、')}`}
               </span>
               <button
                 className="secondary-button"
                 onClick={() => {
                   setSelectedTemplateId(undefined);
                   setTemplateDraft(undefined);
+                  setDeleteArmed(false);
                 }}
                 type="button"
               >
@@ -4251,7 +4856,7 @@ function ProductManagementPage({
               </button>
               <button
                 className="primary-button"
-                disabled={saveState === 'saving'}
+                disabled={saveState === 'saving' || !isProductDirty}
                 onClick={async () => {
                   setSaveState('saving');
                   setActionError('');
@@ -4269,24 +4874,13 @@ function ProductManagementPage({
                 }}
                 type="button"
               >
-                保存
+                保存并同步
               </button>
               <button
                 className="danger-button"
-                disabled={templates.length <= 1}
-                onClick={async () => {
-                  setSaveState('saving');
-                  setActionError('');
-                  try {
-                    await onDeleteTemplate(selectedTemplate.templateId);
-                    setSelectedTemplateId(undefined);
-                    setTemplateDraft(undefined);
-                    setSaveState('deleted');
-                  } catch (error) {
-                    setSaveState('error');
-                    setActionError(displayError(error));
-                  }
-                }}
+                disabled={!canDeleteProduct || saveState === 'saving'}
+                onClick={() => setDeleteArmed(true)}
+                title={canDeleteProduct ? '删除产品' : `请先处理${productDeleteBlockers.join('、')}`}
                 type="button"
               >
                 删除
@@ -4299,26 +4893,11 @@ function ProductManagementPage({
   );
 }
 
-function productVersionStatusLabel(
-  status: ProductVersionResponse['status'],
-): string {
-  if (status === 'draft') return '草稿';
-  if (status === 'published') return '已发布';
-  return '已退役';
-}
-
 function productVersionStatusText(versions: ProductVersionResponse[]): string {
   const draft = versions.find((version) => version.status === 'draft');
-  if (draft) return `${draft.version} 草稿`;
+  if (draft) return `${draft.version} 待完善`;
   const published = versions.find((version) => version.status === 'published');
-  return published ? `${published.version} 已发布` : '未发布';
-}
-
-function formatCatalogTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleString('zh-CN', { hour12: false });
+  return published ? `${published.version} 生效中` : '待配置';
 }
 
 interface ProductAlgorithmDefinition {
@@ -4591,6 +5170,11 @@ function ProductCollectionPlanner({
           kind: 'mqtt',
           label: `MQTT 输出 ${outputCount + 1}`,
           nodeId,
+          params: {
+            includeQuality: false,
+            includeTimestamp: false,
+            payloadLayout: 'business',
+          },
           refId: topicTemplate,
           x: position?.x ?? 680,
           y: position?.y ?? 160 + outputCount * 96,
@@ -4601,7 +5185,14 @@ function ProductCollectionPlanner({
     setEditingNodeId(nodeId);
   };
 
-  const updateMqttOutputNode = (nodeId: string, values: { label?: string; topic?: string }) => {
+  const updateMqttOutputNode = (
+    nodeId: string,
+    values: {
+      label?: string;
+      params?: Record<string, boolean | number | string | string[]>;
+      topic?: string;
+    },
+  ) => {
     const nextGraph = {
       edges: graph.edges,
       nodes: graph.nodes.map((node) =>
@@ -4609,6 +5200,7 @@ function ProductCollectionPlanner({
           ? {
               ...node,
               label: values.label ?? node.label,
+              params: values.params ? { ...(node.params ?? {}), ...values.params } : node.params,
               refId: values.topic ?? node.refId,
             }
           : node,
@@ -5412,6 +6004,69 @@ function ProductCollectionPlanner({
                   />
                 </label>
                 <label className="editor-control">
+                  <span>JSON 结构</span>
+                  <select
+                    aria-label="MQTT JSON 结构"
+                    onChange={(event) => {
+                      const payloadLayout = event.target.value;
+                      updateMqttOutputNode(editingNode.nodeId, {
+                        params: {
+                          includeQuality: payloadLayout === 'envelope',
+                          includeTimestamp: payloadLayout === 'envelope',
+                          payloadLayout,
+                        },
+                      });
+                    }}
+                    value={String(editingNode.params?.payloadLayout ?? 'envelope')}
+                  >
+                    <option value="business">业务 JSON（仅编排字段）</option>
+                    <option value="envelope">兼容信封（含运行元数据）</option>
+                  </select>
+                </label>
+                <div className="node-red-output-options">
+                  <label className="mqtt-toggle-field">
+                    <span>
+                      <strong>附加时间戳</strong>
+                      <small>使用当前生效配置中的时间字段名</small>
+                    </span>
+                    <input
+                      aria-label="MQTT 附加时间戳"
+                      checked={Boolean(
+                        editingNode.params?.includeTimestamp ??
+                          (editingNode.params?.payloadLayout ?? 'envelope') === 'envelope',
+                      )}
+                      onChange={(event) =>
+                        updateMqttOutputNode(editingNode.nodeId, {
+                          params: { includeTimestamp: event.target.checked },
+                        })
+                      }
+                      type="checkbox"
+                    />
+                    <i aria-hidden="true" />
+                  </label>
+                  <label className="mqtt-toggle-field">
+                    <span>
+                      <strong>附加质量信息</strong>
+                      <small>为业务字段输出质量码</small>
+                    </span>
+                    <input
+                      aria-label="MQTT 附加质量信息"
+                      checked={Boolean(
+                        editingNode.params?.includeQuality ??
+                          ((editingNode.params?.payloadLayout ?? 'envelope') === 'envelope' &&
+                            template.dataConfig.publish.payload.includeQuality),
+                      )}
+                      onChange={(event) =>
+                        updateMqttOutputNode(editingNode.nodeId, {
+                          params: { includeQuality: event.target.checked },
+                        })
+                      }
+                      type="checkbox"
+                    />
+                    <i aria-hidden="true" />
+                  </label>
+                </div>
+                <label className="editor-control">
                   <span>QoS</span>
                   <select
                     aria-label="MQTT QoS"
@@ -5602,7 +6257,7 @@ function getEffectiveProductAlgorithmIds(dataConfig: EdgeTemplateDefinition['dat
 const PRODUCT_FLOW_NODE_WIDTH = 168;
 const PRODUCT_FLOW_NODE_HEIGHT = 66;
 
-function buildProductPlannerGraph(
+export function buildProductPlannerGraph(
   _template: EdgeTemplateDefinition,
   dataConfig: EdgeTemplateDefinition['dataConfig'],
   existingGraph?: DataConfigVisualGraph,
@@ -5610,14 +6265,24 @@ function buildProductPlannerGraph(
   const previousNodes = new Map(
     (existingGraph?.nodes ?? []).map((node) => [node.nodeId, node]),
   );
-  const pointNodes = dataConfig.points.map((point, index) => ({
-    kind: 'point' as const,
-    label: point.jsonField || point.pointId,
-    nodeId: `point-${point.pointId}`,
-    refId: point.pointId,
-    x: previousNodes.get(`point-${point.pointId}`)?.x ?? 72,
-    y: previousNodes.get(`point-${point.pointId}`)?.y ?? 84 + index * 86,
-  }));
+  const previousPointNodesByRef = new Map(
+    (existingGraph?.nodes ?? [])
+      .filter((node) => node.kind === 'point' && node.refId)
+      .map((node) => [node.refId as string, node]),
+  );
+  const pointNodes = dataConfig.points.map((point, index) => {
+    const canonicalNodeId = `point-${point.pointId}`;
+    const previous =
+      previousNodes.get(canonicalNodeId) ?? previousPointNodesByRef.get(point.pointId);
+    return {
+      kind: 'point' as const,
+      label: previous?.label || point.jsonField || point.pointId,
+      nodeId: previous?.nodeId ?? canonicalNodeId,
+      refId: point.pointId,
+      x: previous?.x ?? 72,
+      y: previous?.y ?? 84 + index * 86,
+    };
+  });
   const previousComputeNodes = (existingGraph?.nodes ?? []).filter(
     (node) => node.kind === 'algorithm' || node.kind === 'json',
   );
@@ -5672,6 +6337,11 @@ function buildProductPlannerGraph(
           kind: 'mqtt' as const,
           label: 'MQTT 输出 1',
           nodeId: 'mqtt-output',
+          params: {
+            includeQuality: false,
+            includeTimestamp: false,
+            payloadLayout: 'business',
+          },
           refId: dataConfig.publish.topicTemplate,
           x: 680,
           y: 160,
@@ -5910,7 +6580,19 @@ function buildProductRuntimePlan(
         {
           channelId: dataConfig.publish.sinkId,
           kind: 'mqtt_publish',
-          payload: dataConfig.publish.payload,
+          payload: {
+            ...dataConfig.publish.payload,
+            includeQuality: Boolean(
+              node.params?.includeQuality ??
+                ((node.params?.payloadLayout ?? 'envelope') === 'envelope' &&
+                  dataConfig.publish.payload.includeQuality),
+            ),
+            includeTimestamp: Boolean(
+              node.params?.includeTimestamp ??
+                (node.params?.payloadLayout ?? 'envelope') === 'envelope',
+            ),
+            layout: node.params?.payloadLayout ?? 'envelope',
+          },
           portId: 'publish',
           qos: dataConfig.publish.qos,
           topic: node.refId ?? dataConfig.publish.topicTemplate,
@@ -6213,17 +6895,720 @@ function dominantPointSetValue(values: string[]) {
   return Array.from(counts.entries()).sort((left, right) => right[1] - left[1])[0]?.[0] ?? '-';
 }
 
+const PRODUCT_PROTOCOL_OPTIONS = [
+  ['ModbusTcp', 'Modbus TCP'],
+  ['ModbusRtu', 'Modbus RTU'],
+  ['Dlt645', 'DL/T645'],
+  ['Iec101', 'IEC-101'],
+  ['Iec104', 'IEC-104'],
+  ['CustomSerial', '自定义串口'],
+  ['OpcUa', 'OPC UA'],
+  ['BacnetIp', 'BACnet/IP'],
+  ['SiemensS7', 'Siemens S7'],
+  ['OmronFins', 'Omron FINS'],
+  ['Simulated', '模拟设备'],
+] as const;
+
+function productProtocolLabel(protocolType: string) {
+  return PRODUCT_PROTOCOL_OPTIONS.find(([value]) => value === protocolType)?.[1] ?? protocolType;
+}
+
+function normaliseProtocolId(protocolType: string) {
+  return protocolType.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function isProductSerialProtocol(protocolType: string) {
+  return ['ModbusRtu', 'Dlt645', 'Iec101', 'CustomSerial'].includes(protocolType);
+}
+
+function defaultProductProtocolConnection(
+  connectionId: string,
+  protocolType = 'ModbusTcp',
+): ProductProtocolConnectionDefinition {
+  const connection: ProductProtocolConnectionDefinition = {
+    circuitBreaker: {
+      enabled: true,
+      failureThreshold: 5,
+      halfOpenSuccessThreshold: 1,
+      openDurationMs: 30_000,
+    },
+    connectionId,
+    endpoint: 'tcp://127.0.0.1:502',
+    protocolType,
+  };
+  if (isProductSerialProtocol(protocolType)) {
+    connection.endpoint = '/dev/ttyUSB0';
+    connection.serial = {
+      baudRate: protocolType === 'Dlt645' ? 2400 : 9600,
+      dataBits: 8,
+      parity: protocolType === 'Dlt645' ? 'even' : 'none',
+      port: '/dev/ttyUSB0',
+      stopBits: 1,
+    };
+  }
+  if (protocolType === 'SiemensS7') {
+    connection.endpoint = 's7://127.0.0.1:102';
+    connection.siemensS7 = {
+      connectTimeoutMs: 5_000,
+      pduSize: 480,
+      rack: 0,
+      requestTimeoutMs: 10_000,
+      slot: 1,
+    };
+  }
+  if (protocolType === 'OmronFins') {
+    connection.endpoint = 'fins://127.0.0.1:9600';
+    connection.omronFins = {
+      destinationNetwork: 0,
+      destinationNode: 0,
+      destinationUnit: 0,
+      sourceNetwork: 0,
+      sourceNode: 0,
+      sourceUnit: 0,
+      timeoutMs: 2_000,
+      transport: 'tcp',
+      wordOrder: 'low_word_first',
+    };
+  }
+  return connection;
+}
+
+function changeProductProtocol(
+  connection: ProductProtocolConnectionDefinition,
+  protocolType: string,
+) {
+  return {
+    ...defaultProductProtocolConnection(connection.connectionId, protocolType),
+    circuitBreaker: connection.circuitBreaker,
+  };
+}
+
+function productConnectionSummary(connection: ProductProtocolConnectionDefinition) {
+  if (connection.serial) {
+    const parity = connection.serial.parity === 'none'
+      ? 'N'
+      : connection.serial.parity === 'even'
+        ? 'E'
+        : 'O';
+    return `${connection.serial.port} · ${connection.serial.baudRate} bps · ${connection.serial.dataBits}${parity}${connection.serial.stopBits}`;
+  }
+  if (connection.siemensS7) {
+    return `${connection.endpoint ?? '-'} · Rack ${connection.siemensS7.rack} / Slot ${connection.siemensS7.slot} · PDU ${connection.siemensS7.pduSize}`;
+  }
+  if (connection.omronFins) {
+    return `${connection.endpoint ?? '-'} · ${connection.omronFins.transport.toUpperCase()} · 节点 ${connection.omronFins.sourceNode} → ${connection.omronFins.destinationNode}`;
+  }
+  return connection.endpoint || '未配置端点';
+}
+
+function ProductProtocolConnectionsEditor({
+  collectionFlows,
+  commandFlows,
+  connections,
+  onBindPointSet,
+  onChange,
+  onCollectionChange,
+  onCommandFlowsChange,
+  onUnbindPointSet,
+  pointSets,
+  template,
+}: {
+  collectionFlows: ProductCollectionFlowDefinition[];
+  commandFlows: CommandFlowConfig[];
+  connections: ProductProtocolConnectionDefinition[];
+  onBindPointSet: (pointSet: PointSetResponse, protocolConnectionId: string) => void;
+  onChange: (connections: ProductProtocolConnectionDefinition[]) => void;
+  onCollectionChange: (
+    protocolConnectionId: string,
+    dataConfig: EdgeTemplateDefinition['dataConfig'],
+  ) => void;
+  onCommandFlowsChange: (
+    protocolConnectionId: string,
+    flows: CommandFlowConfig[],
+  ) => void;
+  onUnbindPointSet: (pointSet: PointSetResponse, protocolConnectionId: string) => void;
+  pointSets: PointSetResponse[];
+  template: EdgeTemplateDefinition;
+}) {
+  const [editor, setEditor] = useState<{
+    isNew: boolean;
+    value: ProductProtocolConnectionDefinition;
+  }>();
+  const [workspaceConnectionId, setWorkspaceConnectionId] = useState<string>();
+
+  const openCreate = () => {
+    let sequence = connections.length + 1;
+    let connectionId = `product-connection-${sequence}`;
+    while (connections.some((connection) => connection.connectionId === connectionId)) {
+      sequence += 1;
+      connectionId = `product-connection-${sequence}`;
+    }
+    setEditor({ isNew: true, value: defaultProductProtocolConnection(connectionId) });
+  };
+
+  const saveEditor = () => {
+    if (!editor) return;
+    const next = editor.isNew
+      ? [...connections, editor.value]
+      : connections.map((connection) =>
+          connection.connectionId === editor.value.connectionId
+            ? editor.value
+            : connection,
+        );
+    onChange(next);
+    setWorkspaceConnectionId(editor.value.connectionId);
+    setEditor(undefined);
+  };
+
+  const workspaceConnection = connections.find(
+    (connection) => connection.connectionId === workspaceConnectionId,
+  );
+  const editorHasReferences = Boolean(
+    editor
+      && !editor.isNew
+      && (
+        productConnectionPointIds(template, editor.value.connectionId).size > 0
+        || collectionFlows.some(
+          (flow) => flow.protocolConnectionId === editor.value.connectionId,
+        )
+        || commandFlows.some(
+          (flow) => commandFlowConnectionId(flow, template) === editor.value.connectionId,
+        )
+      ),
+  );
+
+  return (
+    <>
+      <div className="product-connection-toolbar">
+        <span>{connections.length} 条设备连接</span>
+        <button className="primary-button" onClick={openCreate} type="button">
+          <Plus aria-hidden="true" size={15} />
+          新增连接
+        </button>
+      </div>
+      <div className="table-wrap product-config-table">
+        <table className="ops-table">
+          <thead>
+            <tr>
+              <th>连接 ID</th>
+              <th>协议</th>
+              <th>设备端点与参数</th>
+              <th>点位</th>
+              <th>采集</th>
+              <th>指令</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {connections.map((connection) => {
+              const pointCount = productConnectionPointIds(
+                template,
+                connection.connectionId,
+              ).size;
+              const collectionCount = collectionFlows.filter(
+                (flow) => flow.protocolConnectionId === connection.connectionId,
+              ).length;
+              const commandCount = commandFlows.filter(
+                (flow) => commandFlowConnectionId(flow, template) === connection.connectionId,
+              ).length;
+              const isReferenced = pointCount + collectionCount + commandCount > 0;
+              return (
+                <tr key={connection.connectionId}>
+                  <td><strong>{connection.connectionId}</strong></td>
+                  <td>{productProtocolLabel(connection.protocolType)}</td>
+                  <td className="product-connection-summary">{productConnectionSummary(connection)}</td>
+                  <td>{pointCount} 个</td>
+                  <td>{collectionCount} 套</td>
+                  <td>{commandCount} 套</td>
+                  <td>
+                    <div className="row-actions">
+                      <button
+                        className="secondary-button compact"
+                        onClick={() => setWorkspaceConnectionId(connection.connectionId)}
+                        type="button"
+                      >
+                        <Pencil aria-hidden="true" size={14} />
+                        管理
+                      </button>
+                      <button
+                        className="danger-button compact"
+                        disabled={isReferenced || connections.length === 1}
+                        onClick={() => onChange(connections.filter(
+                          (candidate) => candidate.connectionId !== connection.connectionId,
+                        ))}
+                        title={isReferenced ? '请先移除该连接的点位与编排' : undefined}
+                        type="button"
+                      >
+                        <Trash2 aria-hidden="true" size={14} />
+                        删除
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+            {connections.length === 0 ? (
+              <tr>
+                <td colSpan={7}>暂无协议连接，请先创建现场设备通道。</td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+
+      {workspaceConnection ? (
+        <ProductConnectionWorkspace
+          collectionFlows={collectionFlows}
+          commandFlows={commandFlows}
+          connection={workspaceConnection}
+          onBindPointSet={(pointSet) => onBindPointSet(
+            pointSet,
+            workspaceConnection.connectionId,
+          )}
+          onClose={() => setWorkspaceConnectionId(undefined)}
+          onCollectionChange={(dataConfig) => onCollectionChange(
+            workspaceConnection.connectionId,
+            dataConfig,
+          )}
+          onCommandFlowsChange={(flows) => onCommandFlowsChange(
+            workspaceConnection.connectionId,
+            flows,
+          )}
+          onEditParameters={() => setEditor({
+            isNew: false,
+            value: structuredClone(workspaceConnection),
+          })}
+          onUnbindPointSet={(pointSet) => onUnbindPointSet(
+            pointSet,
+            workspaceConnection.connectionId,
+          )}
+          pointSets={pointSets}
+          template={template}
+        />
+      ) : null}
+
+      {editor ? (
+        <Modal onClose={() => setEditor(undefined)}>
+          <form
+            aria-label="产品协议连接配置"
+            className="modal-panel detail-modal product-connection-editor-modal"
+            onSubmit={(event) => {
+              event.preventDefault();
+              saveEditor();
+            }}
+            role="dialog"
+          >
+            <div className="modal-header">
+              <div>
+                <h3>{editor.isNew ? '新增协议连接' : '配置协议连接'}</h3>
+                <p>{editor.value.connectionId}</p>
+              </div>
+              <button aria-label="关闭" className="icon-button" onClick={() => setEditor(undefined)} type="button">
+                <X aria-hidden="true" size={16} />
+              </button>
+            </div>
+            <div className="protocol-parameter-form">
+              <section>
+                <div className="protocol-form-heading">
+                  <strong>连接</strong>
+                  <span>定义 Runtime 到工业设备的实际通信通道</span>
+                </div>
+                <div className="form-grid">
+                  <label>
+                    <span>连接 ID</span>
+                    <input
+                      aria-label="连接 ID"
+                      disabled={!editor.isNew}
+                      onChange={(event) => setEditor({
+                        ...editor,
+                        value: { ...editor.value, connectionId: event.target.value },
+                      })}
+                      value={editor.value.connectionId}
+                    />
+                  </label>
+                  <label>
+                    <span>协议类型</span>
+                    <select
+                      aria-label="协议类型"
+                      disabled={editorHasReferences}
+                      onChange={(event) => setEditor({
+                        ...editor,
+                        value: changeProductProtocol(editor.value, event.target.value),
+                      })}
+                      title={editorHasReferences ? '请先移除该连接的点位与编排后再更换协议' : undefined}
+                      value={editor.value.protocolType}
+                    >
+                      {PRODUCT_PROTOCOL_OPTIONS.map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                    {editorHasReferences ? (
+                      <small>已关联点位或编排，协议类型已锁定</small>
+                    ) : null}
+                  </label>
+                  {!isProductSerialProtocol(editor.value.protocolType) ? (
+                    <label className="protocol-field-wide">
+                      <span>设备端点</span>
+                      <input
+                        aria-label="设备端点"
+                        onChange={(event) => setEditor({
+                          ...editor,
+                          value: { ...editor.value, endpoint: event.target.value },
+                        })}
+                        placeholder="tcp://192.168.1.10:502"
+                        value={editor.value.endpoint ?? ''}
+                      />
+                    </label>
+                  ) : null}
+                </div>
+              </section>
+
+              {editor.value.serial ? (
+                <section>
+                  <div className="protocol-form-heading">
+                    <strong>串口参数</strong>
+                    <span>波特率、数据位、校验位和停止位必须与现场设备一致</span>
+                  </div>
+                  <div className="form-grid protocol-serial-grid">
+                    <label>
+                      <span>串口设备</span>
+                      <input aria-label="串口设备" onChange={(event) => setEditor({
+                        ...editor,
+                        value: {
+                          ...editor.value,
+                          endpoint: event.target.value,
+                          serial: { ...editor.value.serial!, port: event.target.value },
+                        },
+                      })} value={editor.value.serial.port} />
+                    </label>
+                    <label>
+                      <span>波特率</span>
+                      <input aria-label="波特率" min="300" onChange={(event) => setEditor({
+                        ...editor,
+                        value: { ...editor.value, serial: { ...editor.value.serial!, baudRate: Number(event.target.value) } },
+                      })} type="number" value={editor.value.serial.baudRate} />
+                    </label>
+                    <label>
+                      <span>数据位</span>
+                      <select aria-label="数据位" onChange={(event) => setEditor({
+                        ...editor,
+                        value: { ...editor.value, serial: { ...editor.value.serial!, dataBits: Number(event.target.value) } },
+                      })} value={editor.value.serial.dataBits}>
+                        <option value="7">7</option><option value="8">8</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>校验位</span>
+                      <select aria-label="校验位" onChange={(event) => setEditor({
+                        ...editor,
+                        value: { ...editor.value, serial: { ...editor.value.serial!, parity: event.target.value as 'none' | 'even' | 'odd' } },
+                      })} value={editor.value.serial.parity}>
+                        <option value="none">无校验</option><option value="even">偶校验</option><option value="odd">奇校验</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>停止位</span>
+                      <select aria-label="停止位" onChange={(event) => setEditor({
+                        ...editor,
+                        value: { ...editor.value, serial: { ...editor.value.serial!, stopBits: Number(event.target.value) } },
+                      })} value={editor.value.serial.stopBits}>
+                        <option value="1">1</option><option value="2">2</option>
+                      </select>
+                    </label>
+                  </div>
+                </section>
+              ) : null}
+
+              {editor.value.siemensS7 ? (
+                <section>
+                  <div className="protocol-form-heading"><strong>Siemens S7</strong><span>TSAP 会话与 PDU 参数</span></div>
+                  <div className="form-grid protocol-serial-grid">
+                    <ProductConnectionNumberField editor={editor} field="rack" label="Rack" onChange={setEditor} settings="siemensS7" />
+                    <ProductConnectionNumberField editor={editor} field="slot" label="Slot" onChange={setEditor} settings="siemensS7" />
+                    <label><span>PDU 大小</span><select aria-label="PDU 大小" onChange={(event) => setEditor({ ...editor, value: { ...editor.value, siemensS7: { ...editor.value.siemensS7!, pduSize: Number(event.target.value) as 240 | 480 | 960 } } })} value={editor.value.siemensS7.pduSize}><option value="240">240</option><option value="480">480</option><option value="960">960</option></select></label>
+                    <ProductConnectionNumberField editor={editor} field="connectTimeoutMs" label="连接超时 (ms)" onChange={setEditor} settings="siemensS7" />
+                    <ProductConnectionNumberField editor={editor} field="requestTimeoutMs" label="请求超时 (ms)" onChange={setEditor} settings="siemensS7" />
+                  </div>
+                </section>
+              ) : null}
+
+              {editor.value.omronFins ? (
+                <section>
+                  <div className="protocol-form-heading"><strong>Omron FINS</strong><span>网络、节点和单元寻址</span></div>
+                  <div className="form-grid protocol-serial-grid">
+                    <label><span>传输方式</span><select aria-label="FINS 传输方式" onChange={(event) => setEditor({ ...editor, value: { ...editor.value, omronFins: { ...editor.value.omronFins!, transport: event.target.value as 'tcp' | 'udp' } } })} value={editor.value.omronFins.transport}><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
+                    <ProductConnectionNumberField editor={editor} field="sourceNode" label="源节点" onChange={setEditor} settings="omronFins" />
+                    <ProductConnectionNumberField editor={editor} field="destinationNode" label="目标节点" onChange={setEditor} settings="omronFins" />
+                    <ProductConnectionNumberField editor={editor} field="sourceNetwork" label="源网络" onChange={setEditor} settings="omronFins" />
+                    <ProductConnectionNumberField editor={editor} field="destinationNetwork" label="目标网络" onChange={setEditor} settings="omronFins" />
+                    <ProductConnectionNumberField editor={editor} field="sourceUnit" label="源单元" onChange={setEditor} settings="omronFins" />
+                    <ProductConnectionNumberField editor={editor} field="destinationUnit" label="目标单元" onChange={setEditor} settings="omronFins" />
+                    <ProductConnectionNumberField editor={editor} field="timeoutMs" label="请求超时 (ms)" onChange={setEditor} settings="omronFins" />
+                    <label><span>字顺序</span><select aria-label="FINS 字顺序" onChange={(event) => setEditor({ ...editor, value: { ...editor.value, omronFins: { ...editor.value.omronFins!, wordOrder: event.target.value as 'high_word_first' | 'low_word_first' } } })} value={editor.value.omronFins.wordOrder}><option value="low_word_first">低字在前</option><option value="high_word_first">高字在前</option></select></label>
+                  </div>
+                </section>
+              ) : null}
+            </div>
+            <div className="drawer-footer">
+              <span>{editor.isNew ? '保存后加入当前产品版本' : '保存后更新当前产品草稿'}</span>
+              <div className="toolbar">
+                <button className="secondary-button" onClick={() => setEditor(undefined)} type="button">取消</button>
+                <button className="primary-button" type="submit"><Check aria-hidden="true" size={15} />保存</button>
+              </div>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
+    </>
+  );
+}
+
+function ProductConnectionWorkspace({
+  collectionFlows,
+  commandFlows,
+  connection,
+  onBindPointSet,
+  onClose,
+  onCollectionChange,
+  onCommandFlowsChange,
+  onEditParameters,
+  onUnbindPointSet,
+  pointSets,
+  template,
+}: {
+  collectionFlows: ProductCollectionFlowDefinition[];
+  commandFlows: CommandFlowConfig[];
+  connection: ProductProtocolConnectionDefinition;
+  onBindPointSet: (pointSet: PointSetResponse) => void;
+  onClose: () => void;
+  onCollectionChange: (dataConfig: EdgeTemplateDefinition['dataConfig']) => void;
+  onCommandFlowsChange: (flows: CommandFlowConfig[]) => void;
+  onEditParameters: () => void;
+  onUnbindPointSet: (pointSet: PointSetResponse) => void;
+  pointSets: PointSetResponse[];
+  template: EdgeTemplateDefinition;
+}) {
+  const [activeTab, setActiveTab] = useState<ProductConnectionWorkspaceTab>('parameters');
+  const connectionPointIds = productConnectionPointIds(template, connection.connectionId);
+  const collectionFlow = collectionFlows.find(
+    (flow) => flow.protocolConnectionId === connection.connectionId,
+  );
+  const connectionCommandFlows = commandFlows.filter(
+    (flow) => commandFlowConnectionId(flow, template) === connection.connectionId,
+  );
+  const compatiblePointSets = pointSets.filter(
+    (pointSet) => normaliseProtocolId(pointSet.protocol) === normaliseProtocolId(connection.protocolType),
+  );
+  const connectionPoints = template.points.filter((point) => connectionPointIds.has(point.pointId));
+  const tabs: Array<{ key: ProductConnectionWorkspaceTab; label: string; count?: number }> = [
+    { key: 'parameters', label: '连接参数' },
+    { key: 'points', label: '绑定点位', count: connectionPointIds.size },
+    { key: 'collection', label: '采集编排', count: collectionFlow ? 1 : 0 },
+    { key: 'commands', label: '指令编排', count: connectionCommandFlows.length },
+  ];
+
+  return (
+    <Modal onClose={onClose}>
+      <section
+        aria-label={`协议连接工作区 ${connection.connectionId}`}
+        className="modal-panel product-connection-workspace-modal"
+        role="dialog"
+      >
+        <div className="modal-header product-connection-workspace-header">
+          <div>
+            <span className="product-connection-eyebrow">{productProtocolLabel(connection.protocolType)}</span>
+            <h3>{connection.connectionId}</h3>
+            <p>{productConnectionSummary(connection)}</p>
+          </div>
+          <button aria-label="关闭" className="icon-button" onClick={onClose} type="button">
+            <X aria-hidden="true" size={17} />
+          </button>
+        </div>
+
+        <nav
+          aria-label="协议连接配置标签"
+          className="workspace-tabs product-connection-workspace-tabs"
+          role="tablist"
+        >
+          {tabs.map((tab) => (
+            <button
+              aria-selected={activeTab === tab.key}
+              className={activeTab === tab.key ? 'workspace-tab active' : 'workspace-tab'}
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              role="tab"
+              type="button"
+            >
+              {tab.label}
+              {tab.count === undefined ? null : <span>{tab.count}</span>}
+            </button>
+          ))}
+        </nav>
+
+        <div className="product-connection-workspace-body" role="tabpanel">
+          {activeTab === 'parameters' ? (
+            <section className="connection-parameter-overview">
+              <div className="connection-workspace-section-heading">
+                <div>
+                  <h4>设备连接</h4>
+                  <p>Runtime 使用这组参数与现场设备建立会话。</p>
+                </div>
+                <button className="primary-button" onClick={onEditParameters} type="button">
+                  <Pencil aria-hidden="true" size={15} />
+                  修改参数
+                </button>
+              </div>
+              <dl className="connection-parameter-list">
+                <div><dt>连接 ID</dt><dd>{connection.connectionId}</dd></div>
+                <div><dt>协议</dt><dd>{productProtocolLabel(connection.protocolType)}</dd></div>
+                <div><dt>设备端点</dt><dd>{connection.endpoint || connection.serial?.port || '-'}</dd></div>
+                <div><dt>参数摘要</dt><dd>{productConnectionSummary(connection)}</dd></div>
+              </dl>
+              <div className="connection-resource-strip">
+                <span><strong>{connectionPointIds.size}</strong> 点位</span>
+                <span><strong>{collectionFlow ? 1 : 0}</strong> 采集编排</span>
+                <span><strong>{connectionCommandFlows.length}</strong> 指令编排</span>
+              </div>
+            </section>
+          ) : null}
+
+          {activeTab === 'points' ? (
+            <section className="connection-workspace-section">
+              <div className="connection-workspace-section-heading">
+                <div>
+                  <h4>点位集</h4>
+                  <p>仅展示与当前协议兼容的点位集，绑定后供采集和指令编排使用。</p>
+                </div>
+              </div>
+              <ProductPointBindingList
+                boundPointSetIds={template.pointSetIds ?? []}
+                connections={template.protocolConnections ?? [connection]}
+                dataConfigBindings={template.dataConfigBindings ?? []}
+                fixedConnectionId={connection.connectionId}
+                onBindSet={onBindPointSet}
+                onUnbindSet={onUnbindPointSet}
+                pointSets={compatiblePointSets}
+              />
+            </section>
+          ) : null}
+
+          {activeTab === 'collection' ? (
+            <section className="connection-workspace-section connection-planner-section">
+              {collectionFlow && connectionPointIds.size > 0 ? (
+                <ProductCollectionPlanner
+                  onChange={onCollectionChange}
+                  template={{
+                    ...template,
+                    dataConfig: withoutProductFlowConnection(collectionFlow),
+                    points: connectionPoints,
+                  }}
+                />
+              ) : (
+                <div className="connection-workspace-empty">
+                  <strong>还没有可编排的采集点位</strong>
+                  <span>先在“绑定点位”中选择当前连接使用的点位集。</span>
+                  <button className="primary-button" onClick={() => setActiveTab('points')} type="button">
+                    绑定点位
+                  </button>
+                </div>
+              )}
+            </section>
+          ) : null}
+
+          {activeTab === 'commands' ? (
+            <section className="connection-workspace-section connection-command-section">
+              <ProductCommandFlowsEditor
+                flows={connectionCommandFlows}
+                mqttConnectionId={template.mqtt.sinkId}
+                onChange={onCommandFlowsChange}
+                points={connectionPoints.map((point) => ({
+                  access: point.readWrite ?? 'read',
+                  pointId: point.pointId,
+                  semanticId: point.semanticId ?? point.pointId,
+                }))}
+                protocolConnectionId={connection.connectionId}
+              />
+            </section>
+          ) : null}
+        </div>
+      </section>
+    </Modal>
+  );
+}
+
+function ProductConnectionNumberField({
+  editor,
+  field,
+  label,
+  onChange,
+  settings,
+}: {
+  editor: { isNew: boolean; value: ProductProtocolConnectionDefinition };
+  field: string;
+  label: string;
+  onChange: (editor: { isNew: boolean; value: ProductProtocolConnectionDefinition }) => void;
+  settings: 'omronFins' | 'siemensS7';
+}) {
+  const values = editor.value[settings] as unknown as Record<string, number>;
+  return (
+    <label>
+      <span>{label}</span>
+      <input
+        aria-label={label}
+        min="0"
+        onChange={(event) => onChange({
+          ...editor,
+          value: {
+            ...editor.value,
+            [settings]: {
+              ...editor.value[settings],
+              [field]: Number(event.target.value),
+            },
+          },
+        })}
+        type="number"
+        value={values[field] ?? 0}
+      />
+    </label>
+  );
+}
+
+function productPointAddressKindLabel(kind: string) {
+  const labels: Record<string, string> = {
+    coil: '线圈',
+    discrete_input: '离散输入',
+    holding_register: '保持寄存器',
+    input_register: '输入寄存器',
+    s7: 'S7 地址',
+    fins: 'FINS 地址',
+  };
+  return labels[kind] ?? kind;
+}
+
+function pointAccessLabel(access: PointSetResponse['points'][number]['access']) {
+  if (access === 'read_write') return '读写';
+  if (access === 'write_only') return '只写';
+  return '只读';
+}
+
 function ProductPointBindingList({
   boundPointSetIds,
+  connections,
+  dataConfigBindings,
+  fixedConnectionId,
   onBindSet,
   onUnbindSet,
   pointSets,
 }: {
   boundPointSetIds: string[];
+  connections: ProductProtocolConnectionDefinition[];
+  dataConfigBindings: ProductDataConfigBinding[];
+  fixedConnectionId: string;
   onBindSet: (pointSet: PointSetResponse) => void;
   onUnbindSet: (pointSet: PointSetResponse) => void;
   pointSets: PointSetResponse[];
 }) {
+  const [expandedPointSetId, setExpandedPointSetId] = useState<string>();
   return (
     <div className="table-wrap product-config-table">
       <table className="ops-table">
@@ -6231,6 +7616,7 @@ function ProductPointBindingList({
           <tr>
             <th>点位集</th>
             <th>协议</th>
+            <th>协议连接</th>
             <th>点位数</th>
             <th>周期</th>
             <th>状态</th>
@@ -6239,46 +7625,130 @@ function ProductPointBindingList({
         </thead>
         <tbody>
           {pointSets.map((pointSet) => {
-            const isBound = boundPointSetIds.includes(pointSet.pointSetId);
+            const isProductBound = boundPointSetIds.includes(pointSet.pointSetId);
+            const pointIds = new Set(pointSet.points.map((point) => point.pointId));
+            const connectionIds = Array.from(new Set(
+              dataConfigBindings
+                .filter((binding) => binding.pointIds.some((pointId) => pointIds.has(pointId)))
+                .map((binding) => binding.protocolConnectionId)
+                .filter(Boolean),
+            ));
+            const boundConnections = connections.filter((connection) =>
+              connectionIds.includes(connection.connectionId),
+            );
+            const isLegacySingleBinding = isProductBound
+              && connectionIds.length === 0
+              && connections.length === 1
+              && connections[0]?.connectionId === fixedConnectionId;
+            const isBound = connectionIds.includes(fixedConnectionId) || isLegacySingleBinding;
+            const occupiedConnectionId = connectionIds.find(
+              (connectionId) => connectionId !== fixedConnectionId,
+            );
             return (
-              <tr key={pointSet.pointSetId}>
-                <td>
-                  <strong>{pointSet.name}</strong>
-                  <small>{pointSet.points.slice(0, 3).map((point) => point.pointId).join(', ')}</small>
-                </td>
-                <td>{pointSet.protocol}</td>
-                <td>{pointSet.points.length} 个</td>
-                <td>
-                  {dominantPointSetValue(
-                    pointSet.points.map((point) => `${point.intervalMs}ms`),
-                  )}
-                </td>
-                <td>
-                  <span className={isBound ? 'tag ok' : 'tag warn'}>
-                    {isBound ? '已绑定' : '未绑定'}
-                  </span>
-                </td>
-                <td>
-                  <button
-                    className={isBound ? 'danger-button compact' : 'secondary-button compact'}
-                    onClick={() => {
-                      if (isBound) {
-                        onUnbindSet(pointSet);
-                      } else {
-                        onBindSet(pointSet);
-                      }
-                    }}
-                    type="button"
-                  >
-                    {isBound ? '解除' : '绑定'}
-                  </button>
-                </td>
-              </tr>
+              <Fragment key={pointSet.pointSetId}>
+                <tr>
+                  <td>
+                    <strong>{pointSet.name}</strong>
+                    <small>{pointSet.pointSetId}</small>
+                  </td>
+                  <td>{productProtocolLabel(pointSet.protocol)}</td>
+                  <td>
+                    <span className="point-set-connection-id">{fixedConnectionId}</span>
+                  </td>
+                  <td>{pointSet.points.length} 个</td>
+                  <td>
+                    {dominantPointSetValue(
+                      pointSet.points.map((point) => `${point.intervalMs}ms`),
+                    )}
+                  </td>
+                  <td>
+                    <span className={isBound ? 'tag ok' : 'tag warn'}>
+                      {isBound
+                        ? '已绑定'
+                        : occupiedConnectionId
+                          ? `已用于 ${occupiedConnectionId}`
+                          : '可绑定'}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="row-actions">
+                      <button
+                        aria-expanded={expandedPointSetId === pointSet.pointSetId}
+                        className="secondary-button compact"
+                        onClick={() => setExpandedPointSetId((current) =>
+                          current === pointSet.pointSetId ? undefined : pointSet.pointSetId,
+                        )}
+                        type="button"
+                      >
+                        {expandedPointSetId === pointSet.pointSetId ? '收起' : '查看参数'}
+                      </button>
+                      <button
+                        className={isBound ? 'danger-button compact' : 'secondary-button compact'}
+                        disabled={Boolean(occupiedConnectionId)}
+                        onClick={() => {
+                          if (isBound) onUnbindSet(pointSet);
+                          else onBindSet(pointSet);
+                        }}
+                        title={occupiedConnectionId ? '一个点位集只能绑定一个协议连接' : undefined}
+                        type="button"
+                      >
+                        {isBound ? '解除' : occupiedConnectionId ? '已占用' : '绑定'}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                {expandedPointSetId === pointSet.pointSetId ? (
+                  <tr className="point-set-detail-row">
+                    <td colSpan={7}>
+                      <div className="point-set-connection-strip">
+                        <strong>设备连接</strong>
+                        {isBound
+                          ? connections
+                              .filter((connection) => connection.connectionId === fixedConnectionId)
+                              .map((connection) => (
+                                <span key={connection.connectionId}>
+                                  {connection.connectionId} · {productConnectionSummary(connection)}
+                                </span>
+                              ))
+                          : boundConnections.length > 0
+                          ? boundConnections.map((connection) => (
+                              <span key={connection.connectionId}>
+                                {connection.connectionId} · {productConnectionSummary(connection)}
+                              </span>
+                            ))
+                          : <span>尚未绑定到当前连接。</span>}
+                      </div>
+                      <div className="point-set-address-table">
+                        <div className="point-set-address-grid point-set-address-head" role="row">
+                          <span>点位 ID</span>
+                          <span>语义</span>
+                          <span>地址类型</span>
+                          <span>协议地址</span>
+                          <span>数据类型</span>
+                          <span>权限</span>
+                          <span>周期</span>
+                        </div>
+                        {pointSet.points.map((point) => (
+                          <div className="point-set-address-grid point-set-address-item" key={point.pointId} role="row">
+                            <span>{point.pointId}</span>
+                            <span>{point.semanticId}</span>
+                            <span>{productPointAddressKindLabel(point.address.kind)}</span>
+                            <code>{point.address.value}</code>
+                            <span>{point.valueType}</span>
+                            <span>{pointAccessLabel(point.access)}</span>
+                            <span>{point.intervalMs}ms</span>
+                          </div>
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                ) : null}
+              </Fragment>
             );
           })}
           {pointSets.length === 0 ? (
             <tr>
-              <td colSpan={6}>当前项目暂无点位集，请先在点位管理中创建。</td>
+              <td colSpan={7}>当前项目暂无点位集，请先在点位管理中创建。</td>
             </tr>
           ) : null}
         </tbody>
@@ -6620,7 +8090,6 @@ function EdgeConfigWorkspace({
   onDeleteProtocolConnection,
   onGenerateSchedule,
   onImportPoints,
-  onPublish,
   onReleaseDiff,
   onRunDiscovery,
   onSaveCollectionTask,
@@ -6632,6 +8101,7 @@ function EdgeConfigWorkspace({
   onValidateConfig,
   pointMappings,
   protocolConnections,
+  protocolCatalog,
   releaseList,
 }: {
   algorithms?: AlgorithmResponse[];
@@ -6676,7 +8146,6 @@ function EdgeConfigWorkspace({
   ) => Promise<void>;
   onGenerateSchedule: (edgeId: string) => Promise<ManagementActionResponse>;
   onImportPoints: (edgeId: string) => Promise<ManagementActionResponse>;
-  onPublish: (edgeId: string) => Promise<void>;
   onReleaseDiff: (edgeId: string) => Promise<ManagementActionResponse>;
   onRunDiscovery: (
     edgeId: string,
@@ -6714,6 +8183,7 @@ function EdgeConfigWorkspace({
   onValidateConfig: (edgeId?: string) => Promise<ManagementActionResponse>;
   pointMappings?: PointMappingResponse[];
   protocolConnections?: ProtocolConnectionResponse[];
+  protocolCatalog?: RuntimeProtocolDescriptor[];
   releaseList?: ReleaseListResponse;
 }) {
   const [activeTab, setActiveTab] = useState<EdgeConfigTab>(initialTab);
@@ -6727,7 +8197,6 @@ function EdgeConfigWorkspace({
     { key: 'reports', label: '数据上报' },
     { key: 'mqtt', label: 'MQTT' },
     { key: 'discovery', label: '点位探测' },
-    { key: 'release', label: '配置发布' },
   ];
 
   useEffect(() => {
@@ -6771,7 +8240,6 @@ function EdgeConfigWorkspace({
           <EdgeConfigVersionPanel
             edgeId={edgeId}
             onApplyTemplate={onApplyEdgeTemplate}
-            onPublish={onPublish}
             onReleaseDiff={onReleaseDiff}
             onValidateConfig={onValidateConfig}
             productBinding={productBinding}
@@ -6790,6 +8258,7 @@ function EdgeConfigWorkspace({
             onDeleteConnection={onDeleteProtocolConnection}
             onSaveConnection={onSaveProtocolConnection}
             onValidateConnection={onValidateConfig}
+            protocolCatalog={protocolCatalog}
             selectedEdgeId={edgeId}
           />
         ) : null}
@@ -6856,19 +8325,11 @@ function EdgeConfigWorkspace({
         ) : null}
         {activeTab === 'discovery' ? (
           <DiscoveryPage
+            connections={protocolConnections}
             onRunDiscovery={onRunDiscovery}
+            protocolCatalog={protocolCatalog}
             selectedEdgeId={edgeId}
             suggestions={discoverySuggestions}
-          />
-        ) : null}
-        {activeTab === 'release' ? (
-          <ReleasesPage
-            edges={edges}
-            onPublish={onPublish}
-            onShowDiff={onReleaseDiff}
-            onValidateRelease={onValidateConfig}
-            releaseList={releaseList}
-            selectedEdgeId={edgeId}
           />
         ) : null}
       </section>
@@ -6880,7 +8341,7 @@ function formatReleaseBindingStatus(
   releaseResult: ReleaseListResponse['applyResults'][number] | undefined,
 ) {
   if (!releaseResult) {
-    return '待发布';
+    return '等待同步';
   }
   const version =
     releaseResult.reportedVersion && releaseResult.reportedVersion !== '-'

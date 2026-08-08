@@ -1,0 +1,108 @@
+name: velaedge-industrial-device-lab
+
+services:
+  s7-device:
+    image: velaedge/protocol-device-sim:0.1.0
+    build:
+      context: ./simulator
+    command:
+      - serve-s7
+      - --bind
+      - 0.0.0.0:1102
+      - --update-interval-ms
+      - "250"
+    ports:
+      - "127.0.0.1:${S7_HOST_PORT:-11102}:1102"
+    healthcheck:
+      test: ["CMD", "protocol-device-sim", "check-tcp", "--address", "127.0.0.1:1102"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 2s
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+
+  fins-device:
+    image: velaedge/protocol-device-sim:0.1.0
+    command:
+      - serve-fins
+      - --bind
+      - 0.0.0.0:9600
+      - --update-interval-ms
+      - "250"
+      - --server-node
+      - "42"
+    ports:
+      - "127.0.0.1:${FINS_HOST_PORT:-19600}:9600/tcp"
+      - "127.0.0.1:${FINS_HOST_PORT:-19600}:9600/udp"
+    healthcheck:
+      test: ["CMD", "protocol-device-sim", "check-tcp", "--address", "127.0.0.1:9600"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 2s
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    depends_on:
+      s7-device:
+        condition: service_healthy
+
+  iec104-device:
+    image: velaedge/protocol-device-sim:0.1.0
+    command:
+      - serve-iec104
+      - --bind
+      - 0.0.0.0:2404
+      - --common-address
+      - "1"
+      - --update-interval-ms
+      - "500"
+    ports:
+      - "127.0.0.1:${IEC104_HOST_PORT:-12404}:2404"
+    healthcheck:
+      test: ["CMD", "protocol-device-sim", "check-tcp", "--address", "127.0.0.1:2404"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 2s
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    depends_on:
+      fins-device:
+        condition: service_healthy
+
+  bacnet-device:
+    image: velaedge/protocol-device-sim:0.1.0
+    command:
+      - serve-bacnet
+      - --bind
+      - 0.0.0.0:47808
+      - --device-instance
+      - "42"
+      - --update-interval-ms
+      - "500"
+    ports:
+      - "127.0.0.1:${BACNET_HOST_PORT:-14780}:47808/udp"
+    healthcheck:
+      test: ["CMD", "protocol-device-sim", "check-bacnet", "--address", "127.0.0.1:47808", "--device-instance", "42"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 2s
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    depends_on:
+      iec104-device:
+        condition: service_healthy

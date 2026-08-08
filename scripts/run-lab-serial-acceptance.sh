@@ -55,10 +55,11 @@ jq -n \
       "request frame reaches an operating-system PTY character device",
       "device response passes production checksum and protocol decoding",
       "Runtime executes an enabled data configuration",
+      "IEC 101 SBO control receives a matching positive activation confirmation",
       "JSON payload contains decoded value and quality",
       "publish returns only after MQTT QoS 1 PUBACK"
     ],
-    testCount:4,
+    testCount:5,
     log:$log,
     limitation:"PTY evidence does not verify physical RS-485 wiring, adapter direction control, non-zero baud configuration, or a site device."
   }' >"$REPORT_PATH"

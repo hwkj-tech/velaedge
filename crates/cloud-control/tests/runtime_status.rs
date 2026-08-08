@@ -33,6 +33,7 @@ fn snapshot(edge_id: &str, health: EdgeHealth) -> EdgeRuntimeMetricsSnapshot {
             disk_usage_percent: 35.0,
         },
         algorithms: Vec::new(),
+        mqtt: Default::default(),
         cloud_sync: CloudSyncMetrics {
             connected: true,
             last_sync_seconds_ago: 8,

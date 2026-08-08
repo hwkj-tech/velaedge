@@ -2,16 +2,25 @@ import { useEffect, useState } from 'react';
 import { Edit3, Plus, ShieldCheck, Trash2, X } from 'lucide-react';
 
 import type {
+  BacnetIpConnectionSettings,
   EdgeNodeResponse,
+  Iec101ConnectionSettings,
+  Iec104ConnectionSettings,
   ManagementActionResponse,
+  OmronFinsConnectionSettings,
+  OpcUaConnectionSettings,
+  ProtocolCircuitBreakerConfig,
   ProtocolConnectionResponse,
+  RuntimeProtocolDescriptor,
   CreateProtocolConnectionRequest,
   SaveProtocolConnectionRequest,
+  SiemensS7ConnectionSettings,
 } from '../api/types';
 import { Drawer } from '../components/Drawer';
 import { Modal } from '../components/Modal';
 import { PaginationBar } from '../components/PaginationBar';
 import { displayError } from '../utils/errors';
+import { protocolOptionsFromCatalog } from '../protocolCatalog';
 import './PointMappingsPage.css';
 
 const emptyConnection: ProtocolConnectionResponse = {
@@ -20,6 +29,7 @@ const emptyConnection: ProtocolConnectionResponse = {
     protocol: '',
     protocolType: 'ModbusTcp',
     endpoint: '',
+    circuitBreaker: defaultCircuitBreaker(),
     status: '停用',
     policy: '',
 };
@@ -29,16 +39,79 @@ const emptyEdge: EdgeNodeResponse = {
   resources: '-', heartbeat: '-', capabilities: [],
 };
 
-const protocolOptions = [
-  ['ModbusTcp', 'Modbus TCP'],
-  ['ModbusRtu', 'Modbus RTU'],
-  ['Dlt645', 'DL/T645'],
-  ['Iec101', 'IEC-101'],
-  ['CustomSerial', '自定义串口'],
-  ['OpcUa', 'OPC UA'],
-  ['SiemensS7', 'Siemens S7'],
-  ['Simulated', 'Simulated'],
-];
+function defaultCircuitBreaker(): ProtocolCircuitBreakerConfig {
+  return {
+    enabled: true,
+    failureThreshold: 5,
+    openDurationMs: 30_000,
+    halfOpenSuccessThreshold: 1,
+  };
+}
+
+function defaultIec104Settings(): Iec104ConnectionSettings {
+  return { cp56TimeZoneOffsetMinutes: 0 };
+}
+
+function defaultIec101Settings(): Iec101ConnectionSettings {
+  return { cp56TimeZoneOffsetMinutes: 0 };
+}
+
+function defaultOpcUaSettings(): OpcUaConnectionSettings {
+  return {
+    securityPolicy: 'none',
+    messageSecurityMode: 'none',
+    authMode: 'anonymous',
+    username: null,
+    passwordEnv: null,
+    userCertificatePath: null,
+    userPrivateKeyPath: null,
+    pkiDir: './data/opcua-pki',
+    trustServerCerts: false,
+    verifyServerCerts: true,
+    connectTimeoutMs: 5_000,
+    requestTimeoutMs: 5_000,
+    sessionTimeoutMs: 60_000,
+    sessionRetryLimit: 3,
+  };
+}
+
+function defaultBacnetIpSettings(): BacnetIpConnectionSettings {
+  return {
+    bindAddress: '0.0.0.0',
+    localPort: 0,
+    broadcastAddress: '255.255.255.255',
+    apduTimeoutMs: 3_000,
+    apduRetries: 3,
+    discoveryTimeoutMs: 1_000,
+    maxApduLength: 1476,
+    foreignDevice: null,
+    cov: null,
+  };
+}
+
+function defaultSiemensS7Settings(): SiemensS7ConnectionSettings {
+  return {
+    rack: 0,
+    slot: 1,
+    pduSize: 480,
+    connectTimeoutMs: 5_000,
+    requestTimeoutMs: 10_000,
+  };
+}
+
+function defaultOmronFinsSettings(): OmronFinsConnectionSettings {
+  return {
+    transport: 'udp',
+    sourceNetwork: 0,
+    sourceNode: 1,
+    sourceUnit: 0,
+    destinationNetwork: 0,
+    destinationNode: 0,
+    destinationUnit: 0,
+    timeoutMs: 2_000,
+    wordOrder: 'low_word_first',
+  };
+}
 
 export function ProtocolConnectionsPage({
   connections = [],
@@ -49,6 +122,7 @@ export function ProtocolConnectionsPage({
   onDeleteConnection,
   onSaveConnection,
   onValidateConnection,
+  protocolCatalog,
   selectedEdgeId = edges[0]?.edgeId ?? '',
 }: {
   connections?: ProtocolConnectionResponse[];
@@ -71,8 +145,10 @@ export function ProtocolConnectionsPage({
   onValidateConnection?: (
     edgeId: string,
   ) => Promise<ManagementActionResponse> | ManagementActionResponse;
+  protocolCatalog?: RuntimeProtocolDescriptor[];
   selectedEdgeId?: string;
 }) {
+  const protocolOptions = protocolOptionsFromCatalog(protocolCatalog);
   const [selectedConnectionId, setSelectedConnectionId] = useState(
     () => connections[0]?.connectionId ?? '',
   );
@@ -92,6 +168,7 @@ export function ProtocolConnectionsPage({
     endpoint: '/dev/ttyUSB0',
     protocolType: 'ModbusRtu',
     serial: serialDefaultsForProtocol('ModbusRtu', '/dev/ttyUSB0'),
+    circuitBreaker: defaultCircuitBreaker(),
   });
   const [validateState, setValidateState] = useState<'idle' | 'validating'>('idle');
   const [toolbarMessage, setToolbarMessage] = useState('');
@@ -156,6 +233,25 @@ export function ProtocolConnectionsPage({
               createForm.endpoint ?? '/dev/ttyUSB0',
             )
           : null,
+        ...(isIec101Protocol(createForm.protocolType)
+          ? { iec101: createForm.iec101 ?? defaultIec101Settings() }
+          : {}),
+        ...(isIec104Protocol(createForm.protocolType)
+          ? { iec104: createForm.iec104 ?? defaultIec104Settings() }
+          : {}),
+        opcUa: isOpcUaProtocol(createForm.protocolType)
+          ? createForm.opcUa ?? defaultOpcUaSettings()
+          : null,
+        ...(isBacnetIpProtocol(createForm.protocolType)
+          ? { bacnetIp: createForm.bacnetIp ?? defaultBacnetIpSettings() }
+          : {}),
+        ...(isSiemensS7Protocol(createForm.protocolType)
+          ? { siemensS7: createForm.siemensS7 ?? defaultSiemensS7Settings() }
+          : {}),
+        ...(isOmronFinsProtocol(createForm.protocolType)
+          ? { omronFins: createForm.omronFins ?? defaultOmronFinsSettings() }
+          : {}),
+        circuitBreaker: createForm.circuitBreaker ?? defaultCircuitBreaker(),
       });
       if (created) {
         setSelectedConnectionId(created.connectionId);
@@ -274,13 +370,31 @@ export function ProtocolConnectionsPage({
                   onChange={(event) => {
                     const protocolType = event.target.value;
                     setCreateForm((current) => {
-                      const endpoint = current.endpoint ?? '/dev/ttyUSB0';
+                      const endpoint = endpointForProtocol(protocolType, current.endpoint);
                       return {
                         ...current,
                         endpoint,
                         protocolType,
                         serial: isSerialProtocol(protocolType)
                           ? serialDefaultsForProtocol(protocolType, endpoint)
+                          : null,
+                        iec101: isIec101Protocol(protocolType)
+                          ? current.iec101 ?? defaultIec101Settings()
+                          : null,
+                        iec104: isIec104Protocol(protocolType)
+                          ? current.iec104 ?? defaultIec104Settings()
+                          : null,
+                        opcUa: isOpcUaProtocol(protocolType)
+                          ? current.opcUa ?? defaultOpcUaSettings()
+                          : null,
+                        bacnetIp: isBacnetIpProtocol(protocolType)
+                          ? current.bacnetIp ?? defaultBacnetIpSettings()
+                          : null,
+                        siemensS7: isSiemensS7Protocol(protocolType)
+                          ? current.siemensS7 ?? defaultSiemensS7Settings()
+                          : null,
+                        omronFins: isOmronFinsProtocol(protocolType)
+                          ? current.omronFins ?? defaultOmronFinsSettings()
                           : null,
                       };
                     });
@@ -347,6 +461,67 @@ export function ProtocolConnectionsPage({
                   />
                 </label>
               )}
+              {isIec104Protocol(createForm.protocolType) ? (
+                <Iec104Fields
+                  idPrefix="新建"
+                  value={createForm.iec104 ?? defaultIec104Settings()}
+                  onChange={(iec104) =>
+                    setCreateForm((current) => ({ ...current, iec104 }))
+                  }
+                />
+              ) : null}
+              {isIec101Protocol(createForm.protocolType) ? (
+                <Iec101Fields
+                  idPrefix="新建"
+                  value={createForm.iec101 ?? defaultIec101Settings()}
+                  onChange={(iec101) =>
+                    setCreateForm((current) => ({ ...current, iec101 }))
+                  }
+                />
+              ) : null}
+              {isOpcUaProtocol(createForm.protocolType) ? (
+                <OpcUaFields
+                  idPrefix="新建"
+                  value={createForm.opcUa ?? defaultOpcUaSettings()}
+                  onChange={(opcUa) =>
+                    setCreateForm((current) => ({ ...current, opcUa }))
+                  }
+                />
+              ) : null}
+              {isBacnetIpProtocol(createForm.protocolType) ? (
+                <BacnetIpFields
+                  idPrefix="新建"
+                  value={createForm.bacnetIp ?? defaultBacnetIpSettings()}
+                  onChange={(bacnetIp) =>
+                    setCreateForm((current) => ({ ...current, bacnetIp }))
+                  }
+                />
+              ) : null}
+              {isSiemensS7Protocol(createForm.protocolType) ? (
+                <SiemensS7Fields
+                  idPrefix="新建"
+                  value={createForm.siemensS7 ?? defaultSiemensS7Settings()}
+                  onChange={(siemensS7) =>
+                    setCreateForm((current) => ({ ...current, siemensS7 }))
+                  }
+                />
+              ) : null}
+              {isOmronFinsProtocol(createForm.protocolType) ? (
+                <OmronFinsFields
+                  idPrefix="新建"
+                  value={createForm.omronFins ?? defaultOmronFinsSettings()}
+                  onChange={(omronFins) =>
+                    setCreateForm((current) => ({ ...current, omronFins }))
+                  }
+                />
+              ) : null}
+              <CircuitBreakerFields
+                idPrefix="新建"
+                value={createForm.circuitBreaker ?? defaultCircuitBreaker()}
+                onChange={(circuitBreaker) =>
+                  setCreateForm((current) => ({ ...current, circuitBreaker }))
+                }
+              />
             </div>
             <div className="modal-actions">
               <button
@@ -474,7 +649,7 @@ export function ProtocolConnectionsPage({
         {isConfigureMode && editDialogOpen ? (
           <Drawer
           onClose={() => setEditDialogOpen(false)}
-          subtitle="保存后进入待发布配置，发布后边端 runtime 重新建立协议会话"
+          subtitle="保存并通过校验后自动同步，边端 runtime 平滑重建协议会话"
           title={`编辑连接 ${selectedConnection.connectionId}`}
           footer={
             <>
@@ -567,6 +742,60 @@ export function ProtocolConnectionsPage({
                   />
                 </label>
               )}
+              {isIec104Protocol(form.protocolType) ? (
+                <Iec104Fields
+                  value={form.iec104}
+                  onChange={(iec104) => setForm((current) => ({ ...current, iec104 }))}
+                />
+              ) : null}
+              {isIec101Protocol(form.protocolType) ? (
+                <Iec101Fields
+                  value={form.iec101}
+                  onChange={(iec101) => setForm((current) => ({ ...current, iec101 }))}
+                />
+              ) : null}
+              {isOpcUaProtocol(form.protocolType) ? (
+                <OpcUaFields
+                  value={form.opcUa}
+                  onChange={(opcUa) => setForm((current) => ({ ...current, opcUa }))}
+                />
+              ) : null}
+              {isBacnetIpProtocol(form.protocolType) ? (
+                <BacnetIpFields
+                  value={form.bacnetIp}
+                  onChange={(bacnetIp) =>
+                    setForm((current) => ({ ...current, bacnetIp }))
+                  }
+                />
+              ) : null}
+              {isSiemensS7Protocol(form.protocolType) ? (
+                <SiemensS7Fields
+                  value={form.siemensS7}
+                  onChange={(siemensS7) =>
+                    setForm((current) => ({ ...current, siemensS7 }))
+                  }
+                />
+              ) : null}
+              {isOmronFinsProtocol(form.protocolType) ? (
+                <OmronFinsFields
+                  value={form.omronFins}
+                  onChange={(omronFins) =>
+                    setForm((current) => ({ ...current, omronFins }))
+                  }
+                />
+              ) : null}
+            </div>
+          </section>
+          <section className="drawer-section">
+            <h4>故障保护</h4>
+            <p className="section-hint">设备持续异常时暂停南向访问，冷却后自动探测恢复。</p>
+            <div className="editor-grid">
+              <CircuitBreakerFields
+                value={form.circuitBreaker}
+                onChange={(circuitBreaker) =>
+                  setForm((current) => ({ ...current, circuitBreaker }))
+                }
+              />
             </div>
           </section>
           <DrawerSection
@@ -589,12 +818,26 @@ interface EditorForm {
   endpoint: string;
   protocolType: string;
   serial: NonNullable<CreateProtocolConnectionRequest['serial']>;
+  iec101: Iec101ConnectionSettings;
+  iec104: Iec104ConnectionSettings;
+  opcUa: OpcUaConnectionSettings;
+  bacnetIp: BacnetIpConnectionSettings;
+  siemensS7: SiemensS7ConnectionSettings;
+  omronFins: OmronFinsConnectionSettings;
+  circuitBreaker: ProtocolCircuitBreakerConfig;
 }
 
 function connectionToEditorForm(connection: ProtocolConnectionResponse): EditorForm {
   return {
     endpoint: connection.endpoint,
     protocolType: connection.protocolType || inferProtocolType(connection.protocol),
+    circuitBreaker: connection.circuitBreaker ?? defaultCircuitBreaker(),
+    iec101: connection.iec101 ?? defaultIec101Settings(),
+    iec104: connection.iec104 ?? defaultIec104Settings(),
+    opcUa: connection.opcUa ?? defaultOpcUaSettings(),
+    bacnetIp: connection.bacnetIp ?? defaultBacnetIpSettings(),
+    siemensS7: connection.siemensS7 ?? defaultSiemensS7Settings(),
+    omronFins: connection.omronFins ?? defaultOmronFinsSettings(),
     serial:
       connection.serial ??
       serialDefaultsForProtocol(
@@ -606,6 +849,53 @@ function connectionToEditorForm(connection: ProtocolConnectionResponse): EditorF
 
 function isSerialProtocol(protocolType: string | undefined): boolean {
   return ['ModbusRtu', 'Dlt645', 'Iec101', 'CustomSerial'].includes(protocolType ?? '');
+}
+
+function isOpcUaProtocol(protocolType: string | undefined): boolean {
+  return protocolType === 'OpcUa';
+}
+
+function isIec104Protocol(protocolType: string | undefined): boolean {
+  return protocolType === 'Iec104';
+}
+
+function isIec101Protocol(protocolType: string | undefined): boolean {
+  return protocolType === 'Iec101';
+}
+
+function isBacnetIpProtocol(protocolType: string | undefined): boolean {
+  return protocolType === 'BacnetIp';
+}
+
+function isSiemensS7Protocol(protocolType: string | undefined): boolean {
+  return protocolType === 'SiemensS7';
+}
+
+function isOmronFinsProtocol(protocolType: string | undefined): boolean {
+  return protocolType === 'OmronFins';
+}
+
+function endpointForProtocol(protocolType: string, endpoint: string | null | undefined): string {
+  const current = endpoint?.trim() ?? '';
+  if (isOpcUaProtocol(protocolType)) {
+    return current.startsWith('opc.tcp://') ? current : 'opc.tcp://127.0.0.1:4840';
+  }
+  if (isBacnetIpProtocol(protocolType)) {
+    return current && !current.startsWith('/dev/') ? current : '127.0.0.1:47808';
+  }
+  if (isSiemensS7Protocol(protocolType)) {
+    return current && !current.startsWith('/dev/') ? current : '127.0.0.1:102';
+  }
+  if (isOmronFinsProtocol(protocolType)) {
+    return current && !current.startsWith('/dev/') ? current : '127.0.0.1:9600';
+  }
+  if (isSerialProtocol(protocolType)) {
+    return current.startsWith('/dev/') ? current : '/dev/ttyUSB0';
+  }
+  if (protocolType === 'Iec104') {
+    return current && !current.startsWith('/dev/') ? current : '127.0.0.1:2404';
+  }
+  return current && !current.startsWith('/dev/') ? current : '127.0.0.1:502';
 }
 
 function serialDefaultsForProtocol(
@@ -622,12 +912,26 @@ function serialDefaultsForProtocol(
 }
 
 function applyProtocolToEditorForm(form: EditorForm, protocolType: string): EditorForm {
+  const endpoint = endpointForProtocol(protocolType, form.endpoint);
   return {
     ...form,
+    endpoint,
     protocolType,
     serial: isSerialProtocol(protocolType)
-      ? serialDefaultsForProtocol(protocolType, form.serial.port || form.endpoint)
+      ? serialDefaultsForProtocol(protocolType, form.serial.port || endpoint)
       : form.serial,
+    iec101: isIec101Protocol(protocolType) ? form.iec101 : defaultIec101Settings(),
+    iec104: isIec104Protocol(protocolType) ? form.iec104 : defaultIec104Settings(),
+    opcUa: isOpcUaProtocol(protocolType) ? form.opcUa : defaultOpcUaSettings(),
+    bacnetIp: isBacnetIpProtocol(protocolType)
+      ? form.bacnetIp
+      : defaultBacnetIpSettings(),
+    siemensS7: isSiemensS7Protocol(protocolType)
+      ? form.siemensS7
+      : defaultSiemensS7Settings(),
+    omronFins: isOmronFinsProtocol(protocolType)
+      ? form.omronFins
+      : defaultOmronFinsSettings(),
   };
 }
 
@@ -637,12 +941,808 @@ function requestFromEditor(form: EditorForm): SaveProtocolConnectionRequest {
       endpoint: form.serial.port.trim() || null,
       protocolType: form.protocolType,
       serial: { ...form.serial, port: form.serial.port.trim() },
+      ...(isIec101Protocol(form.protocolType) ? { iec101: form.iec101 } : {}),
+      iec104: null,
+      opcUa: null,
+      circuitBreaker: form.circuitBreaker,
     };
   }
   return {
     endpoint: form.endpoint.trim() || null,
     protocolType: form.protocolType,
+    ...(isIec104Protocol(form.protocolType) ? { iec104: form.iec104 } : {}),
+    opcUa: isOpcUaProtocol(form.protocolType) ? form.opcUa : null,
+    ...(isBacnetIpProtocol(form.protocolType) ? { bacnetIp: form.bacnetIp } : {}),
+    ...(isSiemensS7Protocol(form.protocolType)
+      ? { siemensS7: form.siemensS7 }
+      : {}),
+    ...(isOmronFinsProtocol(form.protocolType)
+      ? { omronFins: form.omronFins }
+      : {}),
+    circuitBreaker: form.circuitBreaker,
   };
+}
+
+function Iec101Fields({
+  idPrefix = '',
+  onChange,
+  value,
+}: {
+  idPrefix?: string;
+  onChange: (value: Iec101ConnectionSettings) => void;
+  value: Iec101ConnectionSettings;
+}) {
+  return (
+    <label className="editor-control">
+      <span>CP56Time2a 站端时区偏移（分钟）</span>
+      <input
+        aria-label={`${idPrefix}IEC 101 CP56 时区偏移`}
+        max={840}
+        min={-840}
+        step={15}
+        type="number"
+        value={value.cp56TimeZoneOffsetMinutes}
+        onChange={(event) =>
+          onChange({ cp56TimeZoneOffsetMinutes: Number(event.target.value) })
+        }
+      />
+    </label>
+  );
+}
+
+function Iec104Fields({
+  idPrefix = '',
+  onChange,
+  value,
+}: {
+  idPrefix?: string;
+  onChange: (value: Iec104ConnectionSettings) => void;
+  value: Iec104ConnectionSettings;
+}) {
+  return (
+    <label className="editor-control">
+      <span>CP56Time2a 时区偏移（分钟）</span>
+      <input
+        aria-label={`${idPrefix}CP56 时区偏移`}
+        max={840}
+        min={-840}
+        step={15}
+        type="number"
+        value={value.cp56TimeZoneOffsetMinutes}
+        onChange={(event) =>
+          onChange({ cp56TimeZoneOffsetMinutes: Number(event.target.value) })
+        }
+      />
+    </label>
+  );
+}
+
+function SiemensS7Fields({
+  idPrefix = '',
+  onChange,
+  value,
+}: {
+  idPrefix?: string;
+  onChange: (value: SiemensS7ConnectionSettings) => void;
+  value: SiemensS7ConnectionSettings;
+}) {
+  const label = (text: string) => `${idPrefix}${text}`;
+  return (
+    <>
+      <S7NumberField
+        label={label('S7 Rack')}
+        title="Rack"
+        min={0}
+        max={7}
+        value={value.rack}
+        onChange={(rack) => onChange({ ...value, rack })}
+      />
+      <S7NumberField
+        label={label('S7 Slot')}
+        title="Slot"
+        min={0}
+        max={31}
+        value={value.slot}
+        onChange={(slot) => onChange({ ...value, slot })}
+      />
+      <label className="editor-control">
+        <span>PDU 大小</span>
+        <select
+          aria-label={label('S7 PDU 大小')}
+          value={value.pduSize}
+          onChange={(event) =>
+            onChange({
+              ...value,
+              pduSize: Number(event.target.value) as SiemensS7ConnectionSettings['pduSize'],
+            })
+          }
+        >
+          <option value={240}>240 bytes</option>
+          <option value={480}>480 bytes</option>
+          <option value={960}>960 bytes</option>
+        </select>
+      </label>
+      <S7NumberField
+        label={label('S7 连接超时')}
+        title="连接超时（ms）"
+        min={100}
+        max={120_000}
+        value={value.connectTimeoutMs}
+        onChange={(connectTimeoutMs) => onChange({ ...value, connectTimeoutMs })}
+      />
+      <S7NumberField
+        label={label('S7 请求超时')}
+        title="请求超时（ms）"
+        min={100}
+        max={120_000}
+        value={value.requestTimeoutMs}
+        onChange={(requestTimeoutMs) => onChange({ ...value, requestTimeoutMs })}
+      />
+    </>
+  );
+}
+
+function S7NumberField({
+  label,
+  max,
+  min,
+  onChange,
+  title,
+  value,
+}: {
+  label: string;
+  max: number;
+  min: number;
+  onChange: (value: number) => void;
+  title: string;
+  value: number;
+}) {
+  return (
+    <label className="editor-control">
+      <span>{title}</span>
+      <input
+        aria-label={label}
+        max={max}
+        min={min}
+        type="number"
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
+  );
+}
+
+function OmronFinsFields({
+  idPrefix = '',
+  onChange,
+  value,
+}: {
+  idPrefix?: string;
+  onChange: (value: OmronFinsConnectionSettings) => void;
+  value: OmronFinsConnectionSettings;
+}) {
+  const label = (text: string) => `${idPrefix}${text}`;
+  const numberField = (
+    title: string,
+    key: keyof Omit<OmronFinsConnectionSettings, 'transport' | 'wordOrder'>,
+    min: number,
+    max: number,
+  ) => (
+    <label className="editor-control" key={key}>
+      <span>{title}</span>
+      <input
+        aria-label={label(`FINS ${title}`)}
+        min={min}
+        max={max}
+        type="number"
+        value={value[key]}
+        onChange={(event) =>
+          onChange({ ...value, [key]: Number(event.target.value) })
+        }
+      />
+    </label>
+  );
+  return (
+    <>
+      <label className="editor-control">
+        <span>传输方式</span>
+        <select
+          aria-label={label('FINS 传输方式')}
+          value={value.transport}
+          onChange={(event) => {
+            const transport = event.target.value as OmronFinsConnectionSettings['transport'];
+            onChange({
+              ...value,
+              transport,
+              sourceNode: transport === 'udp' && value.sourceNode === 0 ? 1 : value.sourceNode,
+            });
+          }}
+        >
+          <option value="udp">FINS/UDP</option>
+          <option value="tcp">FINS/TCP（节点握手）</option>
+        </select>
+      </label>
+      {numberField('源网络号', 'sourceNetwork', 0, 127)}
+      {numberField('源节点号', 'sourceNode', value.transport === 'tcp' ? 0 : 1, 254)}
+      {numberField('源单元号', 'sourceUnit', 0, 255)}
+      {numberField('目标网络号', 'destinationNetwork', 0, 127)}
+      {numberField('目标节点号', 'destinationNode', 0, 254)}
+      {numberField('目标单元号', 'destinationUnit', 0, 255)}
+      {numberField('请求超时（ms）', 'timeoutMs', 100, 120_000)}
+      <label className="editor-control">
+        <span>双字字序</span>
+        <select
+          aria-label={label('FINS 双字字序')}
+          value={value.wordOrder}
+          onChange={(event) =>
+            onChange({
+              ...value,
+              wordOrder: event.target.value as OmronFinsConnectionSettings['wordOrder'],
+            })
+          }
+        >
+          <option value="low_word_first">低字在前（Omron 默认）</option>
+          <option value="high_word_first">高字在前</option>
+        </select>
+      </label>
+    </>
+  );
+}
+
+function BacnetIpFields({
+  idPrefix = '',
+  onChange,
+  value,
+}: {
+  idPrefix?: string;
+  onChange: (value: BacnetIpConnectionSettings) => void;
+  value: BacnetIpConnectionSettings;
+}) {
+  const label = (text: string) => `${idPrefix}${text}`;
+  return (
+    <>
+      <label className="editor-control">
+        <span>绑定网卡地址</span>
+        <input
+          aria-label={label('BACnet 绑定网卡地址')}
+          placeholder="0.0.0.0"
+          value={value.bindAddress}
+          onChange={(event) => onChange({ ...value, bindAddress: event.target.value })}
+        />
+      </label>
+      <label className="editor-control">
+        <span>本地 UDP 端口</span>
+        <input
+          aria-label={label('BACnet 本地 UDP 端口')}
+          max={65535}
+          min={0}
+          type="number"
+          value={value.localPort}
+          onChange={(event) => onChange({ ...value, localPort: Number(event.target.value) })}
+        />
+      </label>
+      <label className="editor-control">
+        <span>广播地址</span>
+        <input
+          aria-label={label('BACnet 广播地址')}
+          placeholder="255.255.255.255"
+          value={value.broadcastAddress}
+          onChange={(event) =>
+            onChange({ ...value, broadcastAddress: event.target.value })
+          }
+        />
+      </label>
+      <label className="editor-control">
+        <span>最大 APDU</span>
+        <select
+          aria-label={label('BACnet 最大 APDU')}
+          value={value.maxApduLength}
+          onChange={(event) =>
+            onChange({
+              ...value,
+              maxApduLength: Number(event.target.value) as BacnetIpConnectionSettings['maxApduLength'],
+            })
+          }
+        >
+          {[50, 128, 206, 480, 1024, 1476].map((size) => (
+            <option key={size} value={size}>{size} bytes</option>
+          ))}
+        </select>
+      </label>
+      <BacnetNumberField
+        label={label('BACnet APDU 超时')}
+        title="APDU 超时（ms）"
+        min={100}
+        max={120_000}
+        value={value.apduTimeoutMs}
+        onChange={(apduTimeoutMs) => onChange({ ...value, apduTimeoutMs })}
+      />
+      <BacnetNumberField
+        label={label('BACnet APDU 重试')}
+        title="APDU 重试次数"
+        min={0}
+        max={10}
+        value={value.apduRetries}
+        onChange={(apduRetries) => onChange({ ...value, apduRetries })}
+      />
+      <BacnetNumberField
+        label={label('BACnet 发现超时')}
+        title="设备发现超时（ms）"
+        min={100}
+        max={30_000}
+        value={value.discoveryTimeoutMs}
+        onChange={(discoveryTimeoutMs) => onChange({ ...value, discoveryTimeoutMs })}
+      />
+      <label className="mqtt-toggle-field editor-control">
+        <span>
+          <strong>BBMD 外部设备</strong>
+          <small>跨子网时向 BBMD 注册并自动续租</small>
+        </span>
+        <input
+          aria-label={label('BACnet BBMD 外部设备')}
+          checked={value.foreignDevice != null}
+          type="checkbox"
+          onChange={(event) =>
+            onChange({
+              ...value,
+              foreignDevice: event.target.checked
+                ? { bbmdAddress: '127.0.0.1:47808', ttlSeconds: 120 }
+                : null,
+            })
+          }
+        />
+        <i aria-hidden="true" />
+      </label>
+      {value.foreignDevice ? (
+        <>
+          <label className="editor-control">
+            <span>BBMD 地址</span>
+            <input
+              aria-label={label('BACnet BBMD 地址')}
+              placeholder="10.12.0.10:47808"
+              value={value.foreignDevice.bbmdAddress}
+              onChange={(event) =>
+                onChange({
+                  ...value,
+                  foreignDevice: {
+                    ...value.foreignDevice!,
+                    bbmdAddress: event.target.value,
+                  },
+                })
+              }
+            />
+          </label>
+          <BacnetNumberField
+            label={label('BACnet BBMD TTL')}
+            title="注册有效期（秒）"
+            min={30}
+            max={65_535}
+            value={value.foreignDevice.ttlSeconds}
+            onChange={(ttlSeconds) =>
+              onChange({
+                ...value,
+                foreignDevice: { ...value.foreignDevice!, ttlSeconds },
+              })
+            }
+          />
+        </>
+      ) : null}
+      <label className="mqtt-toggle-field editor-control">
+        <span>
+          <strong>COV 变化订阅</strong>
+          <small>设备变化时主动上送，异常时自动恢复轮询</small>
+        </span>
+        <input
+          aria-label={label('BACnet COV 变化订阅')}
+          checked={value.cov != null}
+          type="checkbox"
+          onChange={(event) =>
+            onChange({
+              ...value,
+              cov: event.target.checked
+                ? {
+                    lifetimeSeconds: 300,
+                    confirmedNotifications: false,
+                    fallbackPollIntervalMs: 60_000,
+                  }
+                : null,
+            })
+          }
+        />
+        <i aria-hidden="true" />
+      </label>
+      {value.cov ? (
+        <>
+          <BacnetNumberField
+            label={label('BACnet COV 租期')}
+            title="订阅租期（秒）"
+            min={60}
+            max={86_400}
+            value={value.cov.lifetimeSeconds}
+            onChange={(lifetimeSeconds) =>
+              onChange({
+                ...value,
+                cov: { ...value.cov!, lifetimeSeconds },
+              })
+            }
+          />
+          <BacnetNumberField
+            label={label('BACnet COV 降级轮询')}
+            title="降级轮询间隔（ms）"
+            min={1_000}
+            max={3_600_000}
+            value={value.cov.fallbackPollIntervalMs}
+            onChange={(fallbackPollIntervalMs) =>
+              onChange({
+                ...value,
+                cov: { ...value.cov!, fallbackPollIntervalMs },
+              })
+            }
+          />
+          <label className="mqtt-toggle-field editor-control">
+            <span>
+              <strong>确认型通知</strong>
+              <small>要求 Runtime 对每条 COV 通知应答</small>
+            </span>
+            <input
+              aria-label={label('BACnet COV 确认型通知')}
+              checked={value.cov.confirmedNotifications}
+              type="checkbox"
+              onChange={(event) =>
+                onChange({
+                  ...value,
+                  cov: {
+                    ...value.cov!,
+                    confirmedNotifications: event.target.checked,
+                  },
+                })
+              }
+            />
+            <i aria-hidden="true" />
+          </label>
+        </>
+      ) : null}
+    </>
+  );
+}
+
+function BacnetNumberField({
+  label,
+  max,
+  min,
+  onChange,
+  title,
+  value,
+}: {
+  label: string;
+  max: number;
+  min: number;
+  onChange: (value: number) => void;
+  title: string;
+  value: number;
+}) {
+  return (
+    <label className="editor-control">
+      <span>{title}</span>
+      <input
+        aria-label={label}
+        max={max}
+        min={min}
+        type="number"
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
+  );
+}
+
+function OpcUaFields({
+  idPrefix = '',
+  onChange,
+  value,
+}: {
+  idPrefix?: string;
+  onChange: (value: OpcUaConnectionSettings) => void;
+  value: OpcUaConnectionSettings;
+}) {
+  const label = (text: string) => `${idPrefix}${text}`;
+  return (
+    <>
+      <label className="editor-control">
+        <span>安全策略</span>
+        <select
+          aria-label={label('OPC UA 安全策略')}
+          value={value.securityPolicy}
+          onChange={(event) => {
+            const securityPolicy = event.target
+              .value as OpcUaConnectionSettings['securityPolicy'];
+            onChange({
+              ...value,
+              securityPolicy,
+              messageSecurityMode:
+                securityPolicy === 'none'
+                  ? 'none'
+                  : value.messageSecurityMode === 'none'
+                    ? 'sign_and_encrypt'
+                    : value.messageSecurityMode,
+            });
+          }}
+        >
+          <option value="none">None</option>
+          <option value="basic256_sha256">Basic256Sha256</option>
+          <option value="aes128_sha256_rsa_oaep">Aes128-Sha256-RsaOaep</option>
+          <option value="aes256_sha256_rsa_pss">Aes256-Sha256-RsaPss</option>
+        </select>
+      </label>
+      <label className="editor-control">
+        <span>消息安全模式</span>
+        <select
+          aria-label={label('OPC UA 消息安全模式')}
+          value={value.messageSecurityMode}
+          onChange={(event) =>
+            onChange({
+              ...value,
+              messageSecurityMode: event.target
+                .value as OpcUaConnectionSettings['messageSecurityMode'],
+            })
+          }
+        >
+          <option value="none" disabled={value.securityPolicy !== 'none'}>
+            None
+          </option>
+          <option value="sign" disabled={value.securityPolicy === 'none'}>
+            Sign
+          </option>
+          <option value="sign_and_encrypt" disabled={value.securityPolicy === 'none'}>
+            Sign &amp; Encrypt
+          </option>
+        </select>
+      </label>
+      <label className="editor-control">
+        <span>身份认证</span>
+        <select
+          aria-label={label('OPC UA 身份认证')}
+          value={value.authMode}
+          onChange={(event) => {
+            const authMode = event.target.value as OpcUaConnectionSettings['authMode'];
+            onChange({
+              ...value,
+              authMode,
+              username: authMode === 'username' ? value.username : null,
+              passwordEnv: authMode === 'username' ? value.passwordEnv : null,
+              userCertificatePath:
+                authMode === 'x509' ? value.userCertificatePath : null,
+              userPrivateKeyPath:
+                authMode === 'x509' ? value.userPrivateKeyPath : null,
+            });
+          }}
+        >
+          <option value="anonymous">匿名</option>
+          <option value="username">用户名 / 密码</option>
+          <option value="x509">X.509 用户证书</option>
+        </select>
+      </label>
+      {value.authMode === 'username' ? (
+        <>
+          <label className="editor-control">
+            <span>用户名</span>
+            <input
+              aria-label={label('OPC UA 用户名')}
+              value={value.username ?? ''}
+              onChange={(event) => onChange({ ...value, username: event.target.value })}
+            />
+          </label>
+          <label className="editor-control">
+            <span>密码环境变量</span>
+            <input
+              aria-label={label('OPC UA 密码环境变量')}
+              placeholder="VELAEDGE_OPCUA_PASSWORD"
+              value={value.passwordEnv ?? ''}
+              onChange={(event) => onChange({ ...value, passwordEnv: event.target.value })}
+            />
+          </label>
+        </>
+      ) : null}
+      {value.authMode === 'x509' ? (
+        <>
+          <label className="editor-control">
+            <span>用户证书路径</span>
+            <input
+              aria-label={label('OPC UA 用户证书路径')}
+              value={value.userCertificatePath ?? ''}
+              onChange={(event) =>
+                onChange({ ...value, userCertificatePath: event.target.value })
+              }
+            />
+          </label>
+          <label className="editor-control">
+            <span>用户私钥路径</span>
+            <input
+              aria-label={label('OPC UA 用户私钥路径')}
+              value={value.userPrivateKeyPath ?? ''}
+              onChange={(event) =>
+                onChange({ ...value, userPrivateKeyPath: event.target.value })
+              }
+            />
+          </label>
+        </>
+      ) : null}
+      <label className="editor-control">
+        <span>PKI 目录</span>
+        <input
+          aria-label={label('OPC UA PKI 目录')}
+          value={value.pkiDir}
+          onChange={(event) => onChange({ ...value, pkiDir: event.target.value })}
+        />
+      </label>
+      <label className="mqtt-toggle-field editor-control">
+        <span>
+          <strong>信任未知证书</strong>
+          <small>首次接入时自动加入信任</small>
+        </span>
+        <input
+          aria-label={label('OPC UA 信任未知证书')}
+          checked={value.trustServerCerts}
+          onChange={(event) =>
+            onChange({ ...value, trustServerCerts: event.target.checked })
+          }
+          type="checkbox"
+        />
+        <i aria-hidden="true" />
+      </label>
+      <label className="mqtt-toggle-field editor-control">
+        <span>
+          <strong>校验服务端证书</strong>
+          <small>校验证书有效期、主机和用途</small>
+        </span>
+        <input
+          aria-label={label('OPC UA 校验服务端证书')}
+          checked={value.verifyServerCerts}
+          onChange={(event) =>
+            onChange({ ...value, verifyServerCerts: event.target.checked })
+          }
+          type="checkbox"
+        />
+        <i aria-hidden="true" />
+      </label>
+      <OpcUaNumberField
+        label={label('OPC UA 连接超时')}
+        title="连接超时（ms）"
+        min={100}
+        max={120_000}
+        value={value.connectTimeoutMs}
+        onChange={(connectTimeoutMs) => onChange({ ...value, connectTimeoutMs })}
+      />
+      <OpcUaNumberField
+        label={label('OPC UA 请求超时')}
+        title="请求超时（ms）"
+        min={100}
+        max={120_000}
+        value={value.requestTimeoutMs}
+        onChange={(requestTimeoutMs) => onChange({ ...value, requestTimeoutMs })}
+      />
+      <OpcUaNumberField
+        label={label('OPC UA 会话超时')}
+        title="会话超时（ms）"
+        min={1_000}
+        max={3_600_000}
+        value={value.sessionTimeoutMs}
+        onChange={(sessionTimeoutMs) => onChange({ ...value, sessionTimeoutMs })}
+      />
+      <OpcUaNumberField
+        label={label('OPC UA 重试次数')}
+        title="会话重试次数"
+        min={0}
+        max={100}
+        value={value.sessionRetryLimit}
+        onChange={(sessionRetryLimit) => onChange({ ...value, sessionRetryLimit })}
+      />
+    </>
+  );
+}
+
+function OpcUaNumberField({
+  label,
+  max,
+  min,
+  onChange,
+  title,
+  value,
+}: {
+  label: string;
+  max: number;
+  min: number;
+  onChange: (value: number) => void;
+  title: string;
+  value: number;
+}) {
+  return (
+    <label className="editor-control">
+      <span>{title}</span>
+      <input
+        aria-label={label}
+        max={max}
+        min={min}
+        onChange={(event) => onChange(Number(event.target.value))}
+        type="number"
+        value={value}
+      />
+    </label>
+  );
+}
+
+function CircuitBreakerFields({
+  idPrefix = '',
+  onChange,
+  value,
+}: {
+  idPrefix?: string;
+  onChange: (value: ProtocolCircuitBreakerConfig) => void;
+  value: ProtocolCircuitBreakerConfig;
+}) {
+  const label = (text: string) => `${idPrefix}${text}`;
+  return (
+    <>
+      <label className="mqtt-toggle-field editor-control">
+        <span>
+          <strong>自动熔断</strong>
+          <small>连续失败后暂停访问设备</small>
+        </span>
+        <input
+          aria-label={label('自动熔断')}
+          checked={value.enabled}
+          onChange={(event) => onChange({ ...value, enabled: event.target.checked })}
+          type="checkbox"
+        />
+        <i aria-hidden="true" />
+      </label>
+      <label className="editor-control">
+        <span>连续失败阈值</span>
+        <input
+          aria-label={label('连续失败阈值')}
+          disabled={!value.enabled}
+          max={100}
+          min={1}
+          onChange={(event) =>
+            onChange({ ...value, failureThreshold: Number(event.target.value) })
+          }
+          type="number"
+          value={value.failureThreshold}
+        />
+      </label>
+      <label className="editor-control">
+        <span>冷却时间（秒）</span>
+        <input
+          aria-label={label('冷却时间')}
+          disabled={!value.enabled}
+          max={3600}
+          min={1}
+          onChange={(event) =>
+            onChange({ ...value, openDurationMs: Number(event.target.value) * 1_000 })
+          }
+          type="number"
+          value={value.openDurationMs / 1_000}
+        />
+      </label>
+      <label className="editor-control">
+        <span>恢复探测成功次数</span>
+        <input
+          aria-label={label('恢复探测成功次数')}
+          disabled={!value.enabled}
+          max={10}
+          min={1}
+          onChange={(event) =>
+            onChange({
+              ...value,
+              halfOpenSuccessThreshold: Number(event.target.value),
+            })
+          }
+          type="number"
+          value={value.halfOpenSuccessThreshold}
+        />
+      </label>
+    </>
+  );
 }
 
 function SerialFields({
@@ -718,14 +1818,23 @@ function inferProtocolType(protocol: string): string {
   if (normalized.includes('opc')) {
     return 'OpcUa';
   }
+  if (normalized.includes('bacnet')) {
+    return 'BacnetIp';
+  }
   if (normalized.includes('rtu') || normalized.includes('rs485')) {
     return 'ModbusRtu';
   }
   if (normalized.includes('s7') || normalized.includes('siemens')) {
     return 'SiemensS7';
   }
+  if (normalized.includes('omron') || normalized.includes('fins')) {
+    return 'OmronFins';
+  }
   if (normalized.includes('dlt') || normalized.includes('645')) {
     return 'Dlt645';
+  }
+  if (normalized.includes('104')) {
+    return 'Iec104';
   }
   if (normalized.includes('iec')) {
     return 'Iec101';

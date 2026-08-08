@@ -7,13 +7,17 @@ use std::os::fd::FromRawFd;
 use std::time::Duration;
 
 use edge_core::{
-    DataConfig, DataConfigCollection, DataConfigPayload, DataConfigPoint, DataConfigPublish,
-    DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, PointAddress, ProtocolConnection,
-    SerialConnectionSettings, TelemetryPointMapping, TelemetryType,
+    CommandFlowConfig, CommandGraphEdge, CommandGraphNode, CommandGraphNodeKind,
+    CustomSerialChecksum, CustomSerialFrameEncoding, CustomSerialPointSpec,
+    CustomSerialValueEncoding, DataConfig, DataConfigCollection, DataConfigPayload,
+    DataConfigPoint, DataConfigPublish, DeviceInstance, EdgeConfigPackage, Iec101ControlType,
+    Iec101PointOptions, MqttUplinkConfig, PointAccess, PointAddress, ProtocolConnection,
+    ProtocolType, SerialConnectionSettings, TelemetryPointMapping, TelemetryType,
 };
 use edge_runtime::{
-    append_dlt645_checksum, append_iec101_checksum, append_modbus_rtu_crc, ConfiguredEdgeRuntime,
-    RumqttcMqttPublisher, SerialBusFactory, TokioSerialBusFactory,
+    append_custom_serial_checksum, append_dlt645_checksum, append_iec101_checksum,
+    append_modbus_rtu_crc, encode_custom_serial_frame, CommandExecutionStatus,
+    ConfiguredEdgeRuntime, RumqttcMqttPublisher, SerialBusFactory, TokioSerialBusFactory,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -107,14 +111,14 @@ async fn modbus_pty_runtime_publishes_qos1_data_config_payload() {
 #[tokio::test]
 async fn dlt645_pty_runtime_publishes_qos1_data_config_payload() {
     const METER: [u8; 6] = [0x12, 0x90, 0x78, 0x56, 0x34, 0x12];
-    const VOLTAGE_DI: u32 = 0x0001_0000;
+    const VOLTAGE_DI: u32 = 0x0201_0100;
 
     let (master, _slave_guard, slave_path) = open_raw_pty();
     let device = spawn_pty_device(
         master,
         vec![(
             dlt645_read_request(METER, VOLTAGE_DI),
-            dlt645_read_response(METER, VOLTAGE_DI, &[0x50, 0x20, 0x02]),
+            dlt645_read_response(METER, VOLTAGE_DI, &[0x05, 0x22]),
         )],
     );
     let (broker, observed) = spawn_qos1_mqtt_broker().await;
@@ -130,7 +134,7 @@ async fn dlt645_pty_runtime_publishes_qos1_data_config_payload() {
         DataConfigPoint::new(
             "voltage",
             "meter.voltage",
-            PointAddress::dlt645_scaled("123456789012", "00010000", 2),
+            PointAddress::dlt645_scaled("123456789012", "02010100", 1),
             TelemetryType::Float,
             "voltage",
         ),
@@ -145,6 +149,65 @@ async fn dlt645_pty_runtime_publishes_qos1_data_config_payload() {
     assert_eq!(payload.json["values"]["voltage"], 220.5);
     assert_eq!(payload.json["quality"]["voltage"], "good");
     device.join().expect("DL/T 645 PTY device should finish");
+}
+
+#[tokio::test]
+async fn custom_serial_v2_pty_runtime_decodes_slip_and_publishes_qos1_payload() {
+    let (master, _slave_guard, slave_path) = open_raw_pty();
+    let mut spec = CustomSerialPointSpec::new("10 02", 1, CustomSerialValueEncoding::U16Be);
+    spec.schema_version = 2;
+    spec.frame_encoding = CustomSerialFrameEncoding::Slip;
+    spec.request_checksum = CustomSerialChecksum::Crc16CcittFalse;
+    spec.response_checksum = CustomSerialChecksum::Crc16CcittFalse;
+    spec.response_prefix_hex = Some("AA".to_string());
+    spec.scale = 0.1;
+
+    let mut request = vec![0x10, 0x02];
+    append_custom_serial_checksum(&mut request, spec.request_checksum);
+    let request = encode_custom_serial_frame(&request, spec.frame_encoding).unwrap();
+    let mut response = vec![0xAA, 0x01, 0x2C];
+    append_custom_serial_checksum(&mut response, spec.response_checksum);
+    let response = encode_custom_serial_frame(&response, spec.frame_encoding).unwrap();
+    let device = spawn_pty_device(master, vec![(request, response)]);
+    let (broker, observed) = spawn_qos1_mqtt_broker().await;
+    let connection = ProtocolConnection {
+        connection_id: "custom-serial-main".to_string(),
+        protocol: ProtocolType::CustomSerial,
+        endpoint: Some(slave_path.clone()),
+        serial: Some(SerialConnectionSettings::new(slave_path, 0)),
+        iec101: None,
+        iec104: None,
+        opc_ua: None,
+        bacnet_ip: None,
+        siemens_s7: None,
+        omron_fins: None,
+        circuit_breaker: Default::default(),
+    };
+
+    let payload = run_serial_data_config(
+        "edge-lab-custom",
+        "sensor-1",
+        connection,
+        DataConfigPoint::new(
+            "temperature",
+            "sensor.temperature",
+            PointAddress::custom_serial(&spec).unwrap(),
+            TelemetryType::Float,
+            "temperature",
+        ),
+        broker,
+        observed,
+        "lab/{edge_id}/{device_id}/custom-serial",
+    )
+    .await;
+
+    assert_eq!(payload.topic, "lab/edge-lab-custom/sensor-1/custom-serial");
+    assert_eq!(payload.qos, 1);
+    assert_eq!(payload.json["values"]["temperature"], 30.0);
+    assert_eq!(payload.json["quality"]["temperature"], "good");
+    device
+        .join()
+        .expect("custom serial PTY device should finish");
 }
 
 #[tokio::test]
@@ -181,6 +244,69 @@ async fn iec101_pty_runtime_publishes_qos1_data_config_payload() {
     assert_eq!(payload.qos, 1);
     assert_eq!(payload.json["values"]["breaker_closed"], true);
     assert_eq!(payload.json["quality"]["breaker_closed"], "good");
+    device.join().expect("IEC 101 PTY device should finish");
+}
+
+#[tokio::test]
+async fn iec101_pty_runtime_executes_sbo_command_flow_over_production_serial_io() {
+    let (master, _slave_guard, slave_path) = open_raw_pty();
+    let reset = vec![0x10, 0x40, 0x01, 0x41, 0x16];
+    let select = iec101_control_request(0x53, 1, 7, 1201, 45, &[0x81]);
+    let select_confirmation = iec101_command_confirmation(1, 7, 1201, 45, &[0x81]);
+    let execute = iec101_control_request(0x73, 1, 7, 1201, 45, &[0x01]);
+    let execute_confirmation = iec101_command_confirmation(1, 7, 1201, 45, &[0x01]);
+    let device = spawn_pty_device(
+        master,
+        vec![
+            (reset, vec![0xE5]),
+            (select, select_confirmation),
+            (execute, execute_confirmation),
+        ],
+    );
+    let connection = ProtocolConnection::iec101_serial(
+        "iec101-main",
+        SerialConnectionSettings::new(slave_path, 0).with_parity("even"),
+    );
+    let mapping = TelemetryPointMapping::new(
+        "breaker_close",
+        "bay-1",
+        "breaker.close",
+        "iec101-main",
+        PointAddress::iec101(1, 7, 1201),
+        TelemetryType::Boolean,
+    )
+    .with_access(PointAccess::ReadWrite)
+    .with_iec101_options(
+        Iec101PointOptions::new(Iec101ControlType::SingleCommand).with_select_before_operate(true),
+    );
+    let package = EdgeConfigPackage::new("edge-lab-iec101", "lab-iec101-control-v1")
+        .with_device(DeviceInstance::new("bay-1", "substation-bay"))
+        .with_protocol_connection(connection)
+        .with_mqtt_uplink(MqttUplinkConfig::velamq(
+            "lab-mqtt",
+            "mqtt://127.0.0.1:1883",
+            "iec101-command-runtime",
+        ))
+        .with_point_mapping(mapping)
+        .with_command_flow(iec101_command_flow());
+    let mut runtime = ConfiguredEdgeRuntime::new(package, TokioSerialBusFactory)
+        .expect("production runtime should accept IEC 101 writable point config");
+
+    let report = runtime
+        .execute_command_flow_message(
+            "breaker-control",
+            br#"{"commandId":"cmd-iec101-pty","value":true}"#,
+        )
+        .await
+        .expect("IEC 101 PTY command flow should succeed");
+
+    assert_eq!(report.status, CommandExecutionStatus::Succeeded);
+    assert_eq!(report.writes.len(), 1);
+    assert!(report.writes[0].verified);
+    assert_eq!(
+        report.replies[0].topic,
+        "lab/edge-lab-iec101/reply/cmd-iec101-pty"
+    );
     device.join().expect("IEC 101 PTY device should finish");
 }
 
@@ -377,6 +503,61 @@ fn iec101_monitoring_response(
     body.extend([ioa as u8, (ioa >> 8) as u8, (ioa >> 16) as u8]);
     body.extend_from_slice(information);
     iec101_variable_frame(body)
+}
+
+fn iec101_control_request(
+    control: u8,
+    link_address: u8,
+    common_address: u16,
+    ioa: u32,
+    type_id: u8,
+    information: &[u8],
+) -> Vec<u8> {
+    let mut body = vec![control, link_address, type_id, 1, 6, 0];
+    body.extend(common_address.to_le_bytes());
+    body.extend([ioa as u8, (ioa >> 8) as u8, (ioa >> 16) as u8]);
+    body.extend_from_slice(information);
+    iec101_variable_frame(body)
+}
+
+fn iec101_command_confirmation(
+    link_address: u8,
+    common_address: u16,
+    ioa: u32,
+    type_id: u8,
+    information: &[u8],
+) -> Vec<u8> {
+    let mut body = vec![0x08, link_address, type_id, 1, 7, 0];
+    body.extend(common_address.to_le_bytes());
+    body.extend([ioa as u8, (ioa >> 8) as u8, (ioa >> 16) as u8]);
+    body.extend_from_slice(information);
+    iec101_variable_frame(body)
+}
+
+fn iec101_command_flow() -> CommandFlowConfig {
+    CommandFlowConfig::new(
+        "breaker-control",
+        "断路器控制",
+        "lab-mqtt",
+        "lab/edge-lab-iec101/command",
+        "lab/{edge_id}/reply/{command_id}",
+    )
+    .with_node(CommandGraphNode::new(
+        "input",
+        CommandGraphNodeKind::MqttInput,
+        "MQTT 输入",
+    ))
+    .with_node(
+        CommandGraphNode::new("write", CommandGraphNodeKind::PointWrite, "写断路器")
+            .with_ref("breaker_close"),
+    )
+    .with_node(CommandGraphNode::new(
+        "reply",
+        CommandGraphNodeKind::MqttReply,
+        "MQTT 回执",
+    ))
+    .with_edge(CommandGraphEdge::new("input-write", "input", "write"))
+    .with_edge(CommandGraphEdge::new("write-reply", "write", "reply"))
 }
 
 fn iec101_variable_frame(body: Vec<u8>) -> Vec<u8> {

@@ -1,0 +1,20 @@
+services:
+  modbus-device:
+    image: velaedge/modbus-device:0.1.0
+    build:
+      context: .
+    environment:
+      MODBUS_BIND_HOST: 0.0.0.0
+      MODBUS_PORT: 502
+      MODBUS_UNIT_ID: 1
+      UPDATE_INTERVAL_SECONDS: 1
+      PRESSURE_CENTER: 2.4
+      PRESSURE_AMPLITUDE: 0.18
+      PRESSURE_PERIOD_SECONDS: 20
+      FLOW_CENTER: 2.6
+      FLOW_AMPLITUDE: 0.12
+      FLOW_PERIOD_SECONDS: 16
+      RUNNING_PERIOD_SECONDS: 15
+    ports:
+      - "127.0.0.1:${MODBUS_HOST_PORT:-1502}:502"
+    restart: unless-stopped

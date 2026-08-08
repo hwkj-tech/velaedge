@@ -7,15 +7,26 @@ repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-opcua = { workspace = true, features = ["client"] }
 async-trait.workspace = true
+axum.workspace = true
+bacnet-client.workspace = true
+bacnet-encoding.workspace = true
+bacnet-services.workspace = true
+bacnet-transport.workspace = true
+bacnet-types.workspace = true
+bytes.workspace = true
 chrono.workspace = true
 clap.workspace = true
 edge-core = { path = "../edge-core" }
+omron-fins.workspace = true
 reqwest.workspace = true
 rocksdb.workspace = true
 rumqttc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+snap7-client.workspace = true
 sysinfo.workspace = true
 tokio.workspace = true
 tokio-serial.workspace = true
@@ -24,7 +35,13 @@ rustls-pemfile.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+voltage_iec104.workspace = true
 
 [dev-dependencies]
+async-opcua = { workspace = true, features = ["server"] }
+bacnet-network.workspace = true
+futures.workspace = true
 libc.workspace = true
+snap7-server.workspace = true
 tempfile.workspace = true
+tokio-util.workspace = true

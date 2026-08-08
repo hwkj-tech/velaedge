@@ -596,7 +596,7 @@ export function PointMappingsPage({
         {isConfigureMode && editDialogOpen ? (
           <Drawer
           onClose={() => setEditDialogOpen(false)}
-          subtitle="保存后进入待发布配置，发布后边端 runtime 执行"
+          subtitle="保存并通过校验后自动同步到边端 runtime"
           title={`点位集 ${selectedPointSet.setName}`}
           footer={
             <>
@@ -713,12 +713,16 @@ export function PointMappingsPage({
                         setForm((current) => ({
                           ...current,
                           addressKind: event.target.value,
+                          readWrite: isReadOnlyAddressKind(event.target.value)
+                            ? 'read'
+                            : current.readWrite,
                         }))
                       }
                     >
                       <option value="holding_register">保持寄存器（数值/可读写）</option>
                       <option value="input_register">输入寄存器（数值/只读）</option>
                       <option value="coil">线圈（开关量）</option>
+                      <option value="discrete_input">离散输入（开关量/只读）</option>
                       <option value="node_id">节点 ID（OPC UA）</option>
                       <option value="topic">Topic（订阅地址）</option>
                       <option value="simulated">模拟点位（测试）</option>
@@ -735,6 +739,23 @@ export function PointMappingsPage({
                         }))
                       }
                     />
+                  </label>
+                  <label className="editor-control">
+                    <span>访问权限</span>
+                    <select
+                      disabled={isReadOnlyAddressKind(form.addressKind)}
+                      value={isReadOnlyAddressKind(form.addressKind) ? 'read' : form.readWrite}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          readWrite: event.target.value as EditorForm['readWrite'],
+                        }))
+                      }
+                    >
+                      <option value="read">只读（仅采集）</option>
+                      <option value="read_write">读写（采集与指令）</option>
+                      <option value="write">只写（仅指令）</option>
+                    </select>
                   </label>
                 </div>
               </section>
@@ -914,6 +935,7 @@ interface EditorForm {
   addressKind: string;
   addressValue: string;
   intervalMs: string;
+  readWrite: 'read' | 'read_write' | 'write';
   unit: string;
 }
 
@@ -924,6 +946,7 @@ function pointToEditorForm(point: PointMappingResponse): EditorForm {
     addressKind: address.kind,
     addressValue: address.value,
     intervalMs: String(parseIntervalMs(point.interval)),
+    readWrite: normalizePointAccess(point.readWrite),
     unit: point.unit === '-' ? '' : point.unit,
   };
 }
@@ -933,8 +956,18 @@ function formToSaveRequest(form: EditorForm): SavePointMappingRequest {
     addressKind: form.addressKind.trim() || 'holding_register',
     addressValue: form.addressValue.trim(),
     intervalMs: Math.max(Number.parseInt(form.intervalMs, 10) || 1000, 100),
+    readWrite: isReadOnlyAddressKind(form.addressKind) ? 'read' : form.readWrite,
     unit: form.unit.trim() || '-',
   };
+}
+
+function isReadOnlyAddressKind(kind: string): boolean {
+  return kind === 'input_register' || kind === 'discrete_input';
+}
+
+function normalizePointAccess(value: string): EditorForm['readWrite'] {
+  if (value === 'read_write' || value === 'write') return value;
+  return 'read';
 }
 
 function splitAddress(address: string): { kind: string; value: string } {

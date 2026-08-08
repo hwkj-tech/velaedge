@@ -1,6 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use edge_core::EdgeConfigPackage;
+use edge_core::{
+    parse_iec104_point_address, parse_opc_ua_browse_path, validate_bacnet_point,
+    validate_command_flow, validate_modbus_point_options, validate_omron_fins_point,
+    validate_opc_ua_node_id, validate_siemens_s7_point, EdgeConfigPackage, ProtocolType,
+    MAX_DATA_CONFIG_RETRY_COUNT, MAX_DATA_CONFIG_TIMEOUT_MS,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -16,8 +21,8 @@ impl ConfigValidator {
         let connections = package
             .protocol_connections
             .iter()
-            .map(|connection| connection.connection_id.as_str())
-            .collect::<BTreeSet<_>>();
+            .map(|connection| (connection.connection_id.as_str(), connection))
+            .collect::<BTreeMap<_, _>>();
         let devices = package
             .devices
             .iter()
@@ -38,6 +43,17 @@ impl ConfigValidator {
             .iter()
             .map(|mapping| (mapping.point_id.as_str(), mapping))
             .collect::<BTreeMap<_, _>>();
+
+        for connection in &package.protocol_connections {
+            if let Err(message) = connection.validate() {
+                errors.push(ValidationError {
+                    message: format!(
+                        "protocol connection `{}`: {message}",
+                        connection.connection_id
+                    ),
+                });
+            }
+        }
 
         for uplink in &package.mqtt_uplinks {
             if uplink.username.is_some() != uplink.password_env.is_some() {
@@ -87,7 +103,80 @@ impl ConfigValidator {
         }
 
         for mapping in &package.point_mappings {
-            if !connections.contains(mapping.protocol_connection_id.as_str()) {
+            if let Err(message) =
+                validate_modbus_point_options(&mapping.address, mapping.value_type, mapping.access)
+            {
+                errors.push(ValidationError {
+                    message: format!("point `{}`: {message}", mapping.point_id),
+                });
+            }
+            if let Some(connection) = connections.get(mapping.protocol_connection_id.as_str()) {
+                if connection.protocol == ProtocolType::OpcUa {
+                    let validation =
+                        match mapping.address.kind.as_str() {
+                            "node_id" => validate_opc_ua_node_id(&mapping.address.value),
+                            "browse_path" => {
+                                parse_opc_ua_browse_path(&mapping.address.value).map(|_| ())
+                            }
+                            _ => Err("OPC UA address kind must be `node_id` or `browse_path`"
+                                .to_string()),
+                        };
+                    if let Err(message) = validation {
+                        errors.push(ValidationError {
+                            message: format!("point `{}`: {message}", mapping.point_id),
+                        });
+                    }
+                }
+                if connection.protocol == ProtocolType::Iec104 {
+                    if mapping.address.kind != "iec104_ioa" {
+                        errors.push(ValidationError {
+                            message: format!(
+                                "point `{}` IEC 104 address kind must be `iec104_ioa`",
+                                mapping.point_id
+                            ),
+                        });
+                    } else if let Err(message) = parse_iec104_point_address(&mapping.address.value)
+                    {
+                        errors.push(ValidationError {
+                            message: format!("point `{}`: {message}", mapping.point_id),
+                        });
+                    }
+                }
+                if connection.protocol == ProtocolType::BacnetIp {
+                    if let Err(message) = validate_bacnet_point(
+                        &mapping.address,
+                        mapping.value_type,
+                        mapping.access,
+                        mapping.bacnet,
+                    ) {
+                        errors.push(ValidationError {
+                            message: format!("point `{}`: {message}", mapping.point_id),
+                        });
+                    }
+                }
+                if connection.protocol == ProtocolType::SiemensS7 {
+                    if let Err(message) = validate_siemens_s7_point(
+                        &mapping.address,
+                        mapping.value_type,
+                        mapping.access,
+                    ) {
+                        errors.push(ValidationError {
+                            message: format!("point `{}`: {message}", mapping.point_id),
+                        });
+                    }
+                }
+                if connection.protocol == ProtocolType::OmronFins {
+                    if let Err(message) = validate_omron_fins_point(
+                        &mapping.address,
+                        mapping.value_type,
+                        mapping.access,
+                    ) {
+                        errors.push(ValidationError {
+                            message: format!("point `{}`: {message}", mapping.point_id),
+                        });
+                    }
+                }
+            } else {
                 errors.push(ValidationError {
                     message: format!(
                         "point `{}` references missing protocol connection `{}`",
@@ -157,6 +246,14 @@ impl ConfigValidator {
                         ),
                     });
                 }
+                if !mapping.access.is_readable() {
+                    errors.push(ValidationError {
+                        message: format!(
+                            "collection task `{}` references write-only point `{}`",
+                            task.task_id, point_id
+                        ),
+                    });
+                }
             }
         }
 
@@ -188,7 +285,7 @@ impl ConfigValidator {
                         data_config.config_id
                     ),
                 });
-            } else if !connections.contains(data_config.protocol_connection_id.as_str()) {
+            } else if !connections.contains_key(data_config.protocol_connection_id.as_str()) {
                 errors.push(ValidationError {
                     message: format!(
                         "data config `{}` references missing protocol connection `{}`",
@@ -209,6 +306,24 @@ impl ConfigValidator {
                     message: format!(
                         "data config `{}` collection period must be greater than zero",
                         data_config.config_id
+                    ),
+                });
+            }
+            if data_config.collection.timeout_ms == 0
+                || data_config.collection.timeout_ms > MAX_DATA_CONFIG_TIMEOUT_MS
+            {
+                errors.push(ValidationError {
+                    message: format!(
+                        "data config `{}` collection timeout must be between 1 and {} ms",
+                        data_config.config_id, MAX_DATA_CONFIG_TIMEOUT_MS
+                    ),
+                });
+            }
+            if data_config.collection.retry_count > MAX_DATA_CONFIG_RETRY_COUNT {
+                errors.push(ValidationError {
+                    message: format!(
+                        "data config `{}` collection retry count must not exceed {}",
+                        data_config.config_id, MAX_DATA_CONFIG_RETRY_COUNT
                     ),
                 });
             }
@@ -252,6 +367,14 @@ impl ConfigValidator {
                             ),
                         });
                     }
+                    if !mapping.access.is_readable() {
+                        errors.push(ValidationError {
+                            message: format!(
+                                "data config `{}` references write-only point `{}`",
+                                data_config.config_id, point.point_id
+                            ),
+                        });
+                    }
                 } else {
                     errors.push(ValidationError {
                         message: format!(
@@ -285,6 +408,30 @@ impl ConfigValidator {
                         ),
                     });
                 }
+            }
+        }
+
+        for command_flow in &package.command_flows {
+            if !command_flow.protocol_connection_id.is_empty()
+                && !connections.contains_key(command_flow.protocol_connection_id.as_str())
+            {
+                errors.push(ValidationError {
+                    message: format!(
+                        "command flow `{}` references missing protocol connection `{}`",
+                        command_flow.flow_id, command_flow.protocol_connection_id
+                    ),
+                });
+            }
+            if !mqtt_sinks.contains(command_flow.mqtt_connection_id.as_str()) {
+                errors.push(ValidationError {
+                    message: format!(
+                        "command flow `{}` references missing MQTT connection `{}`",
+                        command_flow.flow_id, command_flow.mqtt_connection_id
+                    ),
+                });
+            }
+            if let Err(message) = validate_command_flow(command_flow, &package.point_mappings) {
+                errors.push(ValidationError { message });
             }
         }
 

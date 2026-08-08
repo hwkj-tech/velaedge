@@ -431,7 +431,7 @@ export function CollectionTasksPage({
         {isConfigureMode && editDialogOpen ? (
           <Drawer
           onClose={() => setEditDialogOpen(false)}
-          subtitle="保存后进入待发布配置，发布后边端 runtime 调度执行"
+          subtitle="保存并通过校验后自动同步，边端 runtime 随即更新调度"
           title={`编辑任务 ${selectedTask.taskId}`}
           footer={
             <>

@@ -61,6 +61,31 @@ describe('EdgeNodesPage', () => {
     expect(within(monitorDialog).getByText('已发布')).toBeInTheDocument();
   });
 
+  it('keeps an open monitor synchronized with the latest edge snapshot', () => {
+    const { rerender } = render(<EdgeNodesPage edges={edges} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '运行监控 edge-dev' }));
+    const monitorDialog = screen.getByRole('dialog', { name: '边端运行监控' });
+    expect(within(monitorDialog).getByText('18.5%')).toBeInTheDocument();
+
+    rerender(
+      <EdgeNodesPage
+        edges={[
+          {
+            ...edges[0],
+            heartbeat: '1 秒前',
+            resources: '27.0% / 58.1% / 61%',
+          },
+        ]}
+      />,
+    );
+
+    expect(within(monitorDialog).getByText('27.0%')).toBeInTheDocument();
+    expect(within(monitorDialog).getByText('58.1%')).toBeInTheDocument();
+    expect(within(monitorDialog).getByText('1 秒前')).toBeInTheDocument();
+    expect(within(monitorDialog).queryByText('18.5%')).not.toBeInTheDocument();
+  });
+
   it('creates an edge by selecting a product and generating an access token', async () => {
     const onCreateEdge = vi.fn().mockResolvedValue({
       ...edges[0],
@@ -152,7 +177,7 @@ describe('EdgeNodesPage', () => {
             mqttSinkId: 'velamq-main',
             pointCount: 0,
             protocolCount: 1,
-            releaseStatus: '待发布',
+            releaseStatus: '等待同步',
           },
         ]}
         edges={edges}
@@ -180,8 +205,11 @@ describe('EdgeNodesPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'MQTT 配置 edge-dev' }));
     const dialog = screen.getByRole('dialog', { name: '边端 MQTT 配置' });
-    fireEvent.change(screen.getByLabelText('Broker 地址'), {
-      target: { value: 'mqtts://velamq.prod:8883' },
+    fireEvent.change(screen.getByLabelText('Broker 主机'), {
+      target: { value: 'velamq.prod' },
+    });
+    fireEvent.change(screen.getByLabelText('传输安全'), {
+      target: { value: 'mqtts' },
     });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 

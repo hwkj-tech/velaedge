@@ -18,6 +18,8 @@ import type {
   CreateEdgeNodeRequest,
   CreatePointMappingRequest,
   DataConfigResponse,
+  BacnetIpCatalogResponse,
+  Dlt645DataIdentifierTemplateResponse,
   DeviceModelResponse,
   DiscoveryReportResponse,
   EdgeNodeResponse,
@@ -30,6 +32,7 @@ import type {
   ProductVersionResponse,
   ProjectResponse,
   ProtocolConnectionResponse,
+  RuntimeProtocolDescriptor,
   ReleaseListResponse,
   RunDiscoveryRequest,
   RuntimeStatusResponse,
@@ -129,6 +132,30 @@ export async function fetchPointSets(
   return pointSets.map(normalizePointSet);
 }
 
+export async function fetchDlt645DataIdentifiers(
+  fetcher: typeof fetch = fetch,
+): Promise<Dlt645DataIdentifierTemplateResponse[]> {
+  return requestJson<Dlt645DataIdentifierTemplateResponse[]>(
+    '/api/protocols/dlt645/data-identifiers',
+    fetcher,
+  );
+}
+
+export async function fetchProtocolCatalog(
+  fetcher: typeof fetch = fetch,
+): Promise<RuntimeProtocolDescriptor[]> {
+  return requestJson<RuntimeProtocolDescriptor[]>('/api/protocols/catalog', fetcher);
+}
+
+export async function fetchBacnetIpCatalog(
+  fetcher: typeof fetch = fetch,
+): Promise<BacnetIpCatalogResponse> {
+  return requestJson<BacnetIpCatalogResponse>(
+    '/api/protocols/bacnet-ip/catalog',
+    fetcher,
+  );
+}
+
 export async function createPointSet(
   request: SavePointSetRequest,
   fetcher: typeof fetch = fetch,
@@ -182,6 +209,7 @@ function normalizePointSet(pointSet: PointSetResponse): PointSetResponse {
     ...pointSet,
     points: (pointSet.points ?? []).map((point) => ({
       ...point,
+      access: point.access ?? 'read_only',
       valueType: pointSetValueTypeFromCore(point.valueType),
     })),
   };

@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::DataQualityCode;
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EdgeHealth {
     Healthy,
@@ -23,6 +25,8 @@ pub struct EdgeRuntimeMetricsSnapshot {
     pub protocols: Vec<ProtocolRuntimeMetrics>,
     pub local_store: LocalStoreMetrics,
     pub algorithms: Vec<AlgorithmRuntimeMetrics>,
+    #[serde(default)]
+    pub mqtt: MqttRuntimeMetrics,
     pub cloud_sync: CloudSyncMetrics,
 }
 
@@ -51,6 +55,46 @@ pub struct ProtocolRuntimeMetrics {
     pub timeout_count: u64,
     pub error_count: u64,
     pub reconnect_count: u64,
+    #[serde(default)]
+    pub collection_attempt_count: u64,
+    #[serde(default)]
+    pub collection_success_count: u64,
+    #[serde(default)]
+    pub write_attempt_count: u64,
+    #[serde(default)]
+    pub write_success_count: u64,
+    #[serde(default)]
+    pub circuit_state: ProtocolCircuitState,
+    #[serde(default)]
+    pub consecutive_failure_count: u32,
+    #[serde(default)]
+    pub circuit_open_count: u64,
+    #[serde(default)]
+    pub circuit_rejected_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_quality_code: Option<DataQualityCode>,
+    #[serde(default)]
+    pub good_value_count: u64,
+    #[serde(default)]
+    pub uncertain_value_count: u64,
+    #[serde(default)]
+    pub bad_value_count: u64,
+    #[serde(default)]
+    pub subscription_count: usize,
+    #[serde(default)]
+    pub notification_count: u64,
+    #[serde(default)]
+    pub subscription_error_count: u64,
+    #[serde(default)]
+    pub fallback_poll_count: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ProtocolCircuitState {
+    #[default]
+    Closed,
+    Open,
+    HalfOpen,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -68,6 +112,33 @@ pub struct AlgorithmRuntimeMetrics {
     pub last_run_latency_ms: u64,
     pub error_count: u64,
     pub alert_count: u64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MqttRuntimeMetrics {
+    pub configured_sink_count: usize,
+    pub connected_sink_count: usize,
+    pub connection_generation: u64,
+    pub publish_success_count: u64,
+    pub publish_failure_count: u64,
+    pub published_bytes: u64,
+    pub sinks: Vec<MqttSinkRuntimeMetrics>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MqttSinkRuntimeMetrics {
+    pub sink_id: String,
+    pub broker: String,
+    pub client_id: String,
+    pub connected: bool,
+    pub publish_success_count: u64,
+    pub publish_failure_count: u64,
+    pub published_bytes: u64,
+    pub average_ack_latency_ms: u64,
+    pub last_ack_latency_ms: Option<u64>,
+    pub last_publish_at: Option<DateTime<Utc>>,
+    pub last_topic: Option<String>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

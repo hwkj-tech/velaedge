@@ -3,9 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CERT_TOOL="${ROOT_DIR}/scripts/edgelink-certificates.sh"
-WORK_DIR="${CERTIFICATE_ACCEPTANCE_WORK_DIR:-${ROOT_DIR}/target/certificate-acceptance-$$}"
-REPORT_PATH="${CERTIFICATE_ACCEPTANCE_REPORT:-${WORK_DIR}/report.json}"
-TARGET_DIR="${WORK_DIR}/installed"
+EVIDENCE_DIR="${CERTIFICATE_ACCEPTANCE_WORK_DIR:-${ROOT_DIR}/target/certificate-acceptance-$$}"
+REPORT_PATH="${CERTIFICATE_ACCEPTANCE_REPORT:-${EVIDENCE_DIR}/report.json}"
 
 for command in openssl jq; do
   command -v "$command" >/dev/null || {
@@ -14,8 +13,10 @@ for command in openssl jq; do
   }
 done
 
-mkdir -p "$WORK_DIR"
-chmod 0700 "$WORK_DIR"
+mkdir -p "$EVIDENCE_DIR" "$(dirname "$REPORT_PATH")"
+chmod 0700 "$EVIDENCE_DIR"
+WORK_DIR="$(mktemp -d "${EVIDENCE_DIR}/run.XXXXXX")"
+TARGET_DIR="${WORK_DIR}/installed"
 
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "${WORK_DIR}/ca-key.pem" >/dev/null 2>&1
 openssl req -x509 -new -key "${WORK_DIR}/ca-key.pem" -sha256 -days 365 \
@@ -98,4 +99,4 @@ jq -n \
     atomicCurrentLink:true
   }' | tee "$REPORT_PATH"
 
-echo "certificate lifecycle acceptance evidence: $WORK_DIR"
+echo "certificate lifecycle acceptance evidence: $EVIDENCE_DIR"

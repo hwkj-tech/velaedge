@@ -1,0 +1,27 @@
+[Unit]
+Description=VelaEdge physical field campaign (%i)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/edgeops/field-campaign/%i.env
+
+[Service]
+Type=simple
+User=edgeops-runtime
+Group=edgeops-runtime
+StateDirectory=edgeops-field-campaign/%i
+WorkingDirectory=/var/lib/edgeops-field-campaign/%i
+EnvironmentFile=/etc/edgeops/field-campaign/%i.env
+ExecStartPre=/opt/edgeops/bin/run-field-campaign --preflight-only
+ExecStart=/opt/edgeops/bin/run-field-campaign
+Restart=no
+KillSignal=SIGTERM
+TimeoutStopSec=90s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/edgeops-field-campaign/%i
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

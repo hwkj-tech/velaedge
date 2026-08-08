@@ -21,7 +21,7 @@ use edge_core::{
 use sha2::Digest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::Duration;
+use tokio::time::{timeout, Duration};
 
 #[tokio::test]
 async fn gateway_rejects_an_invalid_token_for_a_provisioned_edge() {
@@ -584,6 +584,54 @@ async fn gateway_failed_config_report_preserves_the_last_applied_product_version
 }
 
 #[tokio::test]
+async fn gateway_closes_an_online_session_when_edge_configuration_changes() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let gateway_addr = listener.local_addr().expect("listener should expose addr");
+    let store = Arc::new(Mutex::new(CloudControlStore::default()));
+    let gateway_store = store.clone();
+    let registry = EdgeGatewayCommandRegistry::default();
+    let gateway_registry = registry.clone();
+    let gateway = tokio::spawn(async move {
+        let (stream, peer_addr) = listener.accept().await.expect("runtime should connect");
+        handle_edgelink_session_with_registry(stream, peer_addr, gateway_store, gateway_registry)
+            .await
+            .expect("configuration refresh should close the active session cleanly")
+    });
+
+    let mut runtime = TcpStream::connect(gateway_addr)
+        .await
+        .expect("runtime should connect");
+    let hello = EdgeLinkMessage::hello(
+        "edge-auto-sync",
+        "runtime-auto-sync",
+        "0.1.0",
+        Some("v1.0.0".to_string()),
+        Vec::new(),
+    );
+    write_one_message(&mut runtime, &hello).await;
+    assert_ack_for(&mut runtime, &hello).await;
+    assert!(registry.is_online("edge-auto-sync").await);
+
+    registry
+        .notify_config_changed("edge-auto-sync")
+        .await
+        .expect("online runtime should accept the refresh notification");
+
+    let mut byte = [0_u8; 1];
+    let read = timeout(Duration::from_secs(1), runtime.read(&mut byte))
+        .await
+        .expect("gateway should close the session promptly")
+        .expect("runtime should observe a clean session close");
+    assert_eq!(read, 0);
+
+    let report = gateway.await.expect("gateway task should finish");
+    assert_eq!(report.session.edge_id, "edge-auto-sync");
+    assert!(!registry.is_online("edge-auto-sync").await);
+}
+
+#[tokio::test]
 async fn gateway_dispatches_discovery_to_online_runtime_and_persists_report() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -725,6 +773,22 @@ fn runtime_metrics(edge_id: &str, runtime_id: &str) -> EdgeRuntimeMetricsSnapsho
             timeout_count: 1,
             error_count: 0,
             reconnect_count: 0,
+            collection_attempt_count: 10,
+            collection_success_count: 9,
+            write_attempt_count: 1,
+            write_success_count: 1,
+            circuit_state: Default::default(),
+            consecutive_failure_count: 0,
+            circuit_open_count: 0,
+            circuit_rejected_count: 0,
+            last_quality_code: None,
+            good_value_count: 0,
+            uncertain_value_count: 0,
+            bad_value_count: 0,
+            subscription_count: 0,
+            notification_count: 0,
+            subscription_error_count: 0,
+            fallback_poll_count: 0,
         }],
         local_store: LocalStoreMetrics {
             backend: "rocksdb".to_string(),
@@ -733,6 +797,7 @@ fn runtime_metrics(edge_id: &str, runtime_id: &str) -> EdgeRuntimeMetricsSnapsho
             disk_usage_percent: 34.0,
         },
         algorithms: Vec::new(),
+        mqtt: Default::default(),
         cloud_sync: CloudSyncMetrics {
             connected: true,
             last_sync_seconds_ago: 0,

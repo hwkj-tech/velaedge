@@ -9,7 +9,6 @@ import { DeviceModelsPage } from './DeviceModelsPage';
 import { EdgeNodesPage } from './EdgeNodesPage';
 import { PointMappingsPage } from './PointMappingsPage';
 import { ProtocolConnectionsPage } from './ProtocolConnectionsPage';
-import { ReleasesPage } from './ReleasesPage';
 
 describe('management pages use API data only', () => {
   it('renders explicit empty states without synthesizing demo records', () => {
@@ -20,7 +19,6 @@ describe('management pages use API data only', () => {
       <EdgeNodesPage key="edges" />,
       <PointMappingsPage key="points" />,
       <ProtocolConnectionsPage key="connections" />,
-      <ReleasesPage key="releases" />,
       <AuditLogPage key="audit" />,
       <AgentAssistantPage key="agent" />,
     ];

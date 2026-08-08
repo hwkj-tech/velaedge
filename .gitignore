@@ -1,7 +1,8 @@
-/target/
+target/
 /data/
 crates/edge-runtime/data/
 /.worktrees/
 node_modules/
+.idea/
 .DS_Store
 *.log

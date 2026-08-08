@@ -898,6 +898,67 @@ impl SqliteCloudStore {
         Ok(())
     }
 
+    pub async fn apply_config_revision(
+        &self,
+        package: EdgeConfigPackage,
+        releases: Vec<ReleaseRecord>,
+    ) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin config revision transaction")?;
+        sqlx::query(
+            r#"
+            INSERT INTO config_packages (edge_id, version, package_json)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(edge_id, version) DO UPDATE SET package_json = excluded.package_json
+            "#,
+        )
+        .bind(&package.edge_id)
+        .bind(&package.version)
+        .bind(encode(&package)?)
+        .execute(&mut *tx)
+        .await
+        .context("upsert config package revision")?;
+
+        for release in releases {
+            sqlx::query(
+                r#"
+                INSERT INTO releases (
+                    release_id,
+                    edge_id,
+                    desired_version,
+                    reported_version,
+                    status,
+                    release_json
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                ON CONFLICT(release_id) DO UPDATE SET
+                    edge_id = excluded.edge_id,
+                    desired_version = excluded.desired_version,
+                    reported_version = excluded.reported_version,
+                    status = excluded.status,
+                    release_json = excluded.release_json
+                "#,
+            )
+            .bind(release.release_id.to_string())
+            .bind(&release.edge_id)
+            .bind(&release.desired_version)
+            .bind(&release.reported_version)
+            .bind(release_status_label(release.status))
+            .bind(encode(&release)?)
+            .execute(&mut *tx)
+            .await
+            .context("upsert config revision state")?;
+        }
+
+        tx.commit()
+            .await
+            .context("commit config revision transaction")?;
+        Ok(())
+    }
+
     pub async fn release(&self, release_id: Uuid) -> Result<Option<ReleaseRecord>> {
         let row = sqlx::query("SELECT release_json FROM releases WHERE release_id = ?1")
             .bind(release_id.to_string())

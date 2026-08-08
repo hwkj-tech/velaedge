@@ -22,6 +22,9 @@ done
 for path in \
   deploy/systemd/edgeops-cloud.service \
   deploy/systemd/edgeops-runtime@.service \
+  deploy/systemd/edgeops-field-campaign-status.service \
+  deploy/systemd/edgeops-field-campaign-status.timer \
+  deploy/field-acceptance-policy.json \
   deploy/env/cloud.env.example \
   deploy/env/runtime.env.example; do
   [[ -s "${ROOT_DIR}/${path}" ]] || {
@@ -43,6 +46,14 @@ rg -q -- '--access-token-env EDGEOPS_EDGE_TOKEN' \
   "${ROOT_DIR}/deploy/systemd/edgeops-runtime@.service"
 rg -q -- '--edgelink-daemon' "${ROOT_DIR}/deploy/systemd/edgeops-runtime@.service"
 rg -q -- '--mqtt-uplink' "${ROOT_DIR}/deploy/systemd/edgeops-runtime@.service"
+rg -q -- '--bin field-campaign-status' "${ROOT_DIR}/scripts/run-release-gates.sh"
+rg -q -- '--require-complete' "${ROOT_DIR}/scripts/run-release-gates.sh"
+rg -q '^OnUnitActiveSec=1min$' \
+  "${ROOT_DIR}/deploy/systemd/edgeops-field-campaign-status.timer"
+rg -q '^Persistent=true$' \
+  "${ROOT_DIR}/deploy/systemd/edgeops-field-campaign-status.timer"
+rg -q '^UMask=0077$' \
+  "${ROOT_DIR}/deploy/systemd/edgeops-field-campaign-status.service"
 rg -q '^EDGEOPS_API_AUTH_MODE=required$' "${ROOT_DIR}/deploy/env/cloud.env.example"
 rg -q '^EDGEOPS_BOOTSTRAP_MODE=empty$' "${ROOT_DIR}/deploy/env/cloud.env.example"
 rg -q '^EDGEOPS_CONSOLE_DIST=/opt/edgeops/console$' "${ROOT_DIR}/deploy/env/cloud.env.example"

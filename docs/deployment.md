@@ -24,7 +24,7 @@ export EDGEOPS_GATEWAY_TLS_CLIENT_CA='/etc/edgeops/tls/current/runtime-ca.pem'
 ```
 
 Reference systemd units and environment templates are provided under `deploy/systemd` and
-`deploy/env`. Install the two Rust binaries under `/opt/edgeops/bin`, copy the built console
+`deploy/env`. Install the Cloud and Runtime binaries under `/opt/edgeops/bin`, copy the built console
 contents from `web/console/dist` to `/opt/edgeops/console`, and store populated environment files
 under `/etc/edgeops`. Environment files contain secrets and must be owned by the service account
 with mode `0600`; never install the example placeholder values unchanged.
@@ -44,6 +44,65 @@ For each Runtime, create `/etc/edgeops/runtime/EDGE_ID.env`, provision its mTLS 
 one-time edge token, ensure the `edgeops-runtime` account can open the selected serial device, then
 start `edgeops-runtime@EDGE_ID.service`. The service passes only the token variable name on the
 command line, so the secret itself is not exposed by the process list.
+
+For a physical 24-hour campaign, also install the release campaign binary and guarded runner:
+
+```bash
+install -m 0755 target/release/field-campaign /opt/edgeops/bin/field-campaign
+install -m 0755 target/release/field-campaign-status /opt/edgeops/bin/field-campaign-status
+install -m 0755 scripts/run-field-campaign.sh /opt/edgeops/bin/run-field-campaign
+install -m 0644 deploy/systemd/edgeops-field-campaign@.service /etc/systemd/system/
+install -m 0644 deploy/systemd/edgeops-field-campaign-status.service /etc/systemd/system/
+install -m 0644 deploy/systemd/edgeops-field-campaign-status.timer /etc/systemd/system/
+install -d -m 0755 /opt/edgeops/deploy
+install -m 0644 deploy/field-acceptance-policy.json \
+  /opt/edgeops/deploy/field-acceptance-policy.json
+install -d -m 0700 /etc/edgeops/field-campaign
+install -m 0600 deploy/env/field-campaign.env.example \
+  /etc/edgeops/field-campaign/IEC104_VENDOR_A.env
+install -m 0640 site-plan.json /etc/edgeops/field-campaign/site-plan.json
+systemctl daemon-reload
+systemctl enable --now edgeops-field-campaign-status.timer
+```
+
+Populate one environment file per physical asset, place its immutable released package under the
+matching `/var/lib/edgeops-field-campaign/INSTANCE/input` directory, and set physical confirmation
+to `1` only after the work order, wiring and identity have been checked. Before opening the
+evidence window, systemd runs the same launcher with `--preflight-only`. This validates the complete
+Runtime graph, physical connection binding, MQTT 3.1.1/5.0 route expansion, password environment
+references, custom CA files, thresholds, and evidence paths without creating the evidence directory
+or opening a device/Broker session. Start it with `systemctl start
+edgeops-field-campaign@IEC104_VENDOR_A`. `systemctl stop` sends `SIGTERM`; the campaign retains a
+failed/interrupted manifest rather than leaving ambiguous running evidence.
+The unit intentionally uses `Restart=no`: a new attempt requires a new evidence directory and an
+explicit operator start.
+
+For a multi-device site, run `field-campaign-plan` before installing the instances. Its report
+proves that the complete asset inventory satisfies `deploy/field-acceptance-policy.json`, uses
+unique physical identities, edge/client IDs and evidence paths, and exposes the exact non-secret
+environment map plus required secret variable names for each systemd instance. The schema and
+command are documented in `docs/field-acceptance.md`. During execution, run
+`field-campaign-status` against that unchanged plan to produce a site-level pending/running/passed/
+failed snapshot. The final deployment sign-off must use `--require-complete`; completed rows are
+accepted only after their four hash-bound artifacts also match the planned physical identity and
+released package. The supplied timer refreshes
+`/var/lib/edgeops-field-campaign/site-status.json` every minute using an atomic file replacement;
+pending/running observations remain healthy, while failed or invalid campaigns make the oneshot
+service fail visibly in systemd. The timer continues to retry on the next interval.
+
+The `site` release profile consumes this same inventory instead of a manually assembled directory
+list:
+
+```bash
+EDGEOPS_RELEASE_PROFILE=site \
+EDGEOPS_FIELD_CAMPAIGN_PLAN=/etc/edgeops/field-campaign/site-plan.json \
+EDGEOPS_FIELD_POLICY=/opt/edgeops/deploy/field-acceptance-policy.json \
+VELAMQ_REPO=/opt/src/velamq \
+scripts/run-release-gates.sh
+```
+
+The release gate invokes `field-campaign-status --require-complete`; missing, running, failed,
+identity-mismatched, or policy-incomplete campaigns stop the site release.
 
 `empty` is the production bootstrap mode: it preserves only records already stored in SQLite and
 does not create sample projects, products, edges, metrics, or configuration. When bootstrap mode is
@@ -138,6 +197,11 @@ per-gate duration, logs, and nested evidence locations:
 VELAMQ_REPO=/path/to/velamq-rs scripts/run-release-gates.sh
 ```
 
+统一门禁的本地配置会在 Docker daemon 可用时自动运行 S7、FINS 与 IEC 104 独立设备容器验收；
+`site` 配置默认把它作为必选项。可用 `EDGEOPS_CONTAINER_PROTOCOL_GATE=required|auto|skip`
+显式控制策略。隔离网络已有缓存镜像时同时设置
+`EDGEOPS_CONTAINER_PROTOCOL_NO_BUILD=1`，报告仍会记录实际镜像 ID。
+
 The equivalent individual gates are:
 
 ```bash
@@ -155,10 +219,15 @@ scripts/run-deployment-smoke-acceptance.sh
 Run `scripts/run-real-velamq-acceptance.sh` against the target VelaMQ build when MQTT transport,
 broker certificates, or topic policy changes.
 
-Before approving a site rollout, run `scripts/run-field-hardware-acceptance.sh` on the target edge
-host with the released package, production certificate chain, physical serial port, and target MQTT
-broker. Its preflight mode is suitable for deployment preparation but is not field evidence. The
-full procedure and pass criteria are in [`field-acceptance.md`](field-acceptance.md).
+Before approving a site rollout, run `field-campaign` once for every required physical vendor
+device. Pass the target broker's schema v1 structured audit path with `--native-broker-audit`.
+The file may be exported after the Runtime window closes; the campaign publishes its current phase
+to `manifest.json` and waits up to `--native-broker-audit-wait-seconds` for the completed audit.
+Each campaign uses the released package and target MQTT broker and retains a hash-bound
+evidence directory. `scripts/run-field-hardware-acceptance.sh` remains available for serial-only
+preflight and legacy site diagnostics, but one such run cannot satisfy the multi-vendor protocol
+matrix. The full procedure and pass criteria are in
+[`field-acceptance.md`](field-acceptance.md).
 
 The local release profile runs `run-field-preflight-acceptance.sh` automatically when no site
 package is supplied. This controlled fixture checks the field harness, package constraints, serial
@@ -170,21 +239,29 @@ SQLite database, then drives Chromium through project creation, reusable point-s
 product binding and publication, edge enrollment, one-time token display, runtime-monitor dialogs,
 and Escape-key modal dismissal.
 Artifacts and a machine-readable Playwright report are retained under the release work directory.
-The physical profile additionally requires device model/serial identity, explicit operator
-confirmation, a broker-side receipt, and a verifiable `evidence-manifest.json`. Validate retained
-site evidence with `scripts/verify-field-acceptance-report.sh --require-physical REPORT_JSON`.
+The legacy serial diagnostic mode additionally requires device model/serial identity, explicit
+operator confirmation, a broker-side receipt, and a verifiable `evidence-manifest.json`. Its
+`verify-field-acceptance-report.sh --require-physical` check only validates that legacy bundle; it
+does not satisfy the schema v4 interoperability policy used by the `site` release profile.
 
 For the final site sign-off, export the field variables described there and use the strict profile:
 
 ```bash
 export EDGEOPS_RELEASE_PROFILE=site
 export VELAMQ_REPO=/path/to/velamq-rs
-# export EDGEOPS_FIELD_* and referenced MQTT password variables
+# Validated site plan with hash-bound campaign directories for every policy requirement.
+export EDGEOPS_FIELD_CAMPAIGN_PLAN=/etc/edgeops/field-campaign/site-plan.json
+# Optional override; site defaults to deploy/field-acceptance-policy.json.
+export EDGEOPS_FIELD_POLICY=/approved/field-acceptance-policy.json
 scripts/run-release-gates.sh
 ```
 
-The `site` profile fails closed when VelaMQ source acceptance or physical field inputs are missing;
-it never turns a skipped external check into a passing production report.
+The `site` profile fails closed when VelaMQ source acceptance or the campaign plan is missing.
+It verifies every schema v3 campaign manifest and all four artifact digests, including the native
+broker audit, then runs the versioned per-protocol manufacturer/model interoperability policy.
+The repository policy covers all ten non-simulated southbound protocols; an approved policy can be
+supplied with `EDGEOPS_FIELD_POLICY`. A missing or malformed policy fails the release. The gate never
+turns a skipped external check into a passing production report.
 
 The repeatable recovery harness starts the real cloud binary twice, performs an online backup,
 changes the live database, restores the backup atomically, verifies a marker and catalog data, and

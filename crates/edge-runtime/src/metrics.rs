@@ -219,6 +219,22 @@ impl RuntimeMetricsCollector {
                     timeout_count: 0,
                     error_count: 0,
                     reconnect_count: 0,
+                    collection_attempt_count: 0,
+                    collection_success_count: 0,
+                    write_attempt_count: 0,
+                    write_success_count: 0,
+                    circuit_state: Default::default(),
+                    consecutive_failure_count: 0,
+                    circuit_open_count: 0,
+                    circuit_rejected_count: 0,
+                    last_quality_code: None,
+                    good_value_count: 0,
+                    uncertain_value_count: 0,
+                    bad_value_count: 0,
+                    subscription_count: 0,
+                    notification_count: 0,
+                    subscription_error_count: 0,
+                    fallback_poll_count: 0,
                 })
                 .collect()
         });
@@ -264,6 +280,7 @@ impl RuntimeMetricsCollector {
                     .unwrap_or_default(),
             },
             algorithms,
+            mqtt: Default::default(),
             cloud_sync: CloudSyncMetrics {
                 connected: true,
                 last_sync_seconds_ago: 0,
@@ -315,9 +332,12 @@ fn format_protocol(protocol: ProtocolType) -> String {
         ProtocolType::ModbusRtu => "Modbus RTU",
         ProtocolType::Dlt645 => "DL/T645",
         ProtocolType::Iec101 => "IEC-101",
+        ProtocolType::Iec104 => "IEC-104",
         ProtocolType::CustomSerial => "Custom Serial",
         ProtocolType::OpcUa => "OPC UA",
+        ProtocolType::BacnetIp => "BACnet/IP",
         ProtocolType::SiemensS7 => "Siemens S7",
+        ProtocolType::OmronFins => "Omron FINS",
     }
     .to_string()
 }

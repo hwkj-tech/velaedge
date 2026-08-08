@@ -15,16 +15,27 @@ use cloud_control::{
     Project, ReleaseService, ReleaseStatus,
 };
 use edge_core::{
-    validate_custom_serial_point_spec, validate_data_config_visual_graph, AlgorithmDsl,
-    AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
-    AlgorithmReportPolicy, AlgorithmRuntime, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger,
-    CollectionTask, CustomSerialPointSpec, DataConfig, DataConfigCollection, DataConfigGraphEdge,
+    bacnet_object_templates, bacnet_property_templates, dlt645_data_identifier_templates,
+    dlt645_template_by_identifier, parse_dlt645_point_address, parse_iec101_point_address,
+    parse_iec104_point_address, parse_opc_ua_browse_path, validate_bacnet_point,
+    validate_command_flow, validate_custom_serial_point_spec, validate_data_config_visual_graph,
+    validate_iec101_point, validate_iec104_point, validate_modbus_point_options,
+    validate_omron_fins_point, validate_opc_ua_node_id, validate_opc_ua_point,
+    validate_point_access, validate_siemens_s7_point, AlgorithmDsl, AlgorithmInputBinding,
+    AlgorithmKind, AlgorithmOutput, AlgorithmReportMode, AlgorithmReportPolicy, AlgorithmRuntime,
+    AlgorithmSpec, AlgorithmStep, AlgorithmTrigger, BacnetIpConnectionSettings,
+    BacnetObjectTemplate, BacnetPropertyTemplate, CollectionTask, CommandFlowConfig,
+    CustomSerialPointSpec, DataConfig, DataConfigCollection, DataConfigGraphEdge,
     DataConfigGraphNode, DataConfigGraphNodeKind, DataConfigPayload, DataConfigPayloadMode,
     DataConfigPoint, DataConfigPublish, DataConfigVisualGraph, DeviceSpec, DiscoveredPoint,
-    DiscoveryReport, DiscoveryRequest, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent,
-    EdgeRuntimeMetricsSnapshot, MqttUplinkConfig, NumberRange, PointAddress,
-    PointMappingSuggestion, ProtocolConnection, ProtocolType, SerialConnectionSettings,
-    TelemetryPoint, TelemetryPointMapping, TelemetryType,
+    DiscoveryReport, DiscoveryRequest, Dlt645DataIdentifierTemplate, EdgeConfigPackage, EdgeHealth,
+    EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, Iec101ConnectionSettings,
+    Iec104ConnectionSettings, MqttLastWillConfig, MqttProtocolVersion, MqttUplinkConfig,
+    MqttUserProperty, NumberRange, OmronFinsConnectionSettings, OpcUaConnectionSettings,
+    PointAccess, PointAddress, PointMappingSuggestion, ProtocolCircuitBreakerConfig,
+    ProtocolConnection, ProtocolType, RuntimeProtocolCatalog, RuntimeProtocolDescriptor,
+    SerialConnectionSettings, SiemensS7ConnectionSettings, TelemetryPoint, TelemetryPointMapping,
+    TelemetryType,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -111,6 +122,8 @@ pub struct SaveProductVersionRequest {
     #[serde(default)]
     pub data_configs: Vec<DataConfig>,
     #[serde(default)]
+    pub command_flows: Vec<CommandFlowConfig>,
+    #[serde(default)]
     pub mqtt_uplinks: Vec<MqttUplinkConfig>,
 }
 
@@ -196,6 +209,12 @@ pub fn app(state: AppState) -> Router {
             put(save_project).delete(delete_project),
         )
         .route("/api/point-sets", get(point_sets).post(create_point_set))
+        .route("/api/protocols/catalog", get(protocol_catalog))
+        .route(
+            "/api/protocols/dlt645/data-identifiers",
+            get(dlt645_data_identifiers),
+        )
+        .route("/api/protocols/bacnet-ip/catalog", get(bacnet_ip_catalog))
         .route(
             "/api/point-sets/{point_set_id}",
             put(save_point_set).delete(delete_point_set),
@@ -534,6 +553,28 @@ async fn point_sets(State(state): State<AppState>) -> Json<Vec<PointSet>> {
     Json(store.point_sets().cloned().collect())
 }
 
+async fn protocol_catalog() -> Json<Vec<RuntimeProtocolDescriptor>> {
+    Json(RuntimeProtocolCatalog::all())
+}
+
+async fn dlt645_data_identifiers() -> Json<&'static [Dlt645DataIdentifierTemplate]> {
+    Json(dlt645_data_identifier_templates())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BacnetIpCatalogResponse {
+    pub object_types: &'static [BacnetObjectTemplate],
+    pub properties: &'static [BacnetPropertyTemplate],
+}
+
+async fn bacnet_ip_catalog() -> Json<BacnetIpCatalogResponse> {
+    Json(BacnetIpCatalogResponse {
+        object_types: bacnet_object_templates(),
+        properties: bacnet_property_templates(),
+    })
+}
+
 async fn create_point_set(
     State(state): State<AppState>,
     Json(request): Json<SavePointSetRequest>,
@@ -694,13 +735,16 @@ async fn delete_product(
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     {
         let store = state.store.lock().expect("store mutex poisoned");
-        let product = store
+        store
             .product(&product_id)
             .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing product"))?;
-        if product.latest_version.is_some() {
+        if store
+            .edge_nodes()
+            .any(|edge| edge.product_id.as_deref() == Some(product_id.as_str()))
+        {
             return Err(error(
                 StatusCode::CONFLICT,
-                "published product cannot be deleted",
+                "product bound to an edge cannot be deleted",
             ));
         }
     }
@@ -745,13 +789,20 @@ async fn create_product_version(
         .persist_product_version(version.clone())
         .await
         .map_err(persistence_error)?;
-    let mut store = state.store.lock().expect("store mutex poisoned");
-    store.upsert_product_version(version.clone());
-    store.push_audit(
-        AuditAction::UpdateConfig,
-        format!("product:{product_id}:version:{}", version.version),
-    );
-    Ok((StatusCode::CREATED, Json(version)))
+    {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        store.upsert_product_version(version.clone());
+        store.push_audit(
+            AuditAction::UpdateConfig,
+            format!("product:{product_id}:version:{}", version.version),
+        );
+    }
+    if validate_publishable_product_version(&version).is_err() {
+        return Ok((StatusCode::CREATED, Json(version)));
+    }
+    let Json(active_version) =
+        transition_product_version(state, product_id, version.version.clone(), false).await?;
+    Ok((StatusCode::CREATED, Json(active_version)))
 }
 
 async fn save_product_version(
@@ -784,13 +835,18 @@ async fn save_product_version(
         .persist_product_version(version.clone())
         .await
         .map_err(persistence_error)?;
-    let mut store = state.store.lock().expect("store mutex poisoned");
-    store.upsert_product_version(version.clone());
-    store.push_audit(
-        AuditAction::UpdateConfig,
-        format!("product:{product_id}:version:{version_id}"),
-    );
-    Ok(Json(version))
+    {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        store.upsert_product_version(version.clone());
+        store.push_audit(
+            AuditAction::UpdateConfig,
+            format!("product:{product_id}:version:{version_id}"),
+        );
+    }
+    if validate_publishable_product_version(&version).is_err() {
+        return Ok(Json(version));
+    }
+    transition_product_version(state, product_id, version_id, false).await
 }
 
 async fn delete_product_version(
@@ -945,30 +1001,40 @@ async fn transition_product_version(
         .await
         .map_err(persistence_error)?;
 
-    let mut store = state.store.lock().expect("store mutex poisoned");
-    store.upsert_product(product);
-    for version in changed_versions {
-        store.upsert_product_version(version);
-    }
-    for edge in rollout_edges {
-        store.register_edge(edge);
-    }
-    for package in rollout_packages {
-        store.upsert_config_package(package);
-    }
-    for release in rollout_releases {
-        let is_pending = release.status == ReleaseStatus::Pending;
-        let release_id = release.release_id;
-        store.insert_release(release);
-        if is_pending {
-            store.push_audit(AuditAction::CreateRelease, release_id.to_string());
+    let rollout_edge_ids = rollout_edges
+        .iter()
+        .map(|edge| edge.edge_id.clone())
+        .collect::<Vec<_>>();
+    {
+        let mut store = state.store.lock().expect("store mutex poisoned");
+        store.upsert_product(product);
+        for version in changed_versions {
+            store.upsert_product_version(version);
         }
+        for edge in rollout_edges {
+            store.register_edge(edge);
+        }
+        for package in rollout_packages {
+            store.upsert_config_package(package);
+        }
+        for release in rollout_releases {
+            let is_pending = release.status == ReleaseStatus::Pending;
+            let release_id = release.release_id;
+            store.insert_release(release);
+            if is_pending {
+                store.push_audit(AuditAction::CreateRelease, release_id.to_string());
+            }
+        }
+        let action = if rollback { "rollback" } else { "save" };
+        store.push_audit(
+            AuditAction::UpdateConfig,
+            format!("product:{product_id}:version:{target_version}:{action}"),
+        );
     }
-    let action = if rollback { "rollback" } else { "publish" };
-    store.push_audit(
-        AuditAction::UpdateConfig,
-        format!("product:{product_id}:version:{target_version}:{action}"),
-    );
+
+    for edge_id in rollout_edge_ids {
+        let _ = state.gateway_commands.notify_config_changed(&edge_id).await;
+    }
     Ok(Json(target))
 }
 
@@ -1127,6 +1193,7 @@ async fn save_edge_mqtt_uplink(
     Path(edge_id): Path<String>,
     Json(request): Json<SaveMqttUplinkRequest>,
 ) -> Result<Json<MqttUplinkResponse>, (StatusCode, Json<ErrorResponse>)> {
+    validate_mqtt_advanced_settings(&request)?;
     let username = non_empty(request.username);
     let password_env = non_empty(request.password_env);
     let tls_ca_path = non_empty(request.tls_ca_path);
@@ -1134,6 +1201,12 @@ async fn save_edge_mqtt_uplink(
         return Err(error(
             StatusCode::BAD_REQUEST,
             "MQTT username and password environment reference must be configured together",
+        ));
+    }
+    if request.keep_alive_seconds < 5 {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "MQTT keep alive must be at least 5 seconds",
         ));
     }
     if tls_ca_path.is_some()
@@ -1155,6 +1228,18 @@ async fn save_edge_mqtt_uplink(
         sink_id: request.sink_id,
         broker: request.broker,
         client_id: request.client_id,
+        protocol_version: request.protocol_version,
+        keep_alive_seconds: request.keep_alive_seconds,
+        clean_session: request.clean_session,
+        clean_start: request.clean_start,
+        session_expiry_interval_seconds: request.session_expiry_interval_seconds,
+        receive_maximum: request.receive_maximum,
+        maximum_packet_size_bytes: request.maximum_packet_size_bytes,
+        topic_alias_maximum: request.topic_alias_maximum,
+        request_response_information: request.request_response_information,
+        request_problem_information: request.request_problem_information,
+        user_properties: mqtt_user_properties(request.user_properties),
+        last_will: request.last_will.map(mqtt_last_will_config),
         username,
         password_env,
         tls_ca_path,
@@ -1194,19 +1279,7 @@ async fn run_edge_discovery(
     Path(edge_id): Path<String>,
     Json(request): Json<RunDiscoveryRequest>,
 ) -> Result<(StatusCode, Json<DiscoveryReportResponse>), (StatusCode, Json<ErrorResponse>)> {
-    let (start_address, end_address) = parse_holding_register_range(&request.address_range)
-        .map_err(|message| error(StatusCode::BAD_REQUEST, message))?;
-    let discovery = DiscoveryRequest::modbus_holding_registers(
-        format!("discovery-{edge_id}-{}", Utc::now().timestamp_millis()),
-        request.connection_id.clone(),
-        start_address,
-        end_address,
-    );
-    discovery
-        .validate()
-        .map_err(|message| error(StatusCode::BAD_REQUEST, message))?;
-
-    {
+    let connection_protocol = {
         let store = state.store.lock().expect("store mutex poisoned");
         let Some(package) = store.latest_config_package_for_edge(&edge_id) else {
             return Err(error(StatusCode::NOT_FOUND, "missing edge config package"));
@@ -1221,13 +1294,45 @@ async fn run_edge_discovery(
                 "discovery connection is not configured for this edge",
             ));
         };
-        if connection.protocol != ProtocolType::ModbusRtu {
+        connection.protocol
+    };
+    let job_id = format!("discovery-{edge_id}-{}", Utc::now().timestamp_millis());
+    let discovery = match connection_protocol {
+        ProtocolType::ModbusRtu => {
+            let address_range = request.address_range.as_deref().ok_or_else(|| {
+                error(
+                    StatusCode::BAD_REQUEST,
+                    "Modbus RTU discovery requires addressRange",
+                )
+            })?;
+            let (start_address, end_address) = parse_holding_register_range(address_range)
+                .map_err(|message| error(StatusCode::BAD_REQUEST, message))?;
+            DiscoveryRequest::modbus_holding_registers(
+                job_id,
+                request.connection_id.clone(),
+                start_address,
+                end_address,
+            )
+        }
+        ProtocolType::OpcUa => DiscoveryRequest::opc_ua_browse(
+            job_id,
+            request.connection_id.clone(),
+            request.root_node_id.as_deref().unwrap_or("i=85"),
+            request.max_depth.unwrap_or(3),
+        )
+        .including_standard_namespace(request.include_standard_namespace.unwrap_or(false)),
+        protocol => {
             return Err(error(
                 StatusCode::BAD_REQUEST,
-                "runtime discovery currently supports Modbus RTU connections only",
+                format!(
+                    "runtime discovery supports Modbus RTU and OPC UA; {protocol:?} is not supported"
+                ),
             ));
         }
-    }
+    };
+    discovery
+        .validate()
+        .map_err(|message| error(StatusCode::BAD_REQUEST, message))?;
 
     let report = state
         .gateway_commands
@@ -1767,7 +1872,23 @@ async fn create_edge_protocol_connection(
             protocol,
             endpoint,
             serial,
+            iec101: matches!(protocol, ProtocolType::Iec101)
+                .then(|| request.iec101.unwrap_or_default()),
+            iec104: matches!(protocol, ProtocolType::Iec104)
+                .then(|| request.iec104.unwrap_or_default()),
+            opc_ua: matches!(protocol, ProtocolType::OpcUa)
+                .then(|| request.opc_ua.unwrap_or_default()),
+            bacnet_ip: matches!(protocol, ProtocolType::BacnetIp)
+                .then(|| request.bacnet_ip.unwrap_or_default()),
+            siemens_s7: matches!(protocol, ProtocolType::SiemensS7)
+                .then(|| request.siemens_s7.unwrap_or_default()),
+            omron_fins: matches!(protocol, ProtocolType::OmronFins)
+                .then(|| request.omron_fins.unwrap_or_default()),
+            circuit_breaker: request.circuit_breaker,
         };
+        connection
+            .validate()
+            .map_err(|message| error(StatusCode::BAD_REQUEST, message))?;
 
         package.version = next_version(&package.version);
         package.protocol_connections.push(connection);
@@ -2318,8 +2439,13 @@ async fn release_diff(
         details: vec![
             format!("基线版本 {baseline}"),
             format!("草稿版本 {}", package.version),
+            format!("协议连接 {} 个", package.protocol_connections.len()),
             format!("点位 {} 个", package.point_mappings.len()),
+            format!("采集任务 {} 个", package.collection_tasks.len()),
             format!("算法 {} 个", package.algorithms.len()),
+            format!("数据上报 {} 个", package.data_configs.len()),
+            format!("指令编排 {} 个", package.command_flows.len()),
+            format!("MQTT 连接 {} 个", package.mqtt_uplinks.len()),
         ],
         message: "配置差异摘要已生成".to_string(),
         status: "已生成".to_string(),
@@ -2338,7 +2464,7 @@ async fn agent_safety_check(State(state): State<AppState>) -> Json<AgentActionRe
         action: "agent_safety_check".to_string(),
         details: vec![
             format!("受管边端 {edge_count} 个"),
-            format!("待发布版本 {pending_count} 个"),
+            format!("待同步修订 {pending_count} 个"),
             "高风险命令仍需人工确认".to_string(),
         ],
         message: "安全策略检查已完成".to_string(),
@@ -2917,6 +3043,16 @@ async fn save_point_mapping_for_edge_id(
     point_id: String,
     request: SavePointMappingRequest,
 ) -> Result<Json<PointMappingResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let access = request
+        .read_write
+        .as_deref()
+        .map(parse_point_access)
+        .transpose()?;
+    let requested_address = PointAddress {
+        kind: request.address_kind,
+        value: request.address_value,
+        modbus: None,
+    };
     let (package, response) = {
         let mut store = state.store.lock().expect("store mutex poisoned");
         let mut package = store
@@ -2933,12 +3069,13 @@ async fn save_point_mapping_for_edge_id(
 
         {
             let mapping = &mut package.point_mappings[mapping_index];
-            mapping.address = PointAddress {
-                kind: request.address_kind,
-                value: request.address_value,
-            };
+            let requested_access = access.unwrap_or(mapping.access);
+            validate_point_access(&requested_address, requested_access)
+                .map_err(|message| error(StatusCode::BAD_REQUEST, message))?;
+            mapping.address = requested_address;
             mapping.interval_ms = request.interval_ms;
             mapping.unit = Some(request.unit);
+            mapping.access = requested_access;
         }
 
         let response = point_mapping_response(&package, &package.point_mappings[mapping_index]);
@@ -3074,6 +3211,20 @@ async fn save_edge_protocol_connection(
         let existing_serial = package.protocol_connections[connection_index]
             .serial
             .clone();
+        let existing_iec101 = package.protocol_connections[connection_index].iec101;
+        let existing_iec104 = package.protocol_connections[connection_index].iec104;
+        let existing_opc_ua = package.protocol_connections[connection_index]
+            .opc_ua
+            .clone();
+        let existing_bacnet_ip = package.protocol_connections[connection_index]
+            .bacnet_ip
+            .clone();
+        let existing_siemens_s7 = package.protocol_connections[connection_index]
+            .siemens_s7
+            .clone();
+        let existing_omron_fins = package.protocol_connections[connection_index]
+            .omron_fins
+            .clone();
         let (endpoint, serial) = normalize_connection_transport(
             request.protocol_type,
             request.endpoint,
@@ -3087,6 +3238,32 @@ async fn save_edge_protocol_connection(
             connection.protocol = request.protocol_type;
             connection.endpoint = endpoint;
             connection.serial = serial;
+            connection.iec101 = matches!(request.protocol_type, ProtocolType::Iec101)
+                .then(|| request.iec101.or(existing_iec101).unwrap_or_default());
+            connection.iec104 = matches!(request.protocol_type, ProtocolType::Iec104)
+                .then(|| request.iec104.or(existing_iec104).unwrap_or_default());
+            connection.opc_ua = matches!(request.protocol_type, ProtocolType::OpcUa)
+                .then(|| request.opc_ua.or(existing_opc_ua).unwrap_or_default());
+            connection.bacnet_ip = matches!(request.protocol_type, ProtocolType::BacnetIp)
+                .then(|| request.bacnet_ip.or(existing_bacnet_ip).unwrap_or_default());
+            connection.siemens_s7 =
+                matches!(request.protocol_type, ProtocolType::SiemensS7).then(|| {
+                    request
+                        .siemens_s7
+                        .or(existing_siemens_s7)
+                        .unwrap_or_default()
+                });
+            connection.omron_fins =
+                matches!(request.protocol_type, ProtocolType::OmronFins).then(|| {
+                    request
+                        .omron_fins
+                        .or(existing_omron_fins)
+                        .unwrap_or_default()
+                });
+            connection.circuit_breaker = request.circuit_breaker;
+            connection
+                .validate()
+                .map_err(|message| error(StatusCode::BAD_REQUEST, message))?;
         }
 
         let response = protocol_connection_response(
@@ -3363,6 +3540,10 @@ fn runtime_status_response(store: &cloud_control::CloudControlStore) -> RuntimeS
         if heartbeat_age_seconds > 30 {
             edge.health = EdgeHealth::Offline;
             edge.cloud_sync.connected = false;
+            edge.mqtt.connected_sink_count = 0;
+            for sink in &mut edge.mqtt.sinks {
+                sink.connected = false;
+            }
             for protocol in &mut edge.protocols {
                 protocol.connected = false;
             }
@@ -3409,31 +3590,28 @@ async fn create_release(
     State(state): State<AppState>,
     Json(package): Json<EdgeConfigPackage>,
 ) -> Result<(StatusCode, Json<ReleaseResponse>), (StatusCode, Json<ErrorResponse>)> {
-    let package_for_persist = package.clone();
+    state
+        .persist_config_package(package.clone())
+        .await
+        .map_err(persistence_error)?;
     let release = {
-        let mut store = state.store.lock().expect("store mutex poisoned");
-        ReleaseService::create_release(&mut store, package).map_err(|errors| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    message: errors
-                        .into_iter()
-                        .map(|error| error.message)
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                }),
-            )
-        })?
+        let store = state.store.lock().expect("store mutex poisoned");
+        store
+            .releases()
+            .filter(|release| {
+                release.edge_id == package.edge_id
+                    && release.desired_version == package.version
+                    && release.status == ReleaseStatus::Pending
+            })
+            .max_by_key(|release| release.release_id)
+            .cloned()
+            .ok_or_else(|| {
+                error(
+                    StatusCode::BAD_REQUEST,
+                    "configuration is incomplete and cannot be synchronized",
+                )
+            })?
     };
-
-    state
-        .persist_config_package(package_for_persist)
-        .await
-        .map_err(persistence_error)?;
-    state
-        .persist_release(release.clone())
-        .await
-        .map_err(persistence_error)?;
 
     Ok((
         StatusCode::CREATED,
@@ -3598,6 +3776,19 @@ pub struct ProtocolConnectionResponse {
     pub protocol: String,
     pub endpoint: String,
     pub serial: Option<SerialConnectionSettingsDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iec101: Option<Iec101ConnectionSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iec104: Option<Iec104ConnectionSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opc_ua: Option<OpcUaConnectionSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bacnet_ip: Option<BacnetIpConnectionSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub siemens_s7: Option<SiemensS7ConnectionSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub omron_fins: Option<OmronFinsConnectionSettings>,
+    pub circuit_breaker: ProtocolCircuitBreakerConfig,
     pub status: String,
     pub policy: String,
 }
@@ -3747,6 +3938,22 @@ pub struct MqttUplinkResponse {
     pub sink_id: String,
     pub broker: String,
     pub client_id: String,
+    pub protocol_version: MqttProtocolVersion,
+    pub keep_alive_seconds: u16,
+    pub clean_session: bool,
+    pub clean_start: bool,
+    pub session_expiry_interval_seconds: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receive_maximum: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maximum_packet_size_bytes: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topic_alias_maximum: Option<u16>,
+    pub request_response_information: bool,
+    pub request_problem_information: bool,
+    pub user_properties: Vec<MqttUserPropertyPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_will: Option<MqttLastWillPayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3766,6 +3973,30 @@ pub struct SaveMqttUplinkRequest {
     pub broker: String,
     pub client_id: String,
     #[serde(default)]
+    pub protocol_version: MqttProtocolVersion,
+    #[serde(default = "default_mqtt_keep_alive_seconds")]
+    pub keep_alive_seconds: u16,
+    #[serde(default = "default_true")]
+    pub clean_session: bool,
+    #[serde(default = "default_true")]
+    pub clean_start: bool,
+    #[serde(default)]
+    pub session_expiry_interval_seconds: u32,
+    #[serde(default)]
+    pub receive_maximum: Option<u16>,
+    #[serde(default)]
+    pub maximum_packet_size_bytes: Option<u32>,
+    #[serde(default)]
+    pub topic_alias_maximum: Option<u16>,
+    #[serde(default)]
+    pub request_response_information: bool,
+    #[serde(default = "default_true")]
+    pub request_problem_information: bool,
+    #[serde(default)]
+    pub user_properties: Vec<MqttUserPropertyPayload>,
+    #[serde(default)]
+    pub last_will: Option<MqttLastWillPayload>,
+    #[serde(default)]
     pub username: Option<String>,
     #[serde(default)]
     pub password_env: Option<String>,
@@ -3777,11 +4008,48 @@ pub struct SaveMqttUplinkRequest {
     pub flush_interval_ms: u64,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MqttUserPropertyPayload {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MqttLastWillPayload {
+    pub topic: String,
+    pub payload: String,
+    pub qos: u8,
+    pub retain: bool,
+    #[serde(default)]
+    pub delay_interval_seconds: u32,
+    #[serde(default)]
+    pub payload_format_utf8: bool,
+    #[serde(default)]
+    pub message_expiry_interval_seconds: u32,
+    #[serde(default)]
+    pub content_type: Option<String>,
+    #[serde(default)]
+    pub response_topic: Option<String>,
+    #[serde(default)]
+    pub correlation_data: Option<String>,
+    #[serde(default)]
+    pub user_properties: Vec<MqttUserPropertyPayload>,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunDiscoveryRequest {
     pub connection_id: String,
-    pub address_range: String,
+    #[serde(default)]
+    pub address_range: Option<String>,
+    #[serde(default)]
+    pub root_node_id: Option<String>,
+    #[serde(default)]
+    pub max_depth: Option<u8>,
+    #[serde(default)]
+    pub include_standard_namespace: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -3845,6 +4113,8 @@ pub struct SavePointMappingRequest {
     pub address_value: String,
     pub interval_ms: u64,
     pub unit: String,
+    #[serde(default)]
+    pub read_write: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -3859,6 +4129,7 @@ pub struct CreatePointMappingRequest {
     pub value_type: Option<String>,
     pub unit: Option<String>,
     pub interval_ms: Option<u64>,
+    pub read_write: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -3904,6 +4175,20 @@ pub struct SaveProtocolConnectionRequest {
     pub endpoint: Option<String>,
     #[serde(default)]
     pub serial: Option<SerialConnectionSettingsDto>,
+    #[serde(default)]
+    pub iec101: Option<Iec101ConnectionSettings>,
+    #[serde(default)]
+    pub iec104: Option<Iec104ConnectionSettings>,
+    #[serde(default)]
+    pub opc_ua: Option<OpcUaConnectionSettings>,
+    #[serde(default)]
+    pub bacnet_ip: Option<BacnetIpConnectionSettings>,
+    #[serde(default)]
+    pub siemens_s7: Option<SiemensS7ConnectionSettings>,
+    #[serde(default)]
+    pub omron_fins: Option<OmronFinsConnectionSettings>,
+    #[serde(default)]
+    pub circuit_breaker: ProtocolCircuitBreakerConfig,
 }
 
 #[derive(Deserialize)]
@@ -3913,6 +4198,20 @@ pub struct CreateProtocolConnectionRequest {
     pub endpoint: Option<String>,
     #[serde(default)]
     pub serial: Option<SerialConnectionSettingsDto>,
+    #[serde(default)]
+    pub iec101: Option<Iec101ConnectionSettings>,
+    #[serde(default)]
+    pub iec104: Option<Iec104ConnectionSettings>,
+    #[serde(default)]
+    pub opc_ua: Option<OpcUaConnectionSettings>,
+    #[serde(default)]
+    pub bacnet_ip: Option<BacnetIpConnectionSettings>,
+    #[serde(default)]
+    pub siemens_s7: Option<SiemensS7ConnectionSettings>,
+    #[serde(default)]
+    pub omron_fins: Option<OmronFinsConnectionSettings>,
+    #[serde(default)]
+    pub circuit_breaker: ProtocolCircuitBreakerConfig,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -4119,6 +4418,7 @@ fn build_point_mapping_from_create_request(
     let address = PointAddress {
         kind: non_empty_optional(request.address_kind).unwrap_or_else(|| "simulated".to_string()),
         value: non_empty_optional(request.address_value).unwrap_or_else(|| point_id.clone()),
+        modbus: None,
     };
     let value_type = request
         .value_type
@@ -4126,6 +4426,14 @@ fn build_point_mapping_from_create_request(
         .map(parse_telemetry_type)
         .transpose()?
         .unwrap_or(TelemetryType::Float);
+    let access = request
+        .read_write
+        .as_deref()
+        .map(parse_point_access)
+        .transpose()?
+        .unwrap_or_default();
+    validate_point_access(&address, access)
+        .map_err(|message| error(StatusCode::BAD_REQUEST, message))?;
 
     Ok(TelemetryPointMapping::new(
         point_id,
@@ -4135,6 +4443,7 @@ fn build_point_mapping_from_create_request(
         address,
         value_type,
     )
+    .with_access(access)
     .with_unit(non_empty_optional(request.unit).unwrap_or_else(|| "-".to_string()))
     .with_interval_ms(request.interval_ms.unwrap_or(1000).max(100)))
 }
@@ -4331,6 +4640,7 @@ fn build_data_config_from_request(
             PointAddress {
                 kind: non_empty_field(point.address_kind, "addressKind")?,
                 value: non_empty_field(point.address_value, "addressValue")?,
+                modbus: None,
             },
             parse_telemetry_type(&point.value_type)?,
             json_field,
@@ -4684,56 +4994,13 @@ fn materialize_product_config_package(
     edge_id: &str,
     version: &ProductVersion,
 ) -> Result<EdgeConfigPackage, (StatusCode, Json<ErrorResponse>)> {
-    let default_connection_id = version
-        .data_configs
-        .first()
-        .map(|config| config.protocol_connection_id.clone())
-        .or_else(|| {
-            version
-                .protocol_connections
-                .first()
-                .map(|connection| connection.connection_id.clone())
-        })
-        .ok_or_else(|| {
-            error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "product version has no protocol connection",
-            )
-        })?;
-    let default_device_id = version
-        .data_configs
-        .first()
-        .map(|config| config.device_id.clone())
-        .or_else(|| {
-            version
-                .devices
-                .first()
-                .map(|device| device.device_id.clone())
-        })
-        .unwrap_or_else(|| "device-1".to_string());
-
-    let mut point_mappings = Vec::new();
-    for point_set_id in &version.point_set_ids {
-        let point_set = store.point_set(point_set_id).ok_or_else(|| {
-            error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "product version references a missing point set",
-            )
-        })?;
-        point_mappings.extend(point_set.points.iter().map(|point| {
-            let mut mapping = TelemetryPointMapping::new(
-                point.point_id.clone(),
-                default_device_id.clone(),
-                point.semantic_id.clone(),
-                default_connection_id.clone(),
-                point.address.clone(),
-                point.value_type,
-            )
-            .with_interval_ms(point.interval_ms);
-            mapping.unit = point.unit.clone();
-            mapping
-        }));
-    }
+    let point_mappings = materialize_product_point_mappings(
+        store,
+        &version.point_set_ids,
+        &version.data_configs,
+        &version.protocol_connections,
+        &version.devices,
+    )?;
 
     Ok(EdgeConfigPackage {
         edge_id: edge_id.to_string(),
@@ -4757,10 +5024,93 @@ fn materialize_product_config_package(
             })
             .collect(),
         data_configs: version.data_configs.clone(),
+        command_flows: version.command_flows.clone(),
         point_mappings,
         collection_tasks: version.collection_tasks.clone(),
         algorithms: version.algorithms.clone(),
     })
+}
+
+fn materialize_product_point_mappings(
+    store: &cloud_control::CloudControlStore,
+    point_set_ids: &[String],
+    data_configs: &[DataConfig],
+    protocol_connections: &[ProtocolConnection],
+    devices: &[edge_core::DeviceInstance],
+) -> Result<Vec<TelemetryPointMapping>, ApiError> {
+    let default_connection_id = data_configs
+        .first()
+        .map(|config| config.protocol_connection_id.clone())
+        .or_else(|| {
+            protocol_connections
+                .first()
+                .map(|connection| connection.connection_id.clone())
+        })
+        .ok_or_else(|| {
+            error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "product version has no protocol connection",
+            )
+        })?;
+    let default_device_id = data_configs
+        .first()
+        .map(|config| config.device_id.clone())
+        .or_else(|| devices.first().map(|device| device.device_id.clone()))
+        .unwrap_or_else(|| "device-1".to_string());
+
+    let mut point_routes = BTreeMap::<String, (String, String)>::new();
+    for config in data_configs {
+        for point in &config.points {
+            let route = (
+                config.device_id.clone(),
+                config.protocol_connection_id.clone(),
+            );
+            if let Some(existing) = point_routes.insert(point.point_id.clone(), route.clone()) {
+                if existing != route {
+                    return Err(error(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        format!(
+                            "point {} is assigned to multiple device/protocol routes",
+                            point.point_id
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    let mut point_mappings = Vec::new();
+    for point_set_id in point_set_ids {
+        let point_set = store.point_set(point_set_id).ok_or_else(|| {
+            error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "product version references a missing point set",
+            )
+        })?;
+        for point in &point_set.points {
+            let (device_id, connection_id) = point_routes
+                .get(&point.point_id)
+                .cloned()
+                .unwrap_or_else(|| (default_device_id.clone(), default_connection_id.clone()));
+            let mut mapping = TelemetryPointMapping::new(
+                point.point_id.clone(),
+                device_id,
+                point.semantic_id.clone(),
+                connection_id,
+                point.address.clone(),
+                point.value_type,
+            )
+            .with_interval_ms(point.interval_ms)
+            .with_access(point.access);
+            mapping.opc_ua = point.opc_ua;
+            mapping.iec101 = point.iec101;
+            mapping.iec104 = point.iec104;
+            mapping.bacnet = point.bacnet;
+            mapping.unit = point.unit.clone();
+            point_mappings.push(mapping);
+        }
+    }
+    Ok(point_mappings)
 }
 
 fn edge_display_name(edge: &EdgeNode) -> String {
@@ -4807,6 +5157,9 @@ fn config_validation_response(package: &EdgeConfigPackage) -> ManagementActionRe
             format!("点位 {} 个", package.point_mappings.len()),
             format!("采集任务 {} 个", package.collection_tasks.len()),
             format!("算法 {} 个", package.algorithms.len()),
+            format!("数据上报 {} 个", package.data_configs.len()),
+            format!("指令编排 {} 个", package.command_flows.len()),
+            format!("MQTT 连接 {} 个", package.mqtt_uplinks.len()),
         ],
         message: "配置校验已完成".to_string(),
         status: "已通过".to_string(),
@@ -4831,8 +5184,10 @@ fn agent_suggestion_list(store: &cloud_control::CloudControlStore) -> Vec<AgentS
             state: "生成草稿".to_string(),
         },
         AgentSuggestionResponse {
-            title: "发布风险".to_string(),
-            detail: format!("当前有 {pending_count} 个待发布版本，建议先单边端灰度"),
+            title: "同步状态".to_string(),
+            detail: format!(
+                "当前有 {pending_count} 个修订等待 Runtime 应用，离线边端将在重连后补偿同步"
+            ),
             state: "需确认".to_string(),
         },
         AgentSuggestionResponse {
@@ -4968,7 +5323,7 @@ fn point_mapping_response(
         connection: mapping.protocol_connection_id.clone(),
         address: format_address(&mapping.address),
         value_type: format_telemetry_type(mapping.value_type),
-        read_write: "read".to_string(),
+        read_write: format_point_access(mapping.access),
         unit: mapping.unit.clone().unwrap_or_else(|| "-".to_string()),
         scale: "1".to_string(),
         interval: format!("{}ms", mapping.interval_ms),
@@ -4977,7 +5332,11 @@ fn point_mapping_response(
             .as_ref()
             .map(|range| format!("{}-{}", range.min, range.max))
             .unwrap_or_else(|| "-".to_string()),
-        quality_rule: "timeout->bad".to_string(),
+        quality_rule: if mapping.range.is_some() {
+            "通信/超时→坏；超量程→不确定".to_string()
+        } else {
+            "通信/超时→坏".to_string()
+        },
         status: "启用".to_string(),
     }
 }
@@ -5105,6 +5464,13 @@ fn protocol_connection_response(
                 stop_bits: serial.stop_bits,
                 parity: serial.parity.clone(),
             }),
+        iec101: connection.iec101,
+        iec104: connection.iec104,
+        opc_ua: connection.opc_ua.clone(),
+        bacnet_ip: connection.bacnet_ip.clone(),
+        siemens_s7: connection.siemens_s7.clone(),
+        omron_fins: connection.omron_fins.clone(),
+        circuit_breaker: connection.circuit_breaker.clone(),
         status: connected
             .map(|connected| {
                 if connected {
@@ -5117,9 +5483,26 @@ fn protocol_connection_response(
         policy: connection
             .serial
             .as_ref()
-            .map(format_serial_policy)
-            .unwrap_or_else(|| "1000ms timeout / 3 retry".to_string()),
+            .map(|serial| {
+                format!(
+                    "{} · {}",
+                    format_serial_policy(serial),
+                    format_circuit_breaker_policy(&connection.circuit_breaker)
+                )
+            })
+            .unwrap_or_else(|| format_circuit_breaker_policy(&connection.circuit_breaker)),
     }
+}
+
+fn format_circuit_breaker_policy(config: &ProtocolCircuitBreakerConfig) -> String {
+    if !config.enabled {
+        return "熔断关闭".to_string();
+    }
+    format!(
+        "连续 {} 次失败 / 冷却 {}s",
+        config.failure_threshold,
+        config.open_duration_ms / 1_000
+    )
 }
 
 fn normalize_connection_transport(
@@ -5399,6 +5782,162 @@ fn validate_point_set_request(
         validate_required_text("semanticId", &point.semantic_id)?;
         validate_required_text("address.kind", &point.address.kind)?;
         validate_required_text("address.value", &point.address.value)?;
+        validate_modbus_point_options(&point.address, point.value_type, point.access).map_err(
+            |cause| {
+                error(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    format!("point {} access is invalid: {cause}", point.point_id),
+                )
+            },
+        )?;
+        if request.protocol == ProtocolType::Dlt645 {
+            if point.address.kind != "dlt645_address" {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "point {} must use dlt645_address address kind",
+                        point.point_id
+                    ),
+                ));
+            }
+            let address = parse_dlt645_point_address(&point.address.value).map_err(|cause| {
+                error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "point {} DL/T 645 address is invalid: {cause}",
+                        point.point_id
+                    ),
+                )
+            })?;
+            match dlt645_template_by_identifier(address.data_identifier) {
+                Some(template) => {
+                    if let Some(configured) = address.value_bytes {
+                        if configured != template.value_bytes {
+                            return Err(error(
+                                StatusCode::BAD_REQUEST,
+                                format!(
+                                    "point {} DL/T 645 standard data identifier {} response length is {} bytes, not {configured}",
+                                    point.point_id,
+                                    template.data_identifier,
+                                    template.value_bytes
+                                ),
+                            ));
+                        }
+                    }
+                }
+                None if address.value_bytes.is_none() => {
+                    return Err(error(
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "point {} DL/T 645 vendor data identifier {:08X} requires response value byte length",
+                            point.point_id, address.data_identifier
+                        ),
+                    ));
+                }
+                None => {}
+            }
+        }
+        if request.protocol == ProtocolType::Iec104 {
+            if point.address.kind != "iec104_ioa" {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    format!("point {} must use iec104_ioa address kind", point.point_id),
+                ));
+            }
+            parse_iec104_point_address(&point.address.value).map_err(|cause| {
+                error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "point {} IEC 104 address is invalid: {cause}",
+                        point.point_id
+                    ),
+                )
+            })?;
+            validate_iec104_point(&point.address, point.value_type, point.access, point.iec104)
+                .map_err(|cause| {
+                    error(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        format!(
+                            "point {} IEC 104 configuration is invalid: {cause}",
+                            point.point_id
+                        ),
+                    )
+                })?;
+        }
+        if request.protocol == ProtocolType::Iec101 {
+            if point.address.kind != "iec101_ioa" {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    format!("point {} must use iec101_ioa address kind", point.point_id),
+                ));
+            }
+            parse_iec101_point_address(&point.address.value).map_err(|cause| {
+                error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "point {} IEC 101 address is invalid: {cause}",
+                        point.point_id
+                    ),
+                )
+            })?;
+            validate_iec101_point(&point.address, point.value_type, point.access, point.iec101)
+                .map_err(|cause| {
+                    error(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        format!(
+                            "point {} IEC 101 configuration is invalid: {cause}",
+                            point.point_id
+                        ),
+                    )
+                })?;
+        }
+        if request.protocol == ProtocolType::OpcUa {
+            let address_validation = match point.address.kind.as_str() {
+                "node_id" => validate_opc_ua_node_id(&point.address.value),
+                "browse_path" => parse_opc_ua_browse_path(&point.address.value).map(|_| ()),
+                _ => Err("address kind must be node_id or browse_path".to_string()),
+            };
+            address_validation.map_err(|cause| {
+                error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "point {} OPC UA address is invalid: {cause}",
+                        point.point_id
+                    ),
+                )
+            })?;
+            validate_opc_ua_point(&point.address, point.value_type, point.access, point.opc_ua)
+                .map_err(|cause| {
+                    error(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        format!(
+                            "point {} OPC UA configuration is invalid: {cause}",
+                            point.point_id
+                        ),
+                    )
+                })?;
+        }
+        if request.protocol == ProtocolType::BacnetIp {
+            if point.address.kind != "bacnet_object_property" {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "point {} must use bacnet_object_property address kind",
+                        point.point_id
+                    ),
+                ));
+            }
+            validate_bacnet_point(&point.address, point.value_type, point.access, point.bacnet)
+                .map_err(|cause| {
+                    error(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        format!(
+                            "point {} BACnet/IP configuration is invalid: {cause}",
+                            point.point_id
+                        ),
+                    )
+                })?;
+        }
         if request.protocol == ProtocolType::CustomSerial {
             if point.address.kind != "custom_serial_frame" {
                 return Err(error(
@@ -5428,6 +5967,32 @@ fn validate_point_set_request(
                     ),
                 )
             })?;
+        }
+        if request.protocol == ProtocolType::SiemensS7 {
+            validate_siemens_s7_point(&point.address, point.value_type, point.access).map_err(
+                |cause| {
+                    error(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        format!(
+                            "point {} Siemens S7 address is invalid: {cause}",
+                            point.point_id
+                        ),
+                    )
+                },
+            )?;
+        }
+        if request.protocol == ProtocolType::OmronFins {
+            validate_omron_fins_point(&point.address, point.value_type, point.access).map_err(
+                |cause| {
+                    error(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        format!(
+                            "point {} Omron FINS address is invalid: {cause}",
+                            point.point_id
+                        ),
+                    )
+                },
+            )?;
         }
         if point.interval_ms == 0 {
             return Err(error(
@@ -5580,6 +6145,13 @@ fn validate_product_version_request(
             .map(|uplink| uplink.sink_id.as_str()),
         "MQTT sink",
     )?;
+    ensure_unique_ids(
+        request
+            .command_flows
+            .iter()
+            .map(|flow| flow.flow_id.as_str()),
+        "command flow",
+    )?;
     for uplink in &request.mqtt_uplinks {
         if uplink.username.is_some() != uplink.password_env.is_some() {
             return Err(error(
@@ -5642,6 +6214,11 @@ fn validate_product_version_request(
         .iter()
         .map(|connection| connection.connection_id.as_str())
         .collect::<BTreeSet<_>>();
+    for connection in &request.protocol_connections {
+        connection
+            .validate()
+            .map_err(|cause| error(StatusCode::UNPROCESSABLE_ENTITY, cause))?;
+    }
     let algorithm_ids = request
         .algorithms
         .iter()
@@ -5652,6 +6229,39 @@ fn validate_product_version_request(
         .iter()
         .map(|uplink| uplink.sink_id.as_str())
         .collect::<BTreeSet<_>>();
+    if !request.command_flows.is_empty() {
+        let point_mappings = materialize_product_point_mappings(
+            &store,
+            &request.point_set_ids,
+            &request.data_configs,
+            &request.protocol_connections,
+            &request.devices,
+        )?;
+        for flow in &request.command_flows {
+            if !flow.protocol_connection_id.is_empty()
+                && !connection_ids.contains(flow.protocol_connection_id.as_str())
+            {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "command flow {} references missing protocol connection {}",
+                        flow.flow_id, flow.protocol_connection_id
+                    ),
+                ));
+            }
+            if !sink_ids.contains(flow.mqtt_connection_id.as_str()) {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "command flow {} references missing MQTT connection {}",
+                        flow.flow_id, flow.mqtt_connection_id
+                    ),
+                ));
+            }
+            validate_command_flow(flow, &point_mappings)
+                .map_err(|cause| error(StatusCode::UNPROCESSABLE_ENTITY, cause))?;
+        }
+    }
     for config in &request.data_configs {
         if !connection_ids.contains(config.protocol_connection_id.as_str()) {
             return Err(error(
@@ -5750,6 +6360,7 @@ fn build_product_version(
         collection_tasks: request.collection_tasks,
         algorithms: request.algorithms,
         data_configs: request.data_configs,
+        command_flows: request.command_flows,
         mqtt_uplinks: request.mqtt_uplinks,
         created_at: existing
             .map(|version| version.created_at)
@@ -6079,9 +6690,12 @@ fn format_protocol(protocol: ProtocolType) -> String {
         ProtocolType::ModbusRtu => "Modbus RTU",
         ProtocolType::Dlt645 => "DL/T645",
         ProtocolType::Iec101 => "IEC-101",
+        ProtocolType::Iec104 => "IEC-104",
         ProtocolType::CustomSerial => "自定义串口",
         ProtocolType::OpcUa => "OPC UA",
         ProtocolType::SiemensS7 => "Siemens S7",
+        ProtocolType::BacnetIp => "BACnet/IP",
+        ProtocolType::OmronFins => "Omron FINS",
     }
     .to_string()
 }
@@ -6091,6 +6705,18 @@ fn mqtt_uplink_response(uplink: MqttUplinkConfig) -> MqttUplinkResponse {
         sink_id: uplink.sink_id,
         broker: uplink.broker,
         client_id: uplink.client_id,
+        protocol_version: uplink.protocol_version,
+        keep_alive_seconds: uplink.keep_alive_seconds,
+        clean_session: uplink.clean_session,
+        clean_start: uplink.clean_start,
+        session_expiry_interval_seconds: uplink.session_expiry_interval_seconds,
+        receive_maximum: uplink.receive_maximum,
+        maximum_packet_size_bytes: uplink.maximum_packet_size_bytes,
+        topic_alias_maximum: uplink.topic_alias_maximum,
+        request_response_information: uplink.request_response_information,
+        request_problem_information: uplink.request_problem_information,
+        user_properties: mqtt_user_property_payloads(uplink.user_properties),
+        last_will: uplink.last_will.map(mqtt_last_will_payload),
         username: uplink.username,
         password_env: uplink.password_env,
         tls_ca_path: uplink.tls_ca_path,
@@ -6099,6 +6725,114 @@ fn mqtt_uplink_response(uplink: MqttUplinkConfig) -> MqttUplinkResponse {
         batch_size: uplink.batch_size,
         flush_interval_ms: uplink.flush_interval_ms,
     }
+}
+
+fn validate_mqtt_advanced_settings(
+    request: &SaveMqttUplinkRequest,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if request.receive_maximum == Some(0) {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "MQTT 5 receive maximum must be greater than zero",
+        ));
+    }
+    if request.maximum_packet_size_bytes == Some(0) {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "MQTT 5 maximum packet size must be greater than zero",
+        ));
+    }
+    if request
+        .user_properties
+        .iter()
+        .any(|property| property.key.trim().is_empty())
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "MQTT 5 user property key is required",
+        ));
+    }
+    if let Some(will) = &request.last_will {
+        if will.topic.trim().is_empty() {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "MQTT last will topic is required",
+            ));
+        }
+        if will.qos > 2 {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "MQTT last will QoS must be 0, 1, or 2",
+            ));
+        }
+        if will
+            .user_properties
+            .iter()
+            .any(|property| property.key.trim().is_empty())
+        {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "MQTT last will user property key is required",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn mqtt_user_properties(values: Vec<MqttUserPropertyPayload>) -> Vec<MqttUserProperty> {
+    values
+        .into_iter()
+        .map(|property| MqttUserProperty {
+            key: property.key.trim().to_string(),
+            value: property.value,
+        })
+        .collect()
+}
+
+fn mqtt_user_property_payloads(values: Vec<MqttUserProperty>) -> Vec<MqttUserPropertyPayload> {
+    values
+        .into_iter()
+        .map(|property| MqttUserPropertyPayload {
+            key: property.key,
+            value: property.value,
+        })
+        .collect()
+}
+
+fn mqtt_last_will_config(value: MqttLastWillPayload) -> MqttLastWillConfig {
+    MqttLastWillConfig {
+        topic: value.topic.trim().to_string(),
+        payload: value.payload,
+        qos: value.qos,
+        retain: value.retain,
+        delay_interval_seconds: value.delay_interval_seconds,
+        payload_format_utf8: value.payload_format_utf8,
+        message_expiry_interval_seconds: value.message_expiry_interval_seconds,
+        content_type: non_empty(value.content_type),
+        response_topic: non_empty(value.response_topic),
+        correlation_data: non_empty(value.correlation_data),
+        user_properties: mqtt_user_properties(value.user_properties),
+    }
+}
+
+fn mqtt_last_will_payload(value: MqttLastWillConfig) -> MqttLastWillPayload {
+    MqttLastWillPayload {
+        topic: value.topic,
+        payload: value.payload,
+        qos: value.qos,
+        retain: value.retain,
+        delay_interval_seconds: value.delay_interval_seconds,
+        payload_format_utf8: value.payload_format_utf8,
+        message_expiry_interval_seconds: value.message_expiry_interval_seconds,
+        content_type: value.content_type,
+        response_topic: value.response_topic,
+        correlation_data: value.correlation_data,
+        user_properties: mqtt_user_property_payloads(value.user_properties),
+    }
+}
+
+fn default_mqtt_keep_alive_seconds() -> u16 {
+    60
 }
 
 fn non_empty(value: Option<String>) -> Option<String> {
@@ -6172,6 +6906,27 @@ fn parse_telemetry_type(
         value => Err(error(
             StatusCode::BAD_REQUEST,
             format!("unsupported telemetry valueType: {value}"),
+        )),
+    }
+}
+
+fn format_point_access(access: PointAccess) -> String {
+    match access {
+        PointAccess::ReadOnly => "read",
+        PointAccess::ReadWrite => "read_write",
+        PointAccess::WriteOnly => "write",
+    }
+    .to_string()
+}
+
+fn parse_point_access(access: &str) -> Result<PointAccess, (StatusCode, Json<ErrorResponse>)> {
+    match access.trim().to_ascii_lowercase().as_str() {
+        "read" | "read_only" => Ok(PointAccess::ReadOnly),
+        "read_write" | "readwrite" | "rw" => Ok(PointAccess::ReadWrite),
+        "write" | "write_only" => Ok(PointAccess::WriteOnly),
+        value => Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("unsupported point readWrite mode: {value}"),
         )),
     }
 }

@@ -3,8 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{bail, Result};
 use chrono::Utc;
 use edge_core::{
-    validate_data_config_visual_graph, DataQuality, DeviceShadow, EdgeConfigPackage,
-    TelemetrySample, TelemetryValue,
+    validate_command_flow, validate_data_config_visual_graph, validate_iec101_point,
+    validate_iec104_point, validate_omron_fins_point, validate_point_access,
+    validate_siemens_s7_point, DataQuality, DeviceShadow, EdgeConfigPackage, ProtocolType,
+    TelemetrySample, TelemetryValue, MAX_DATA_CONFIG_RETRY_COUNT, MAX_DATA_CONFIG_TIMEOUT_MS,
 };
 
 use crate::{
@@ -50,6 +52,11 @@ pub(crate) fn validate_config_references(package: &EdgeConfigPackage) -> Result<
         .iter()
         .map(|connection| connection.connection_id.as_str())
         .collect::<BTreeSet<_>>();
+    let connections = package
+        .protocol_connections
+        .iter()
+        .map(|connection| (connection.connection_id.as_str(), connection))
+        .collect::<BTreeMap<_, _>>();
     let sink_ids = package
         .mqtt_uplinks
         .iter()
@@ -65,6 +72,55 @@ pub(crate) fn validate_config_references(package: &EdgeConfigPackage) -> Result<
         .iter()
         .map(|algorithm| algorithm.id.as_str())
         .collect::<BTreeSet<_>>();
+
+    for connection in &package.protocol_connections {
+        if let Err(message) = connection.validate() {
+            bail!(
+                "protocol connection {}: {}",
+                connection.connection_id,
+                message
+            );
+        }
+    }
+
+    for mapping in &package.point_mappings {
+        validate_point_access(&mapping.address, mapping.access).map_err(anyhow::Error::msg)?;
+        let connection = connections
+            .get(mapping.protocol_connection_id.as_str())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "point {} references missing protocol connection {}",
+                    mapping.point_id,
+                    mapping.protocol_connection_id
+                )
+            })?;
+        if connection.protocol == ProtocolType::SiemensS7 {
+            validate_siemens_s7_point(&mapping.address, mapping.value_type, mapping.access)
+                .map_err(anyhow::Error::msg)?;
+        }
+        if connection.protocol == ProtocolType::OmronFins {
+            validate_omron_fins_point(&mapping.address, mapping.value_type, mapping.access)
+                .map_err(anyhow::Error::msg)?;
+        }
+        if connection.protocol == ProtocolType::Iec101 {
+            validate_iec101_point(
+                &mapping.address,
+                mapping.value_type,
+                mapping.access,
+                mapping.iec101,
+            )
+            .map_err(anyhow::Error::msg)?;
+        }
+        if connection.protocol == ProtocolType::Iec104 {
+            validate_iec104_point(
+                &mapping.address,
+                mapping.value_type,
+                mapping.access,
+                mapping.iec104,
+            )
+            .map_err(anyhow::Error::msg)?;
+        }
+    }
 
     for task in &package.collection_tasks {
         if task.task_id.trim().is_empty() {
@@ -106,6 +162,13 @@ pub(crate) fn validate_config_references(package: &EdgeConfigPackage) -> Result<
                     task.device_id
                 );
             }
+            if !mapping.access.is_readable() {
+                bail!(
+                    "collection task {} references write-only point {}",
+                    task.task_id,
+                    point_id
+                );
+            }
         }
     }
 
@@ -117,6 +180,28 @@ pub(crate) fn validate_config_references(package: &EdgeConfigPackage) -> Result<
             bail!(
                 "data config {} must include at least one point",
                 data_config.config_id
+            );
+        }
+        if data_config.collection.period_ms == 0 {
+            bail!(
+                "data config {} collection period must be greater than zero",
+                data_config.config_id
+            );
+        }
+        if data_config.collection.timeout_ms == 0
+            || data_config.collection.timeout_ms > MAX_DATA_CONFIG_TIMEOUT_MS
+        {
+            bail!(
+                "data config {} collection timeout must be between 1 and {} ms",
+                data_config.config_id,
+                MAX_DATA_CONFIG_TIMEOUT_MS
+            );
+        }
+        if data_config.collection.retry_count > MAX_DATA_CONFIG_RETRY_COUNT {
+            bail!(
+                "data config {} collection retry count must not exceed {}",
+                data_config.config_id,
+                MAX_DATA_CONFIG_RETRY_COUNT
             );
         }
         if !device_ids.contains(data_config.device_id.as_str()) {
@@ -168,6 +253,13 @@ pub(crate) fn validate_config_references(package: &EdgeConfigPackage) -> Result<
                     data_config.protocol_connection_id
                 );
             }
+            if !mapping.access.is_readable() {
+                bail!(
+                    "data config {} references write-only point {}",
+                    data_config.config_id,
+                    point.point_id
+                );
+            }
             if !json_fields.insert(point.json_field.as_str()) {
                 bail!(
                     "data config {} has duplicate json field {}",
@@ -188,6 +280,26 @@ pub(crate) fn validate_config_references(package: &EdgeConfigPackage) -> Result<
         }
 
         validate_data_config_visual_graph(data_config).map_err(anyhow::Error::msg)?;
+    }
+
+    for command_flow in &package.command_flows {
+        if !command_flow.protocol_connection_id.is_empty()
+            && !connection_ids.contains(command_flow.protocol_connection_id.as_str())
+        {
+            bail!(
+                "command flow {} references missing protocol connection {}",
+                command_flow.flow_id,
+                command_flow.protocol_connection_id
+            );
+        }
+        if !sink_ids.contains(command_flow.mqtt_connection_id.as_str()) {
+            bail!(
+                "command flow {} references missing MQTT connection {}",
+                command_flow.flow_id,
+                command_flow.mqtt_connection_id
+            );
+        }
+        validate_command_flow(command_flow, &package.point_mappings).map_err(anyhow::Error::msg)?;
     }
 
     Ok(())
