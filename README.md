@@ -12,11 +12,11 @@ processes rather than rendered from static fixtures.
 
 ### Cloud control plane
 
-![VelaEdge Cloud dashboard](docs/images/velaedge-cloud-dashboard.png)
+![VelaEdge Cloud dashboard](https://github.com/hwkj-tech/velaedge/blob/main/docs/images/velaedge-cloud-dashboard.png?raw=1)
 
 ### Runtime health console
 
-![VelaEdge Runtime health console](docs/images/velaedge-runtime-health.png)
+![VelaEdge Runtime health console](https://github.com/hwkj-tech/velaedge/blob/main/docs/images/velaedge-runtime-health.png?raw=1)
 
 ## Workspace
 
@@ -257,7 +257,12 @@ Run the cloud API with the built-in management console:
 cargo run -p cloud-api
 ```
 
-Then open `http://127.0.0.1:8080`. The API also serves:
+After Cloud and Runtime are running, open:
+
+- VelaEdge Admin: `http://127.0.0.1:8080/`
+- VelaEdge Runtime: `http://127.0.0.1:19090/`
+
+The Admin API also serves:
 
 ```text
 GET  /api/summary

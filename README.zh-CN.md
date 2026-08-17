@@ -5,7 +5,8 @@
 VelaEdge 是云流科技使用 Rust 构建的边云一体化工业数据平台。系统由 Cloud 控制面和
 Runtime 边缘执行面组成：Cloud 负责项目、产品、点位集、采集/指令编排、配置治理与运行
 监控；Runtime 负责工业协议采集、确定性计算、本地存储、MQTT 上报和设备写入。Runtime
-主动连接 Cloud，不要求边端开放管理入口。
+主动连接 Cloud，不要求边端向 Cloud 或公网开放管理入口；只读健康页默认仅监听本机回环
+地址。
 
 ## 系统截图
 
@@ -14,17 +15,19 @@ Runtime 边缘执行面组成：Cloud 负责项目、产品、点位集、采集
 
 ### Cloud 管理控制台
 
-![VelaEdge Cloud 管理控制台](docs/images/velaedge-cloud-dashboard.png)
+![VelaEdge Cloud 管理控制台](https://github.com/hwkj-tech/velaedge/blob/main/docs/images/velaedge-cloud-dashboard.png?raw=1)
 
 ### Runtime 健康控制台
 
-![VelaEdge Runtime 健康控制台](docs/images/velaedge-runtime-health.png)
+![VelaEdge Runtime 健康控制台](https://github.com/hwkj-tech/velaedge/blob/main/docs/images/velaedge-runtime-health.png?raw=1)
 
 ## 核心能力
 
 - 产品化配置：项目隔离，产品复用点位集、协议连接、采集编排和指令编排。
-- 工业协议：Modbus TCP/RTU、OPC UA、DL/T 645-2007、IEC 60870-5-101/104，并包含
-  Siemens S7、Omron FINS、BACnet/IP 等适配与实验室验收能力。
+- 工业协议：Runtime 已实现 Modbus TCP/RTU、OPC UA、DL/T 645-2007、
+  IEC 60870-5-101/104、BACnet/IP、Siemens S7、Omron FINS，以及受限自定义串口帧 DSL。
+- 验收边界：容器与 loopback 实验室用于验证协议链路和读写逻辑；多厂商物理设备互操作、
+  串口电气特性和 24 小时现场长稳需要按现场验收文档单独执行。
 - 数据编排：点位输入、窗口聚合、变化上报、死区过滤、表达式、分支和多 MQTT 输出。
 - 指令编排：MQTT 下行消息映射到可写点位，并经过权限、范围、幂等和审计约束。
 - 边端可靠性：RocksDB 配置与 Outbox、本地 JSONL、断线重连、指标采集和健康页面。
@@ -104,11 +107,20 @@ cargo test --workspace
 cargo run -p cloud-api
 ```
 
-当前演示环境入口（端口可配置）：
+浏览器入口：
 
-- Cloud 管理控制台：`http://127.0.0.1:8082/`
-- EdgeLink 网关：`127.0.0.1:18080`
-- Runtime 健康控制台：`http://127.0.0.1:19090/`
+- VelaEdge Admin：`http://127.0.0.1:8080/`
+- VelaEdge Runtime：`http://127.0.0.1:19090/`
+
+如需沿用仓库演示环境的 `8082` 端口，请显式启动：
+
+```bash
+EDGEOPS_HTTP_ADDR=127.0.0.1:8082 cargo run -p cloud-api
+```
+
+使用前文的 `configs/edge.local.toml` 启动 Runtime。Cloud 和 Runtime 不会自动启动 MQTT
+Broker；验证 MQTT 上报前，需要先准备 Broker，并在 Cloud 的边端 MQTT 配置中填写
+Runtime 实际可访问的地址。
 
 端口可以通过 Cloud 环境变量或 Runtime TOML 调整。生产环境应在管理端入口启用 TLS 与
 鉴权；Runtime 健康页默认仅监听回环地址。
@@ -134,11 +146,12 @@ scripts/run-container-protocol-device-acceptance.sh
 创建 Modbus、S7、FINS 三协议完整演示产品：
 
 ```bash
-VELAEDGE_API_BASE=http://127.0.0.1:8082 scripts/bootstrap-industrial-demo.sh
+VELAEDGE_API_BASE=http://127.0.0.1:8080 scripts/bootstrap-industrial-demo.sh
 ```
 
 演示会创建项目、产品、三套协议连接、点位集、采集多分支、多个 MQTT 输出和下行指令
-编排，并绑定到测试边端。
+编排，并绑定到测试边端。如果 Cloud 按上面的演示方式监听 `8082`，请相应地把
+`VELAEDGE_API_BASE` 改为 `http://127.0.0.1:8082`。
 
 ## 生产部署
 
