@@ -191,11 +191,17 @@ pub async fn auth_status(
 }
 
 fn required_role(method: &Method, path: &str) -> ApiRole {
-    if method == Method::GET || method == Method::HEAD || method == Method::OPTIONS {
+    if path == "/mcp"
+        || method == Method::GET
+        || method == Method::HEAD
+        || method == Method::OPTIONS
+    {
         ApiRole::Viewer
     } else if method == Method::DELETE
         || path.ends_with("/access-token")
         || is_agent_proposal_review(method, path)
+        || is_agent_change_set_execution(method, path)
+        || is_agent_command_execution(method, path)
     {
         ApiRole::Admin
     } else {
@@ -207,6 +213,18 @@ fn is_agent_proposal_review(method: &Method, path: &str) -> bool {
     *method == Method::POST
         && path.starts_with("/api/agent/proposals/")
         && (path.ends_with("/approve") || path.ends_with("/reject"))
+}
+
+fn is_agent_change_set_execution(method: &Method, path: &str) -> bool {
+    *method == Method::POST
+        && path.starts_with("/api/agent/change-sets/")
+        && (path.ends_with("/confirm") || path.ends_with("/reject") || path.ends_with("/apply"))
+}
+
+fn is_agent_command_execution(method: &Method, path: &str) -> bool {
+    *method == Method::POST
+        && path.starts_with("/api/agent/commands/")
+        && (path.ends_with("/confirm") || path.ends_with("/reject") || path.ends_with("/dispatch"))
 }
 
 fn bearer_token(value: Option<&HeaderValue>) -> Option<&str> {

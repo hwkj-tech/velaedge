@@ -13,8 +13,9 @@ use sqlx::{
 use uuid::Uuid;
 
 use crate::{
-    AgentConversation, AgentProposal, AuditAction, AuditRecord, EdgeAccessCredential, EdgeNode,
-    KnowledgeDocument, PointSet, Product, ProductVersion, Project, ReleaseRecord, ReleaseStatus,
+    AgentChangeSet, AgentCommandCandidate, AgentConversation, AgentProposal, AuditAction,
+    AuditRecord, EdgeAccessCredential, EdgeNode, KnowledgeDocument, PointSet, Product,
+    ProductVersion, Project, ReleaseRecord, ReleaseStatus,
 };
 
 #[derive(Clone, Debug)]
@@ -208,6 +209,35 @@ impl SqliteCloudStore {
             r#"
             CREATE INDEX IF NOT EXISTS idx_agent_conversations_scope
             ON agent_conversations(operator_id, project_id, updated_at)
+            "#,
+            r#"
+            CREATE TABLE IF NOT EXISTS agent_change_sets (
+                change_set_id TEXT PRIMARY KEY NOT NULL,
+                project_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                change_set_json TEXT NOT NULL
+            )
+            "#,
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_agent_change_sets_scope
+            ON agent_change_sets(project_id, status, updated_at)
+            "#,
+            r#"
+            CREATE TABLE IF NOT EXISTS agent_command_candidates (
+                candidate_id TEXT PRIMARY KEY NOT NULL,
+                project_id TEXT NOT NULL,
+                edge_id TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                status TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                candidate_json TEXT NOT NULL,
+                UNIQUE(project_id, edge_id, idempotency_key)
+            )
+            "#,
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_agent_command_candidates_scope
+            ON agent_command_candidates(project_id, edge_id, status, updated_at)
             "#,
         ] {
             sqlx::query(statement)
@@ -1137,6 +1167,191 @@ impl SqliteCloudStore {
         .await
         .context("list agent proposals")?;
         decode_rows(rows, "proposal_json")
+    }
+
+    pub async fn upsert_agent_change_set(&self, change_set: AgentChangeSet) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO agent_change_sets
+                (change_set_id, project_id, status, updated_at, change_set_json)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(change_set_id) DO UPDATE SET
+                project_id = excluded.project_id,
+                status = excluded.status,
+                updated_at = excluded.updated_at,
+                change_set_json = excluded.change_set_json
+            "#,
+        )
+        .bind(&change_set.change_set_id)
+        .bind(&change_set.target.project_id)
+        .bind(format!("{:?}", change_set.status).to_lowercase())
+        .bind(change_set.updated_at.to_rfc3339())
+        .bind(encode(&change_set)?)
+        .execute(&self.pool)
+        .await
+        .context("upsert agent change set")?;
+        Ok(())
+    }
+
+    pub async fn upsert_agent_change_set_with_audit(
+        &self,
+        change_set: AgentChangeSet,
+        audit: AuditRecord,
+    ) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin agent change set transition")?;
+        sqlx::query(
+            r#"
+            INSERT INTO agent_change_sets
+                (change_set_id, project_id, status, updated_at, change_set_json)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(change_set_id) DO UPDATE SET
+                project_id = excluded.project_id,
+                status = excluded.status,
+                updated_at = excluded.updated_at,
+                change_set_json = excluded.change_set_json
+            "#,
+        )
+        .bind(&change_set.change_set_id)
+        .bind(&change_set.target.project_id)
+        .bind(format!("{:?}", change_set.status).to_lowercase())
+        .bind(change_set.updated_at.to_rfc3339())
+        .bind(encode(&change_set)?)
+        .execute(&mut *tx)
+        .await
+        .context("persist agent change set transition")?;
+        sqlx::query(
+            r#"
+            INSERT INTO audit_records (audit_id, action, target, record_json)
+            VALUES (?1, ?2, ?3, ?4)
+            "#,
+        )
+        .bind(audit.audit_id.to_string())
+        .bind(format!("{:?}", audit.action))
+        .bind(&audit.target)
+        .bind(encode(&audit)?)
+        .execute(&mut *tx)
+        .await
+        .context("persist agent change set audit")?;
+        tx.commit()
+            .await
+            .context("commit agent change set transition")?;
+        Ok(())
+    }
+
+    pub async fn agent_change_sets(&self) -> Result<Vec<AgentChangeSet>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT change_set_json
+            FROM agent_change_sets
+            ORDER BY updated_at DESC, change_set_id
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list agent change sets")?;
+        decode_rows(rows, "change_set_json")
+    }
+
+    pub async fn upsert_agent_command_candidate(
+        &self,
+        candidate: AgentCommandCandidate,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO agent_command_candidates
+                (candidate_id, project_id, edge_id, idempotency_key, status, updated_at, candidate_json)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT(candidate_id) DO UPDATE SET
+                project_id = excluded.project_id,
+                edge_id = excluded.edge_id,
+                idempotency_key = excluded.idempotency_key,
+                status = excluded.status,
+                updated_at = excluded.updated_at,
+                candidate_json = excluded.candidate_json
+            "#,
+        )
+        .bind(&candidate.candidate_id)
+        .bind(&candidate.target.project_id)
+        .bind(&candidate.target.edge_id)
+        .bind(&candidate.idempotency_key)
+        .bind(format!("{:?}", candidate.status).to_lowercase())
+        .bind(candidate.updated_at.to_rfc3339())
+        .bind(encode(&candidate)?)
+        .execute(&self.pool)
+        .await
+        .context("upsert agent command candidate")?;
+        Ok(())
+    }
+
+    pub async fn upsert_agent_command_candidate_with_audit(
+        &self,
+        candidate: AgentCommandCandidate,
+        audit: AuditRecord,
+    ) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin agent command candidate transition")?;
+        sqlx::query(
+            r#"
+            INSERT INTO agent_command_candidates
+                (candidate_id, project_id, edge_id, idempotency_key, status, updated_at, candidate_json)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT(candidate_id) DO UPDATE SET
+                project_id = excluded.project_id,
+                edge_id = excluded.edge_id,
+                idempotency_key = excluded.idempotency_key,
+                status = excluded.status,
+                updated_at = excluded.updated_at,
+                candidate_json = excluded.candidate_json
+            "#,
+        )
+        .bind(&candidate.candidate_id)
+        .bind(&candidate.target.project_id)
+        .bind(&candidate.target.edge_id)
+        .bind(&candidate.idempotency_key)
+        .bind(format!("{:?}", candidate.status).to_lowercase())
+        .bind(candidate.updated_at.to_rfc3339())
+        .bind(encode(&candidate)?)
+        .execute(&mut *tx)
+        .await
+        .context("persist agent command candidate transition")?;
+        sqlx::query(
+            r#"
+            INSERT INTO audit_records (audit_id, action, target, record_json)
+            VALUES (?1, ?2, ?3, ?4)
+            "#,
+        )
+        .bind(audit.audit_id.to_string())
+        .bind(format!("{:?}", audit.action))
+        .bind(&audit.target)
+        .bind(encode(&audit)?)
+        .execute(&mut *tx)
+        .await
+        .context("persist agent command candidate audit")?;
+        tx.commit()
+            .await
+            .context("commit agent command candidate transition")?;
+        Ok(())
+    }
+
+    pub async fn agent_command_candidates(&self) -> Result<Vec<AgentCommandCandidate>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT candidate_json
+            FROM agent_command_candidates
+            ORDER BY updated_at DESC, candidate_id
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list agent command candidates")?;
+        decode_rows(rows, "candidate_json")
     }
 
     pub async fn upsert_knowledge_document_with_audit(

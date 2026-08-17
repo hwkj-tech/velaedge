@@ -316,6 +316,7 @@ fn point(
         iec104: None,
         bacnet: None,
         unit: unit.map(str::to_string),
+        read_transforms: Vec::new(),
         interval_ms,
     }
 }

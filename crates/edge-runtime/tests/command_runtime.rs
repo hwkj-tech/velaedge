@@ -202,6 +202,94 @@ async fn command_safety_gate_audits_and_replies_to_an_unauthorized_source_withou
 }
 
 #[tokio::test]
+async fn confirmation_safety_gate_rejects_missing_or_stale_human_approval() {
+    let package = base_package("127.0.0.1:502")
+        .with_protocol_connection(ProtocolConnection::simulated("sim-main"))
+        .with_point_mapping(
+            TelemetryPointMapping::new(
+                "start_command",
+                "pump-1",
+                "pump.start",
+                "sim-main",
+                PointAddress::simulated("start"),
+                TelemetryType::Boolean,
+            )
+            .with_access(PointAccess::WriteOnly),
+        )
+        .with_command_flow(confirmation_required_flow("start_command"));
+    let mut runtime =
+        ConfiguredEdgeRuntime::new(package, ScriptedSerialBusFactory::new(Vec::new())).unwrap();
+
+    let missing = runtime
+        .execute_command_flow_message(
+            "set-pressure",
+            br#"{"commandId":"cmd-missing-approval","value":true}"#,
+        )
+        .await
+        .unwrap_err();
+    assert!(missing.to_string().contains("confirmationToken"));
+
+    let stale = serde_json::to_vec(&serde_json::json!({
+        "commandId": "cmd-stale-approval",
+        "value": true,
+        "confirmationToken": "approval:candidate:12345678901234567890",
+        "approvedBy": "plant-admin",
+        "approvedAt": chrono::Utc::now() - chrono::Duration::minutes(16),
+        "expiresAt": chrono::Utc::now() + chrono::Duration::seconds(60),
+    }))
+    .unwrap();
+    let stale = runtime
+        .execute_command_flow_message("set-pressure", &stale)
+        .await
+        .unwrap_err();
+    assert!(stale.to_string().contains("approval has expired"));
+}
+
+#[tokio::test]
+async fn confirmation_safety_gate_accepts_fresh_bounded_human_approval() {
+    let package = base_package("127.0.0.1:502")
+        .with_protocol_connection(ProtocolConnection::simulated("sim-main"))
+        .with_point_mapping(
+            TelemetryPointMapping::new(
+                "start_command",
+                "pump-1",
+                "pump.start",
+                "sim-main",
+                PointAddress::simulated("start"),
+                TelemetryType::Boolean,
+            )
+            .with_access(PointAccess::WriteOnly),
+        )
+        .with_command_flow(confirmation_required_flow("start_command"));
+    let mut runtime =
+        ConfiguredEdgeRuntime::new(package, ScriptedSerialBusFactory::new(Vec::new())).unwrap();
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "commandId": "cmd-approved",
+        "value": true,
+        "confirmationToken": "approval:candidate:12345678901234567890",
+        "approvedBy": "plant-admin",
+        "approvedAt": chrono::Utc::now(),
+        "expiresAt": chrono::Utc::now() + chrono::Duration::seconds(60),
+    }))
+    .unwrap();
+
+    let report = runtime
+        .execute_command_flow_message("set-pressure", &payload)
+        .await
+        .unwrap();
+
+    assert_eq!(report.status, CommandExecutionStatus::Succeeded);
+    assert_eq!(report.writes.len(), 1);
+    assert_eq!(
+        runtime
+            .shadow("pump-1")
+            .unwrap()
+            .latest_value("start_command"),
+        Some(&TelemetryValue::Boolean(true))
+    );
+}
+
+#[tokio::test]
 async fn command_safety_gate_rate_limits_distinct_commands_before_point_writes() {
     let package = base_package("127.0.0.1:502")
         .with_protocol_connection(ProtocolConnection::simulated("sim-main"))
@@ -812,6 +900,20 @@ fn safe_write_flow(
     .with_edge(CommandGraphEdge::new("input-safety", "input", "safety"))
     .with_edge(CommandGraphEdge::new("safety-write", "safety", "write"))
     .with_edge(CommandGraphEdge::new("write-reply", "write", "reply"))
+}
+
+fn confirmation_required_flow(point_id: &str) -> CommandFlowConfig {
+    let mut flow = safe_write_flow(point_id, &[], None);
+    let safety = flow
+        .nodes
+        .iter_mut()
+        .find(|node| node.kind == CommandGraphNodeKind::SafetyGate)
+        .unwrap();
+    safety.params.remove("allowed_sources");
+    safety
+        .params
+        .insert("require_confirmation".to_string(), serde_json::json!(true));
+    flow
 }
 
 fn branched_flow() -> CommandFlowConfig {

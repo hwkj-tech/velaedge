@@ -51,6 +51,8 @@ pub struct PointSetPoint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bacnet: Option<BacnetPointOptions>,
     pub unit: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_transforms: Vec<edge_core::PointValueTransform>,
     pub interval_ms: u64,
 }
 

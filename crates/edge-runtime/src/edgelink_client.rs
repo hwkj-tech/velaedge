@@ -1063,7 +1063,7 @@ async fn collect_after_config_deploy(
                 }
             }
             EdgeLinkMqttMode::Persistent(publisher) => {
-                if let Some(publisher) = publisher.configure(&applied.package().mqtt_uplinks)? {
+                if let Some(publisher) = publisher.configure_package(applied.package())? {
                     if let Some(store) = store {
                         if applied.package().data_configs.is_empty() {
                             runtime

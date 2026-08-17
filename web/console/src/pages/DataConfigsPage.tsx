@@ -812,6 +812,7 @@ function VisualReportBuilder({
                 <small>DSL</small>
                 <button
                   aria-label={`移除计算节点 ${algorithmId}`}
+                  className="icon-button compact-icon danger-icon"
                   onClick={() => removeAlgorithm(algorithmId)}
                   type="button"
                 >

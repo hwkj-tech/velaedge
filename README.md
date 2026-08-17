@@ -1,6 +1,22 @@
 # VelaEdge
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 VelaEdge is Yunliu Tech's Rust-based cloud-edge intelligence platform. It combines deterministic edge collection and computation, versioned cloud configuration, runtime governance, local storage, EdgeLink connectivity, and VelaMQ uplink. Agent intelligence is intentionally modeled as planning and governance: it can draft configuration or command candidates, but edge policy remains the final gate before any device action.
+
+## Product Preview
+
+The screenshots below come from a live Cloud/Runtime session. The fleet state, host resources,
+collection counters, protocol health, and MQTT delivery metrics are reported by the running Rust
+processes rather than rendered from static fixtures.
+
+### Cloud control plane
+
+![VelaEdge Cloud dashboard](docs/images/velaedge-cloud-dashboard.png)
+
+### Runtime health console
+
+![VelaEdge Runtime health console](docs/images/velaedge-runtime-health.png)
 
 ## Workspace
 
@@ -8,7 +24,7 @@ VelaEdge is Yunliu Tech's Rust-based cloud-edge intelligence platform. It combin
 - `crates/edge-runtime`: deterministic edge execution, Modbus TCP/RTU, OPC UA, DL/T 645-2007, IEC 60870-5-101/104 read/write, RocksDB config state, algorithm DSL execution, scheduling, EdgeLink connectivity, and MQTT uplink.
 - `crates/cloud-control`: cloud-side fleet registry, SQLite persistence, versioned config packages, internal synchronization state, and governed Agent command drafts.
 - `crates/cloud-api`: Axum management API, SQLite-backed state, the runtime-initiated EdgeLink gateway, and static hosting for the management console.
-- `web/console`: React/Vite console for projects, products, point sets, collection graphs, edge nodes, runtime monitoring, audit, and Agent assistance.
+- `web/console`: React/Vite console for projects, products, point sets, collection graphs, edge nodes, runtime monitoring, audit, MCP integration, and independent approvals.
 - `configs/edge.sample.toml`: sample edge runtime configuration.
 - `configs/cloud.sample.toml`: sample cloud control-plane configuration.
 - `deploy/systemd` and `deploy/env`: production process units and environment templates.
@@ -18,6 +34,44 @@ VelaEdge is Yunliu Tech's Rust-based cloud-edge intelligence platform. It combin
   TCP/UDP container devices whose addresses match the built-in manufacturer product templates.
 - `docs/architecture.md`: architecture notes and extension guidance.
 - `docs/cloud-console.md`: cloud console workflow and Agent safety boundary.
+- `docs/mcp-integration.md`: standard MCP endpoint, tools, scopes, approvals, audit, and Runtime safety contract.
+
+## Runtime Startup Configuration
+
+Runtime process bootstrap is file-first. Copy the development sample, adjust the identity and Cloud
+address, validate every referenced secret and TLS file, and then start the process:
+
+```bash
+cp configs/edge.sample.toml configs/edge.local.toml
+
+cargo run -p edge-runtime --bin edge-runtime -- \
+  --config configs/edge.local.toml \
+  --check-config
+
+cargo run -p edge-runtime --bin edge-runtime -- \
+  --config configs/edge.local.toml
+```
+
+Relative state and certificate paths are resolved from the TOML file's directory. Explicit CLI
+arguments override file values, which is useful for short-lived acceptance runs without changing a
+deployed file. `--check-config` parses the complete schema, enforces mutually exclusive transport
+modes, verifies all-or-none mTLS settings, resolves the access-token environment variable, checks
+the referenced certificate files, and exits without opening a device or Cloud session.
+
+The startup file and Cloud-managed product package have deliberately different ownership:
+
+| Runtime startup TOML | Cloud-synchronized product package |
+| --- | --- |
+| Edge/runtime identity | Industrial protocol connections and device addresses |
+| RocksDB, JSONL, and health-listener paths | Point sets, mappings, periods, and read/write policy |
+| EdgeLink address, daemon policy, token variable, and mTLS identity | Collection and command graphs, calculations, and MQTT sinks |
+| Process-level feature switches and legacy scheduler compatibility | Live configuration revision persisted in Runtime RocksDB |
+
+Use [`configs/edge.sample.toml`](configs/edge.sample.toml) for local development and
+[`deploy/config/runtime.toml.example`](deploy/config/runtime.toml.example) with
+[`deploy/env/runtime.env.example`](deploy/env/runtime.env.example) for production. The reference
+systemd unit performs the same preflight before every start; see
+[`docs/deployment.md`](docs/deployment.md).
 
 ## Quick Start
 
@@ -47,7 +101,7 @@ Use `EDGEOPS_RELEASE_PROFILE=site`, `EDGEOPS_FIELD_CAMPAIGN_PLAN`, and the broke
 Run one local simulated edge collection cycle:
 
 ```bash
-cargo run -p edge-runtime -- --allow-simulated \
+cargo run -p edge-runtime --bin edge-runtime -- --allow-simulated \
   --edge-id edge-dev --device-id pump-1 --storage data/telemetry.jsonl
 ```
 
@@ -273,31 +327,20 @@ export EDGEOPS_GATEWAY_TLS_CLIENT_CA=/etc/edgeops/runtime-ca.pem
 
 Leaving all three unset retains the plaintext listener for local development. A partial TLS configuration is rejected at startup.
 
-Run one runtime-to-cloud EdgeLink synchronization cycle:
+Run the production-style runtime-initiated EdgeLink session from the startup file. Cloud can
+synchronize configuration and dispatch bounded discovery commands over this outbound connection;
+the Runtime health listener remains a separate read-only local endpoint:
 
 ```bash
-cargo run -p edge-runtime -- \
-  --edge-id edge-dev \
-  --runtime-id runtime-dev \
-  --runtime-db data/edge-runtime.rocksdb \
-  --cloud-gateway-addr 127.0.0.1:18080
+cargo run -p edge-runtime --bin edge-runtime -- \
+  --config configs/edge.local.toml
 ```
 
-Run the production-style runtime-initiated session loop so Cloud can dispatch bounded discovery
-commands over the same connection (the Runtime never opens an inbound HTTP server):
-
-```bash
-cargo run -p edge-runtime -- \
-  --edge-id edge-dev \
-  --runtime-id runtime-dev \
-  --runtime-db data/edge-runtime.rocksdb \
-  --cloud-gateway-addr 127.0.0.1:18080 \
-  --edgelink-daemon \
-  --edgelink-command-wait-ms 30000 \
-  --edgelink-reconnect-ms 1000
-```
-
-For mTLS, add `--edgelink-tls-ca`, `--edgelink-tls-cert`, `--edgelink-tls-key`, and optionally `--edgelink-tls-server-name`. The three certificate paths are atomic: Runtime rejects partial TLS configuration instead of falling back to plaintext. Use `--access-token-env EDGEOPS_EDGE_TOKEN` to read the one-time edge access token from an environment variable without exposing it in the process command line; the legacy `--access-token` option remains available for local compatibility and conflicts with `--access-token-env`.
+For mTLS, configure `cloud.tls.ca_cert`, `cloud.tls.client_cert`, and
+`cloud.tls.client_key` together, plus the expected `server_name`. Runtime rejects partial TLS
+configuration instead of falling back to plaintext. Use `cloud.access_token_env` to read the
+one-time edge access token without exposing it in the process command line; plaintext token values
+are accepted only as explicit local CLI overrides.
 
 ### EdgeLink mTLS process acceptance
 

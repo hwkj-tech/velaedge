@@ -1,0 +1,34 @@
+schema_version = 1
+
+[runtime]
+edge_id = "edge-production-001"
+device_id = "default-device"
+runtime_id = "runtime-production-001"
+storage_path = "/var/lib/edgeops-runtime/edge-production-001/telemetry.jsonl"
+database_path = "/var/lib/edgeops-runtime/edge-production-001/runtime.rocksdb"
+# Keep the health console loopback-only unless it is protected by an
+# authenticated reverse proxy or host firewall.
+health_listen = "127.0.0.1:19090"
+
+[cloud]
+gateway_address = "cloud.example.internal:18080"
+access_token_env = "EDGEOPS_EDGE_TOKEN"
+daemon = true
+command_wait_ms = 30000
+reconnect_ms = 1000
+
+[cloud.tls]
+server_name = "cloud.example.internal"
+ca_cert = "/etc/edgeops/runtime-tls/ca.pem"
+client_cert = "/etc/edgeops/runtime-tls/runtime.pem"
+client_key = "/etc/edgeops/runtime-tls/runtime-key.pem"
+
+[features]
+# MQTT connection details, topics and trigger policies are supplied by the
+# active product package. This switch enables the Runtime MQTT subsystem.
+mqtt_uplink = true
+allow_simulated = false
+
+[scheduler]
+scheduled_ticks = 0
+tick_ms = 1000

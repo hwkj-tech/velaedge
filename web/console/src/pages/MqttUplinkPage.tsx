@@ -32,23 +32,24 @@ export function MqttUplinkPage({
   selectedEdgeId?: string;
   uplink?: MqttUplinkResponse;
 }) {
-  const [form, setForm] = useState(uplink);
+  const [form, setForm] = useState(normalizeClientId(uplink, selectedEdgeId));
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>(
     'idle',
   );
   const [saveMessage, setSaveMessage] = useState('');
 
   useEffect(() => {
-    setForm(uplink);
-  }, [uplink]);
+    setForm(normalizeClientId(uplink, selectedEdgeId));
+  }, [selectedEdgeId, uplink]);
 
   const handleSave = async () => {
     setSaveState('saving');
     setSaveMessage('');
     try {
-      const saved = await onSave?.(selectedEdgeId, form);
+      const request = normalizeClientId(form, selectedEdgeId);
+      const saved = await onSave?.(selectedEdgeId, request);
       if (saved) {
-        setForm(saved);
+        setForm(normalizeClientId(saved, selectedEdgeId));
       }
       setSaveState('saved');
     } catch (error) {
@@ -89,10 +90,14 @@ export function MqttUplinkPage({
           <h3>连接配置</h3>
           <span>{selectedEdgeId} · MQTT {form.protocolVersion ?? '3.1.1'}</span>
         </div>
-        <MqttConnectionForm form={form} onChange={setForm} />
+        <MqttConnectionForm clientIdLocked form={form} onChange={setForm} />
       </section>
     </div>
   );
+}
+
+function normalizeClientId(uplink: MqttUplinkResponse, edgeId: string) {
+  return edgeId ? { ...uplink, clientId: edgeId } : uplink;
 }
 
 function saveStateText(state: 'idle' | 'saving' | 'saved' | 'error') {

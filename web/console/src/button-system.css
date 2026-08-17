@@ -1,0 +1,303 @@
+:root {
+  --ve-button-height: 38px;
+  --ve-button-height-compact: 32px;
+  --ve-button-radius: 7px;
+  --ve-button-primary: #176b59;
+  --ve-button-primary-hover: #105b4b;
+  --ve-button-border: #cbdad5;
+  --ve-button-border-hover: #9ebeb4;
+  --ve-button-text: #23483f;
+  --ve-button-surface: #ffffff;
+  --ve-button-surface-hover: #eef7f4;
+  --ve-button-danger: #c43d3d;
+  --ve-button-danger-hover: #a92f2f;
+  --ve-button-danger-surface: #fff5f4;
+}
+
+button {
+  letter-spacing: 0;
+}
+
+.primary-button,
+.secondary-button,
+.danger-button,
+.icon-button,
+.icon-command,
+.agent-command,
+.auth-submit {
+  appearance: none;
+  min-height: var(--ve-button-height);
+  border: 1px solid transparent;
+  border-radius: var(--ve-button-radius);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transform: none;
+  box-shadow: none;
+  transition:
+    color 140ms ease,
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+:where(
+    .primary-button,
+    .secondary-button,
+    .danger-button,
+    .icon-button,
+    .icon-command,
+    .agent-command,
+    .auth-submit
+  ) svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  stroke-width: 2;
+}
+
+.primary-button,
+.auth-submit {
+  border-color: var(--ve-button-primary);
+  background: var(--ve-button-primary);
+  color: #ffffff;
+  box-shadow: 0 3px 8px rgb(23 107 89 / 16%);
+}
+
+.primary-button:hover:not(:disabled),
+.auth-submit:hover:not(:disabled) {
+  border-color: var(--ve-button-primary-hover);
+  background: var(--ve-button-primary-hover);
+  transform: none;
+  box-shadow: 0 4px 12px rgb(23 107 89 / 22%);
+}
+
+.secondary-button {
+  border-color: var(--ve-button-border);
+  background: var(--ve-button-surface);
+  color: var(--ve-button-text);
+}
+
+.secondary-button:hover:not(:disabled) {
+  border-color: var(--ve-button-border-hover);
+  background: var(--ve-button-surface-hover);
+  color: #125a4a;
+  transform: none;
+}
+
+.danger-button {
+  border-color: #edb9b5;
+  background: var(--ve-button-danger-surface);
+  color: var(--ve-button-danger);
+}
+
+.danger-button:hover:not(:disabled) {
+  border-color: var(--ve-button-danger);
+  background: #fde9e7;
+  color: var(--ve-button-danger-hover);
+  transform: none;
+}
+
+.primary-button.compact,
+.secondary-button.compact,
+.danger-button.compact {
+  min-height: var(--ve-button-height-compact);
+  padding: 0 10px;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.primary-button.icon-only,
+.secondary-button.icon-only,
+.danger-button.icon-only {
+  width: var(--ve-button-height-compact);
+  min-width: var(--ve-button-height-compact);
+  min-height: var(--ve-button-height-compact);
+  padding: 0;
+}
+
+.icon-button,
+.icon-command {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: #526b65;
+}
+
+.icon-button:hover:not(:disabled),
+.icon-command:hover:not(:disabled) {
+  border-color: #d2e3de;
+  background: var(--ve-button-surface-hover);
+  color: #125a4a;
+  transform: none;
+}
+
+.icon-button.compact-icon,
+.icon-command.compact-icon {
+  width: var(--ve-button-height-compact);
+  min-width: var(--ve-button-height-compact);
+  height: var(--ve-button-height-compact);
+  min-height: var(--ve-button-height-compact);
+}
+
+.icon-button.danger,
+.icon-button.danger-icon,
+.icon-command.danger-icon {
+  color: var(--ve-button-danger);
+}
+
+.icon-button.danger:hover:not(:disabled),
+.icon-button.danger-icon:hover:not(:disabled),
+.icon-command.danger-icon:hover:not(:disabled) {
+  border-color: #f0c3bf;
+  background: var(--ve-button-danger-surface);
+  color: var(--ve-button-danger-hover);
+}
+
+.icon-button.success-icon,
+.icon-command.success-icon {
+  color: var(--ve-button-primary);
+}
+
+.icon-button.success-icon:hover:not(:disabled),
+.icon-command.success-icon:hover:not(:disabled) {
+  border-color: #b8d9cf;
+  background: #edf8f4;
+  color: var(--ve-button-primary-hover);
+}
+
+.agent-command {
+  min-height: 36px;
+  border-color: #163f37;
+  background: #163f37;
+  color: #ffffff;
+  padding: 0 12px;
+  box-shadow: 0 3px 9px rgb(11 47 40 / 18%);
+}
+
+.agent-command:hover:not(:disabled) {
+  border-color: #0d332b;
+  background: #0d332b;
+  box-shadow: 0 4px 12px rgb(11 47 40 / 24%);
+}
+
+:where(
+    .primary-button,
+    .secondary-button,
+    .danger-button,
+    .icon-button,
+    .icon-command,
+    .agent-command,
+    .auth-submit
+  ):focus-visible {
+  outline: 3px solid rgb(27 132 108 / 24%);
+  outline-offset: 2px;
+}
+
+:where(
+    .primary-button,
+    .secondary-button,
+    .danger-button,
+    .icon-button,
+    .icon-command,
+    .agent-command,
+    .auth-submit
+  ):active:not(:disabled) {
+  box-shadow: none;
+}
+
+:where(
+    .primary-button,
+    .secondary-button,
+    .danger-button,
+    .icon-button,
+    .icon-command,
+    .agent-command,
+    .auth-submit
+  ):disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+  box-shadow: none;
+}
+
+:where(
+    .primary-button,
+    .secondary-button,
+    .danger-button,
+    .icon-button,
+    .icon-command,
+    .agent-command,
+    .auth-submit
+  )[aria-busy='true'] {
+  cursor: wait;
+}
+
+.row-actions,
+.modal-actions,
+.editor-actions,
+.header-actions {
+  gap: 8px;
+}
+
+.point-id-button {
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 8px;
+  background: transparent;
+  color: #176b59;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.point-id-button:hover {
+  border-color: #d2e3de;
+  background: var(--ve-button-surface-hover);
+  color: #0f5849;
+}
+
+.point-id-button:focus-visible {
+  outline: 3px solid rgb(27 132 108 / 22%);
+  outline-offset: 1px;
+}
+
+.agent-conversation-toolbar > .icon-button,
+.agent-conversation-confirm .icon-button,
+.agent-suggestion-actions .icon-button,
+.agent-review-actions .icon-button,
+.agent-knowledge-head > .icon-button,
+.agent-knowledge-actions .icon-button {
+  width: var(--ve-button-height-compact);
+  min-width: var(--ve-button-height-compact);
+  height: var(--ve-button-height-compact);
+  min-height: var(--ve-button-height-compact);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.modal-panel .primary-button,
+.modal-panel .secondary-button,
+.modal-panel .danger-button,
+.modal-panel .icon-button {
+  border-radius: var(--ve-button-radius);
+}
+
+@media (max-width: 720px) {
+  :where(.primary-button, .secondary-button, .danger-button, .auth-submit) {
+    min-height: 40px;
+  }
+}

@@ -8,21 +8,9 @@ Type=simple
 User=edgeops-runtime
 Group=edgeops-runtime
 WorkingDirectory=/var/lib/edgeops-runtime/%i
-EnvironmentFile=/etc/edgeops/runtime/%i.env
-ExecStart=/opt/edgeops/bin/edge-runtime \
-  --edge-id ${EDGEOPS_EDGE_ID} \
-  --device-id ${EDGEOPS_DEVICE_ID} \
-  --runtime-id ${EDGEOPS_RUNTIME_ID} \
-  --storage /var/lib/edgeops-runtime/%i/telemetry.jsonl \
-  --runtime-db /var/lib/edgeops-runtime/%i/runtime.rocksdb \
-  --cloud-gateway-addr ${EDGEOPS_GATEWAY_ADDR} \
-  --edgelink-tls-ca ${EDGEOPS_EDGELINK_CA} \
-  --edgelink-tls-cert ${EDGEOPS_EDGELINK_CERT} \
-  --edgelink-tls-key ${EDGEOPS_EDGELINK_KEY} \
-  --edgelink-tls-server-name ${EDGEOPS_EDGELINK_SERVER_NAME} \
-  --access-token-env EDGEOPS_EDGE_TOKEN \
-  --mqtt-uplink \
-  --edgelink-daemon
+EnvironmentFile=-/etc/edgeops/runtime/%i.env
+ExecStartPre=/opt/edgeops/bin/edge-runtime --config /etc/edgeops/runtime/%i.toml --check-config
+ExecStart=/opt/edgeops/bin/edge-runtime --config /etc/edgeops/runtime/%i.toml
 Restart=always
 RestartSec=3s
 TimeoutStopSec=30s

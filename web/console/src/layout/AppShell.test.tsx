@@ -29,7 +29,7 @@ describe('AppShell', () => {
     expect(screen.getAllByText('Dashboard').length).toBeGreaterThan(0);
   });
 
-  it('renders platform status from live summary data', () => {
+  it('keeps platform summary details out of the top bar', () => {
     render(
       <AppShell
         activePage="dashboard"
@@ -45,10 +45,10 @@ describe('AppShell', () => {
       </AppShell>,
     );
 
-    expect(screen.getByText('12 个边端在线')).toBeInTheDocument();
-    expect(screen.getByText('项目: factory-a')).toBeInTheDocument();
-    expect(screen.getByText('环境: prod')).toBeInTheDocument();
-    expect(screen.getByText('4 个边端待同步')).toBeInTheDocument();
+    expect(screen.queryByText('12 个边端在线')).not.toBeInTheDocument();
+    expect(screen.queryByText('项目: factory-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('环境: prod')).not.toBeInTheDocument();
+    expect(screen.queryByText('4 个边端待同步')).not.toBeInTheDocument();
   });
 
   it('shows the authenticated principal and supports logout', () => {

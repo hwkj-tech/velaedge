@@ -6,10 +6,10 @@ use std::{
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use cloud_control::{
-    manufacturer_product_templates, AgentConversation, AgentProposal, AuditRecord,
-    CloudControlStore, EdgeAccessCredential, EdgeNode, KnowledgeDocument, PointSet, PointSetPoint,
-    Product, ProductVersion, ProductVersionStatus, Project, ReleaseRecord, ReleaseService,
-    ReleaseStatus, SqliteCloudStore,
+    manufacturer_product_templates, AgentChangeSet, AgentCommandCandidate, AgentConversation,
+    AgentProposal, AuditRecord, CloudControlStore, EdgeAccessCredential, EdgeNode,
+    KnowledgeDocument, PointSet, PointSetPoint, Product, ProductVersion, ProductVersionStatus,
+    Project, ReleaseRecord, ReleaseService, ReleaseStatus, SqliteCloudStore,
 };
 use edge_core::{
     AlgorithmDsl, AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
@@ -23,7 +23,8 @@ use edge_core::{
 };
 
 use crate::{
-    agent_service::AgentService, auth::ApiAuthConfig, gateway::EdgeGatewayCommandRegistry,
+    agent_service::AgentService, agent_tools::CloudAgentToolRuntime, auth::ApiAuthConfig,
+    gateway::EdgeGatewayCommandRegistry, mcp::McpConfig,
 };
 
 #[derive(Clone)]
@@ -33,6 +34,7 @@ pub struct AppState {
     pub gateway_commands: EdgeGatewayCommandRegistry,
     pub agent_service: AgentService,
     pub api_auth: ApiAuthConfig,
+    pub mcp: McpConfig,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,12 +95,16 @@ impl AppState {
             }
         }
 
+        let store = Arc::new(Mutex::new(store));
+        let agent_service = AgentService::from_env()
+            .with_tool_runtime(Arc::new(CloudAgentToolRuntime::new(store.clone())));
         Ok(Self {
-            store: Arc::new(Mutex::new(store)),
+            store,
             sqlite_store: Some(sqlite_store),
             gateway_commands: EdgeGatewayCommandRegistry::default(),
-            agent_service: AgentService::from_env(),
+            agent_service,
             api_auth: ApiAuthConfig::from_env()?,
+            mcp: McpConfig::from_env()?,
         })
     }
 
@@ -169,6 +175,11 @@ impl AppState {
 
     pub fn with_api_auth(mut self, api_auth: ApiAuthConfig) -> Self {
         self.api_auth = api_auth;
+        self
+    }
+
+    pub fn with_mcp_config(mut self, mcp: McpConfig) -> Self {
+        self.mcp = mcp;
         self
     }
 
@@ -347,6 +358,49 @@ impl AppState {
         Ok(())
     }
 
+    pub async fn persist_agent_change_set(&self, change_set: AgentChangeSet) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.upsert_agent_change_set(change_set).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn persist_agent_change_set_transition(
+        &self,
+        change_set: AgentChangeSet,
+        audit: AuditRecord,
+    ) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store
+                .upsert_agent_change_set_with_audit(change_set, audit)
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn persist_agent_command_candidate(
+        &self,
+        candidate: AgentCommandCandidate,
+    ) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.upsert_agent_command_candidate(candidate).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn persist_agent_command_candidate_transition(
+        &self,
+        candidate: AgentCommandCandidate,
+        audit: AuditRecord,
+    ) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store
+                .upsert_agent_command_candidate_with_audit(candidate, audit)
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn persist_knowledge_document_transition(
         &self,
         document: KnowledgeDocument,
@@ -380,6 +434,17 @@ impl AppState {
         Ok(())
     }
 
+    pub async fn persist_audit_record(&self, audit: AuditRecord) -> Result<()> {
+        if let Some(store) = &self.sqlite_store {
+            store.push_audit_record(audit.clone()).await?;
+        }
+        self.store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cloud control store mutex poisoned"))?
+            .push_audit_record(audit);
+        Ok(())
+    }
+
     pub async fn persist_agent_conversation_transition(
         &self,
         conversation: AgentConversation,
@@ -409,12 +474,16 @@ impl AppState {
 
 impl Default for AppState {
     fn default() -> Self {
+        let store = Arc::new(Mutex::new(demo_store()));
+        let agent_service = AgentService::from_env()
+            .with_tool_runtime(Arc::new(CloudAgentToolRuntime::new(store.clone())));
         Self {
-            store: Arc::new(Mutex::new(demo_store())),
+            store,
             sqlite_store: None,
             gateway_commands: EdgeGatewayCommandRegistry::default(),
-            agent_service: AgentService::from_env(),
+            agent_service,
             api_auth: ApiAuthConfig::disabled(),
+            mcp: McpConfig::default(),
         }
     }
 }
@@ -751,6 +820,7 @@ fn seed_default_catalog(store: &mut CloudControlStore) {
             iec104: None,
             bacnet: None,
             unit: Some("MPa".to_string()),
+            read_transforms: Vec::new(),
             interval_ms: 1000,
         },
         PointSetPoint {
@@ -768,6 +838,7 @@ fn seed_default_catalog(store: &mut CloudControlStore) {
             iec104: None,
             bacnet: None,
             unit: None,
+            read_transforms: Vec::new(),
             interval_ms: 1000,
         },
     ];
@@ -791,6 +862,7 @@ fn seed_default_catalog(store: &mut CloudControlStore) {
             iec104: None,
             bacnet: None,
             unit: Some("V".to_string()),
+            read_transforms: Vec::new(),
             interval_ms: 1000,
         },
         PointSetPoint {
@@ -804,6 +876,7 @@ fn seed_default_catalog(store: &mut CloudControlStore) {
             iec104: None,
             bacnet: None,
             unit: Some("A".to_string()),
+            read_transforms: Vec::new(),
             interval_ms: 1000,
         },
     ];
@@ -826,6 +899,7 @@ fn seed_default_catalog(store: &mut CloudControlStore) {
         iec104: None,
         bacnet: None,
         unit: Some("kW".to_string()),
+        read_transforms: Vec::new(),
         interval_ms: 5000,
     }];
     store.upsert_point_set(energy_points);
@@ -871,6 +945,36 @@ fn seed_default_catalog(store: &mut CloudControlStore) {
                 product_version.algorithms = package.algorithms;
                 product_version.data_configs = package.data_configs;
                 product_version.mqtt_uplinks = package.mqtt_uplinks;
+
+                let product_point_id = |point_id: &str| {
+                    match point_id {
+                        "pressure" => "pump_pressure",
+                        "running" => "pump_running",
+                        other => other,
+                    }
+                    .to_string()
+                };
+                for task in &mut product_version.collection_tasks {
+                    for point_id in &mut task.point_ids {
+                        *point_id = product_point_id(point_id);
+                    }
+                }
+                for data_config in &mut product_version.data_configs {
+                    for point in &mut data_config.points {
+                        point.point_id = product_point_id(&point.point_id);
+                    }
+                }
+                for algorithm in &mut product_version.algorithms {
+                    for input in &mut algorithm.dsl.inputs {
+                        input.point_id = product_point_id(&input.point_id);
+                    }
+                    algorithm.inputs = algorithm
+                        .dsl
+                        .inputs
+                        .iter()
+                        .map(|input| input.point_id.clone())
+                        .collect();
+                }
             }
         }
         store.upsert_product_version(product_version);
@@ -1089,6 +1193,12 @@ async fn hydrate_from_sqlite(
     for proposal in sqlite_store.agent_proposals().await? {
         store.upsert_agent_proposal(proposal);
     }
+    for change_set in sqlite_store.agent_change_sets().await? {
+        store.upsert_agent_change_set(change_set);
+    }
+    for candidate in sqlite_store.agent_command_candidates().await? {
+        store.upsert_agent_command_candidate(candidate);
+    }
     for document in sqlite_store.knowledge_documents().await? {
         store.upsert_knowledge_document(document);
     }
@@ -1156,6 +1266,18 @@ async fn persist_store_snapshot(
     }
     for proposal in store.agent_proposals().cloned().collect::<Vec<_>>() {
         sqlite_store.upsert_agent_proposal(proposal).await?;
+    }
+    for change_set in store.agent_change_sets().cloned().collect::<Vec<_>>() {
+        sqlite_store.upsert_agent_change_set(change_set).await?;
+    }
+    for candidate in store
+        .agent_command_candidates()
+        .cloned()
+        .collect::<Vec<_>>()
+    {
+        sqlite_store
+            .upsert_agent_command_candidate(candidate)
+            .await?;
     }
     for audit in store.audit_records().iter().cloned() {
         sqlite_store.push_audit_record(audit).await?;

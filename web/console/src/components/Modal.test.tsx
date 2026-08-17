@@ -46,4 +46,20 @@ describe('Modal', () => {
     expect(onTopClose).toHaveBeenCalledTimes(1);
     expect(onBottomClose).not.toHaveBeenCalled();
   });
+
+  it('optionally closes when the backdrop is pressed', () => {
+    const onClose = vi.fn();
+
+    render(
+      <Modal closeOnBackdrop onClose={onClose}>
+        <section aria-label="参数弹窗" role="dialog">
+          参数内容
+        </section>
+      </Modal>,
+    );
+
+    fireEvent.mouseDown(screen.getByRole('dialog', { name: '参数弹窗' }).parentElement!);
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });

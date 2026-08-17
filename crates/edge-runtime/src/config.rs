@@ -5,8 +5,9 @@ use chrono::Utc;
 use edge_core::{
     validate_command_flow, validate_data_config_visual_graph, validate_iec101_point,
     validate_iec104_point, validate_omron_fins_point, validate_point_access,
-    validate_siemens_s7_point, DataQuality, DeviceShadow, EdgeConfigPackage, ProtocolType,
-    TelemetrySample, TelemetryValue, MAX_DATA_CONFIG_RETRY_COUNT, MAX_DATA_CONFIG_TIMEOUT_MS,
+    validate_point_read_transforms, validate_siemens_s7_point, DataQuality, DeviceShadow,
+    EdgeConfigPackage, ProtocolType, TelemetrySample, TelemetryValue, MAX_DATA_CONFIG_RETRY_COUNT,
+    MAX_DATA_CONFIG_TIMEOUT_MS,
 };
 
 use crate::{
@@ -21,12 +22,15 @@ pub struct AppliedEdgeConfig {
 }
 
 impl AppliedEdgeConfig {
-    pub fn apply(package: EdgeConfigPackage) -> Result<Self> {
+    pub fn apply(mut package: EdgeConfigPackage) -> Result<Self> {
         if package.edge_id.trim().is_empty() {
             bail!("edge id is required");
         }
         if package.version.trim().is_empty() {
             bail!("config version is required");
+        }
+        for uplink in &mut package.mqtt_uplinks {
+            uplink.client_id = package.edge_id.clone();
         }
         validate_config_references(&package)?;
         Ok(Self { package })
@@ -85,6 +89,8 @@ pub(crate) fn validate_config_references(package: &EdgeConfigPackage) -> Result<
 
     for mapping in &package.point_mappings {
         validate_point_access(&mapping.address, mapping.access).map_err(anyhow::Error::msg)?;
+        validate_point_read_transforms(&mapping.read_transforms, mapping.value_type)
+            .map_err(anyhow::Error::msg)?;
         let connection = connections
             .get(mapping.protocol_connection_id.as_str())
             .ok_or_else(|| {

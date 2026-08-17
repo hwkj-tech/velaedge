@@ -1,3 +1,4 @@
+use axum::extract::DefaultBodyLimit;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -8,11 +9,14 @@ use axum::{
 };
 use chrono::Utc;
 use cloud_control::{
-    AgentConversation, AgentConversationCitation, AgentConversationMessage, AgentConversationRole,
+    AgentChangeOperationKind, AgentChangeSet, AgentChangeSetStatus, AgentCommandCandidate,
+    AgentCommandCandidateStatus, AgentConfirmationEvidence, AgentConversation,
+    AgentConversationCitation, AgentConversationMessage, AgentConversationRole, AgentImpactSummary,
     AgentProposal, AgentProposalKind, AgentProposalReviewError, AgentProposalRisk,
-    AgentProposalStatus, AuditAction, AuditRecord, EdgeAccessCredential, EdgeNode,
-    KnowledgeDocument, PointSet, PointSetPoint, Product, ProductVersion, ProductVersionStatus,
-    Project, ReleaseService, ReleaseStatus,
+    AgentProposalStatus, AgentResourceKind, AgentRiskLevel, AgentValidationIssue,
+    AgentValidationReport, AgentValidationSeverity, AuditAction, AuditRecord, EdgeAccessCredential,
+    EdgeNode, KnowledgeDocument, PointSet, PointSetPoint, Product, ProductVersion,
+    ProductVersionStatus, Project, ReleaseService, ReleaseStatus,
 };
 use edge_core::{
     bacnet_object_templates, bacnet_property_templates, dlt645_data_identifier_templates,
@@ -21,21 +25,24 @@ use edge_core::{
     validate_command_flow, validate_custom_serial_point_spec, validate_data_config_visual_graph,
     validate_iec101_point, validate_iec104_point, validate_modbus_point_options,
     validate_omron_fins_point, validate_opc_ua_node_id, validate_opc_ua_point,
-    validate_point_access, validate_siemens_s7_point, AlgorithmDsl, AlgorithmInputBinding,
-    AlgorithmKind, AlgorithmOutput, AlgorithmReportMode, AlgorithmReportPolicy, AlgorithmRuntime,
-    AlgorithmSpec, AlgorithmStep, AlgorithmTrigger, BacnetIpConnectionSettings,
-    BacnetObjectTemplate, BacnetPropertyTemplate, CollectionTask, CommandFlowConfig,
-    CustomSerialPointSpec, DataConfig, DataConfigCollection, DataConfigGraphEdge,
-    DataConfigGraphNode, DataConfigGraphNodeKind, DataConfigPayload, DataConfigPayloadMode,
-    DataConfigPoint, DataConfigPublish, DataConfigVisualGraph, DeviceSpec, DiscoveredPoint,
-    DiscoveryReport, DiscoveryRequest, Dlt645DataIdentifierTemplate, EdgeConfigPackage, EdgeHealth,
-    EdgeRuntimeEvent, EdgeRuntimeMetricsSnapshot, Iec101ConnectionSettings,
-    Iec104ConnectionSettings, MqttLastWillConfig, MqttProtocolVersion, MqttUplinkConfig,
-    MqttUserProperty, NumberRange, OmronFinsConnectionSettings, OpcUaConnectionSettings,
-    PointAccess, PointAddress, PointMappingSuggestion, ProtocolCircuitBreakerConfig,
-    ProtocolConnection, ProtocolType, RuntimeProtocolCatalog, RuntimeProtocolDescriptor,
-    SerialConnectionSettings, SiemensS7ConnectionSettings, TelemetryPoint, TelemetryPointMapping,
-    TelemetryType,
+    validate_point_access, validate_point_read_transforms, validate_siemens_s7_point, AlgorithmDsl,
+    AlgorithmInputBinding, AlgorithmKind, AlgorithmOutput, AlgorithmReportMode,
+    AlgorithmReportPolicy, AlgorithmRuntime, AlgorithmSpec, AlgorithmStep, AlgorithmTrigger,
+    BacnetIpConnectionSettings, BacnetObjectTemplate, BacnetPropertyTemplate, CollectionTask,
+    CommandFlowConfig, CommandGraphNodeKind, CustomSerialPointSpec, DataConfig,
+    DataConfigCollection, DataConfigGraphEdge, DataConfigGraphNode, DataConfigGraphNodeKind,
+    DataConfigPayload, DataConfigPayloadMode, DataConfigPoint, DataConfigPublish,
+    DataConfigVisualGraph, DeviceSpec, DiscoveredPoint, DiscoveryReport, DiscoveryRequest,
+    Dlt645DataIdentifierTemplate, EdgeConfigPackage, EdgeHealth, EdgeRuntimeEvent,
+    EdgeRuntimeMetricsSnapshot, Iec101ConnectionSettings, Iec104ConnectionSettings,
+    MqttLastWillConfig, MqttProtocolVersion, MqttUplinkConfig, MqttUserProperty, NumberRange,
+    OmronFinsConnectionSettings, OpcUaConnectionSettings, PointAccess, PointAddress,
+    PointMappingSuggestion, ProtocolCircuitBreakerConfig, ProtocolConnection, ProtocolType,
+    RuntimeProtocolCatalog, RuntimeProtocolDescriptor, SerialConnectionSettings,
+    SiemensS7ConnectionSettings, TelemetryPoint, TelemetryPointMapping, TelemetryType,
+};
+use edge_runtime::{
+    plan_command_execution, MqttPublishMessage, MqttPublisher, RumqttcMqttPublisher,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -45,8 +52,11 @@ use tokio::time::Duration;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::{
+    agent_service::{AgentStreamEvent, AgentToolCall, AgentToolRuntime},
+    agent_tools::CloudAgentToolRuntime,
     auth::{auth_status, authorize_api_request, ApiPrincipal},
     gateway::EdgeGatewayDispatchError,
+    mcp::{mcp_get, mcp_post, mcp_status},
     AppState,
 };
 
@@ -125,6 +135,75 @@ pub struct SaveProductVersionRequest {
     pub command_flows: Vec<CommandFlowConfig>,
     #[serde(default)]
     pub mqtt_uplinks: Vec<MqttUplinkConfig>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAgentChangeSetRequest {
+    pub project_id: String,
+    pub product_id: String,
+    pub base_version: Option<String>,
+    pub target_version: String,
+    pub title: String,
+    pub rationale: String,
+    pub patch: serde_json::Value,
+    pub risk: Option<AgentRiskLevel>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentChangeSetQuery {
+    pub project_id: Option<String>,
+    pub product_id: Option<String>,
+    pub status: Option<AgentChangeSetStatus>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfirmAgentChangeSetRequest {
+    pub note: Option<String>,
+    pub co_approver: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RejectAgentChangeSetRequest {
+    pub note: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAgentCommandCandidateRequest {
+    pub project_id: String,
+    pub edge_id: String,
+    pub flow_id: String,
+    pub point_id: String,
+    pub device_id: Option<String>,
+    pub value: serde_json::Value,
+    pub title: String,
+    pub rationale: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCommandCandidateQuery {
+    pub project_id: Option<String>,
+    pub edge_id: Option<String>,
+    pub status: Option<AgentCommandCandidateStatus>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfirmAgentCommandCandidateRequest {
+    pub note: Option<String>,
+    pub co_approver: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RejectAgentCommandCandidateRequest {
+    pub note: String,
 }
 
 #[derive(Deserialize)]
@@ -353,6 +432,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/agent/safety-check", post(agent_safety_check))
         .route("/api/agent/suggestions", post(agent_suggestions))
         .route("/api/agent/provider", get(agent_provider_status))
+        .route("/api/agent/metrics", get(agent_metrics))
         .route("/api/agent/chat", post(agent_chat))
         .route("/api/agent/conversations", get(agent_conversations))
         .route(
@@ -378,6 +458,65 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/api/agent/proposals/{proposal_id}/reject",
             post(reject_agent_proposal),
+        )
+        .route(
+            "/api/agent/change-sets",
+            get(agent_change_sets).post(create_agent_change_set),
+        )
+        .route(
+            "/api/agent/change-sets/{change_set_id}",
+            get(agent_change_set),
+        )
+        .route(
+            "/api/agent/change-sets/{change_set_id}/validate",
+            post(validate_agent_change_set_endpoint),
+        )
+        .route(
+            "/api/agent/change-sets/{change_set_id}/simulate",
+            post(simulate_agent_change_set),
+        )
+        .route(
+            "/api/agent/change-sets/{change_set_id}/confirm",
+            post(confirm_agent_change_set),
+        )
+        .route(
+            "/api/agent/change-sets/{change_set_id}/reject",
+            post(reject_agent_change_set),
+        )
+        .route(
+            "/api/agent/change-sets/{change_set_id}/apply",
+            post(apply_agent_change_set),
+        )
+        .route(
+            "/api/agent/commands",
+            get(agent_command_candidates).post(create_agent_command_candidate),
+        )
+        .route(
+            "/api/agent/commands/{candidate_id}",
+            get(agent_command_candidate),
+        )
+        .route(
+            "/api/agent/commands/{candidate_id}/validate",
+            post(validate_agent_command_candidate_endpoint),
+        )
+        .route(
+            "/api/agent/commands/{candidate_id}/confirm",
+            post(confirm_agent_command_candidate),
+        )
+        .route(
+            "/api/agent/commands/{candidate_id}/reject",
+            post(reject_agent_command_candidate),
+        )
+        .route(
+            "/api/agent/commands/{candidate_id}/dispatch",
+            post(dispatch_agent_command_candidate),
+        )
+        .route("/api/mcp/status", get(mcp_status))
+        .route(
+            "/mcp",
+            get(mcp_get)
+                .post(mcp_post)
+                .layer(DefaultBodyLimit::max(256 * 1024)),
         )
         .route_layer(middleware::from_fn_with_state(auth, authorize_api_request));
 
@@ -2492,6 +2631,12 @@ async fn agent_provider_status(
     Json(state.agent_service.status())
 }
 
+async fn agent_metrics(
+    State(state): State<AppState>,
+) -> Json<crate::agent_service::AgentObservabilitySnapshot> {
+    Json(state.agent_service.metrics())
+}
+
 async fn agent_chat(
     State(state): State<AppState>,
     Extension(principal): Extension<ApiPrincipal>,
@@ -2577,6 +2722,65 @@ async fn agent_chat(
         .await
         .map_err(agent_provider_error)?;
 
+    let generated_change_sets = change_sets_from_agent_events(&result.events);
+    for mut change_set in generated_change_sets {
+        if effective_project_id.as_deref() != Some(change_set.target.project_id.as_str()) {
+            return Err(error(
+                StatusCode::FORBIDDEN,
+                "Agent generated a ChangeSet outside the active project scope",
+            ));
+        }
+        let report = validate_agent_change_set_candidate(&state, &change_set);
+        change_set
+            .record_validation(report)
+            .map_err(agent_change_set_error)?;
+        let audit = AuditRecord::by_actor(
+            AuditAction::CreateAgentChangeSet,
+            format!("agent-change-set:{}", change_set.change_set_id),
+            operator_id.clone(),
+        );
+        persist_agent_change_set_transition(&state, change_set.clone(), audit).await?;
+        result.change_sets.push(change_set);
+    }
+
+    let generated_command_candidates = command_candidates_from_agent_events(&result.events);
+    for mut candidate in generated_command_candidates {
+        if effective_project_id.as_deref() != Some(candidate.target.project_id.as_str())
+            || context_edge_id.as_deref() != Some(candidate.target.edge_id.as_str())
+        {
+            return Err(error(
+                StatusCode::FORBIDDEN,
+                "Agent generated a command candidate outside the active project or edge scope",
+            ));
+        }
+        if let Some(existing) = state
+            .store
+            .lock()
+            .expect("store mutex poisoned")
+            .agent_command_candidate_by_idempotency(
+                &candidate.target.project_id,
+                &candidate.target.edge_id,
+                &candidate.idempotency_key,
+            )
+            .cloned()
+        {
+            result.command_candidates.push(existing);
+            continue;
+        }
+        candidate.created_by = operator_id.clone();
+        let report = validate_agent_command_candidate(&state, &candidate);
+        candidate
+            .record_validation(report)
+            .map_err(agent_command_candidate_error)?;
+        let audit = AuditRecord::by_actor(
+            AuditAction::CreateAgentCommandCandidate,
+            format!("agent-command:{}", candidate.candidate_id),
+            operator_id.clone(),
+        );
+        persist_agent_command_candidate_transition(&state, candidate.clone(), audit).await?;
+        result.command_candidates.push(candidate);
+    }
+
     let is_new = existing_conversation.is_none();
     let mut conversation = existing_conversation.unwrap_or_else(|| {
         AgentConversation::new(
@@ -2598,9 +2802,14 @@ async fn agent_chat(
                     .iter()
                     .map(|citation| AgentConversationCitation {
                         document_id: citation.document_id.clone(),
+                        chunk_id: citation.chunk_id.clone(),
                         title: citation.title.clone(),
                         source_uri: citation.source_uri.clone(),
                         excerpt: citation.excerpt.clone(),
+                        source_revision: citation.source_revision.clone(),
+                        source_type: citation.source_type.clone(),
+                        content_hash: citation.content_hash.clone(),
+                        untrusted_content: citation.untrusted_content,
                     })
                     .collect(),
             ),
@@ -2952,6 +3161,1371 @@ fn agent_proposal_review_error(
         | AgentProposalReviewError::ApprovalNoteRequired => StatusCode::BAD_REQUEST,
     };
     error(status, review_error.to_string())
+}
+
+async fn agent_change_sets(
+    State(state): State<AppState>,
+    Query(query): Query<AgentChangeSetQuery>,
+) -> Json<Vec<AgentChangeSet>> {
+    let project_id = normalized_optional(query.project_id);
+    let product_id = normalized_optional(query.product_id);
+    let store = state.store.lock().expect("store mutex poisoned");
+    let mut change_sets = store
+        .agent_change_sets()
+        .filter(|change_set| {
+            project_id
+                .as_deref()
+                .is_none_or(|project_id| change_set.target.project_id == project_id)
+                && product_id.as_deref().is_none_or(|product_id| {
+                    change_set.target.product_id.as_deref() == Some(product_id)
+                })
+                && query
+                    .status
+                    .is_none_or(|status| change_set.status == status)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    change_sets.sort_by_key(|change_set| std::cmp::Reverse(change_set.updated_at));
+    Json(change_sets)
+}
+
+async fn agent_change_set(
+    State(state): State<AppState>,
+    Path(change_set_id): Path<String>,
+) -> Result<Json<AgentChangeSet>, ApiError> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    store
+        .agent_change_set(&change_set_id)
+        .cloned()
+        .map(Json)
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing Agent ChangeSet"))
+}
+
+async fn create_agent_change_set(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Json(request): Json<CreateAgentChangeSetRequest>,
+) -> Result<(StatusCode, Json<AgentChangeSet>), ApiError> {
+    let actor = effective_actor(&principal, "console-operator")?;
+    let project_id = request.project_id.trim().to_string();
+    let call = AgentToolCall {
+        call_id: uuid::Uuid::new_v4().to_string(),
+        name: "configuration.change_set.draft".to_string(),
+        arguments: serde_json::to_value(&request)
+            .map_err(|cause| error(StatusCode::BAD_REQUEST, cause.to_string()))?,
+    };
+    let output = CloudAgentToolRuntime::new(state.store.clone())
+        .execute(
+            &call,
+            &serde_json::json!({"scope": {"projectId": project_id}}),
+        )
+        .map_err(|cause| error(StatusCode::UNPROCESSABLE_ENTITY, cause.to_string()))?;
+    let mut change_set: AgentChangeSet = serde_json::from_value(
+        output
+            .get("changeSet")
+            .cloned()
+            .ok_or_else(|| error(StatusCode::BAD_GATEWAY, "Agent tool omitted ChangeSet"))?,
+    )
+    .map_err(|cause| error(StatusCode::BAD_GATEWAY, cause.to_string()))?;
+    change_set.created_by = actor.clone();
+    let report = validate_agent_change_set_candidate(&state, &change_set);
+    change_set
+        .record_validation(report)
+        .map_err(agent_change_set_error)?;
+    let audit = AuditRecord::by_actor(
+        AuditAction::CreateAgentChangeSet,
+        format!("agent-change-set:{}", change_set.change_set_id),
+        actor,
+    );
+    persist_agent_change_set_transition(&state, change_set.clone(), audit).await?;
+    Ok((StatusCode::CREATED, Json(change_set)))
+}
+
+async fn validate_agent_change_set_endpoint(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Path(change_set_id): Path<String>,
+) -> Result<Json<AgentChangeSet>, ApiError> {
+    let actor = effective_actor(&principal, "console-operator")?;
+    let mut change_set = load_agent_change_set(&state, &change_set_id)?;
+    let report = validate_agent_change_set_candidate(&state, &change_set);
+    change_set
+        .record_validation(report)
+        .map_err(agent_change_set_error)?;
+    let audit = AuditRecord::by_actor(
+        AuditAction::ValidateAgentChangeSet,
+        format!("agent-change-set:{change_set_id}"),
+        actor,
+    );
+    persist_agent_change_set_transition(&state, change_set.clone(), audit).await?;
+    Ok(Json(change_set))
+}
+
+async fn simulate_agent_change_set(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Path(change_set_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let actor = effective_actor(&principal, "console-operator")?;
+    let mut change_set = load_agent_change_set(&state, &change_set_id)?;
+    let report = validate_agent_change_set_candidate(&state, &change_set);
+    change_set
+        .record_validation(report)
+        .map_err(agent_change_set_error)?;
+    let audit = AuditRecord::by_actor(
+        AuditAction::ValidateAgentChangeSet,
+        format!("agent-change-set:{change_set_id}:simulate"),
+        actor,
+    );
+    persist_agent_change_set_transition(&state, change_set.clone(), audit).await?;
+
+    let packages = if change_set
+        .validation
+        .as_ref()
+        .is_some_and(|report| report.valid)
+    {
+        simulate_product_version_packages(&state, &change_set)?
+    } else {
+        Vec::new()
+    };
+    Ok(Json(serde_json::json!({
+        "changeSet": change_set,
+        "packages": packages,
+        "applied": false,
+    })))
+}
+
+async fn confirm_agent_change_set(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Path(change_set_id): Path<String>,
+    Json(request): Json<ConfirmAgentChangeSetRequest>,
+) -> Result<Json<AgentChangeSet>, ApiError> {
+    let actor = effective_actor(&principal, "console-operator")?;
+    let mut change_set = load_agent_change_set(&state, &change_set_id)?;
+    let latest_report = validate_agent_change_set_candidate(&state, &change_set);
+    change_set
+        .record_validation(latest_report)
+        .map_err(agent_change_set_error)?;
+    if !change_set
+        .validation
+        .as_ref()
+        .is_some_and(|report| report.valid)
+    {
+        let audit = AuditRecord::by_actor(
+            AuditAction::ValidateAgentChangeSet,
+            format!("agent-change-set:{change_set_id}:confirmation-blocked"),
+            actor,
+        );
+        persist_agent_change_set_transition(&state, change_set.clone(), audit).await?;
+        return Err(error(
+            StatusCode::CONFLICT,
+            "ChangeSet validation failed; confirmation is not allowed",
+        ));
+    }
+    let evidence = AgentConfirmationEvidence {
+        confirmed_by: actor.clone(),
+        co_approver: normalized_optional(request.co_approver),
+        note: normalized_optional(request.note),
+        confirmed_at: Utc::now(),
+    };
+    change_set
+        .confirm(evidence)
+        .map_err(agent_change_set_error)?;
+    let audit = AuditRecord::by_actor(
+        AuditAction::ConfirmAgentChangeSet,
+        format!("agent-change-set:{change_set_id}"),
+        actor,
+    );
+    persist_agent_change_set_transition(&state, change_set.clone(), audit).await?;
+    Ok(Json(change_set))
+}
+
+async fn reject_agent_change_set(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Path(change_set_id): Path<String>,
+    Json(request): Json<RejectAgentChangeSetRequest>,
+) -> Result<Json<AgentChangeSet>, ApiError> {
+    let actor = effective_actor(&principal, "console-operator")?;
+    let mut change_set = load_agent_change_set(&state, &change_set_id)?;
+    change_set
+        .reject(&actor, request.note)
+        .map_err(agent_change_set_error)?;
+    let audit = AuditRecord::by_actor(
+        AuditAction::RejectAgentChangeSet,
+        format!("agent-change-set:{change_set_id}"),
+        actor,
+    );
+    persist_agent_change_set_transition(&state, change_set.clone(), audit).await?;
+    Ok(Json(change_set))
+}
+
+async fn apply_agent_change_set(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Path(change_set_id): Path<String>,
+) -> Result<Json<AgentChangeSet>, ApiError> {
+    let actor = effective_actor(&principal, "console-operator")?;
+    let mut change_set = load_agent_change_set(&state, &change_set_id)?;
+    if change_set.status != AgentChangeSetStatus::Confirmed {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "ChangeSet must be confirmed before it can be applied",
+        ));
+    }
+
+    let latest_report = validate_agent_change_set_candidate(&state, &change_set);
+    if !latest_report.valid {
+        change_set
+            .record_validation(latest_report)
+            .map_err(agent_change_set_error)?;
+        let audit = AuditRecord::by_actor(
+            AuditAction::ValidateAgentChangeSet,
+            format!("agent-change-set:{change_set_id}:apply-blocked"),
+            actor,
+        );
+        persist_agent_change_set_transition(&state, change_set, audit).await?;
+        return Err(error(
+            StatusCode::CONFLICT,
+            "ChangeSet became stale or invalid; review and confirm it again",
+        ));
+    }
+
+    let mut version = product_version_from_change_set(&change_set)
+        .map_err(|message| error(StatusCode::UNPROCESSABLE_ENTITY, message))?;
+    version.status = ProductVersionStatus::Draft;
+    change_set.start_apply().map_err(agent_change_set_error)?;
+    persist_agent_change_set(&state, change_set.clone()).await?;
+
+    let product_id = version.product_id.clone();
+    let target_version = version.version.clone();
+    if let Err(cause) = state.persist_product_version(version.clone()).await {
+        return fail_agent_change_set(&state, change_set, &actor, cause.to_string()).await;
+    }
+    state
+        .store
+        .lock()
+        .expect("store mutex poisoned")
+        .upsert_product_version(version);
+
+    if let Err((status, Json(body))) = transition_product_version(
+        state.clone(),
+        product_id.clone(),
+        target_version.clone(),
+        false,
+    )
+    .await
+    {
+        let message = body.message;
+        let _ = fail_agent_change_set(&state, change_set, &actor, message.clone()).await;
+        return Err(error(status, message));
+    }
+
+    let affected_edges = change_set
+        .validation
+        .as_ref()
+        .map(|report| report.impact.affected_edges.clone())
+        .unwrap_or_default();
+    change_set
+        .mark_applied(serde_json::json!({
+            "productId": product_id,
+            "productVersion": target_version,
+            "affectedEdges": affected_edges,
+            "runtimeSync": "notified",
+            "appliedBy": actor,
+            "appliedAt": Utc::now(),
+        }))
+        .map_err(agent_change_set_error)?;
+    let audit = AuditRecord::by_actor(
+        AuditAction::ApplyAgentChangeSet,
+        format!("agent-change-set:{change_set_id}"),
+        actor,
+    );
+    persist_agent_change_set_transition(&state, change_set.clone(), audit).await?;
+    Ok(Json(change_set))
+}
+
+fn load_agent_change_set(
+    state: &AppState,
+    change_set_id: &str,
+) -> Result<AgentChangeSet, ApiError> {
+    state
+        .store
+        .lock()
+        .expect("store mutex poisoned")
+        .agent_change_set(change_set_id)
+        .cloned()
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing Agent ChangeSet"))
+}
+
+async fn persist_agent_change_set(
+    state: &AppState,
+    change_set: AgentChangeSet,
+) -> Result<(), ApiError> {
+    state
+        .persist_agent_change_set(change_set.clone())
+        .await
+        .map_err(persistence_error)?;
+    state
+        .store
+        .lock()
+        .expect("store mutex poisoned")
+        .upsert_agent_change_set(change_set);
+    Ok(())
+}
+
+pub(crate) async fn persist_agent_change_set_transition(
+    state: &AppState,
+    change_set: AgentChangeSet,
+    audit: AuditRecord,
+) -> Result<(), ApiError> {
+    state
+        .persist_agent_change_set_transition(change_set.clone(), audit.clone())
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_agent_change_set(change_set);
+    store.push_audit_record(audit);
+    Ok(())
+}
+
+async fn fail_agent_change_set(
+    state: &AppState,
+    mut change_set: AgentChangeSet,
+    actor: &str,
+    message: String,
+) -> Result<Json<AgentChangeSet>, ApiError> {
+    change_set
+        .mark_failed(serde_json::json!({
+            "message": message,
+            "failedAt": Utc::now(),
+        }))
+        .map_err(agent_change_set_error)?;
+    let audit = AuditRecord::by_actor(
+        AuditAction::FailAgentChangeSet,
+        format!("agent-change-set:{}", change_set.change_set_id),
+        actor,
+    );
+    persist_agent_change_set_transition(state, change_set.clone(), audit).await?;
+    Err(error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "ChangeSet apply failed",
+    ))
+}
+
+fn change_sets_from_agent_events(events: &[AgentStreamEvent]) -> Vec<AgentChangeSet> {
+    let mut change_sets = BTreeMap::new();
+    for event in events {
+        let AgentStreamEvent::ToolCallCompleted {
+            tool_name,
+            success: true,
+            output,
+            ..
+        } = event
+        else {
+            continue;
+        };
+        if tool_name != "configuration.change_set.draft" {
+            continue;
+        }
+        let Some(value) = output.get("changeSet") else {
+            continue;
+        };
+        if let Ok(change_set) = serde_json::from_value::<AgentChangeSet>(value.clone()) {
+            change_sets.insert(change_set.change_set_id.clone(), change_set);
+        }
+    }
+    change_sets.into_values().collect()
+}
+
+fn command_candidates_from_agent_events(events: &[AgentStreamEvent]) -> Vec<AgentCommandCandidate> {
+    let mut candidates = BTreeMap::new();
+    for event in events {
+        let AgentStreamEvent::ToolCallCompleted {
+            tool_name,
+            success: true,
+            output,
+            ..
+        } = event
+        else {
+            continue;
+        };
+        if tool_name != "device.command.draft" {
+            continue;
+        }
+        let Some(value) = output.get("commandCandidate") else {
+            continue;
+        };
+        if let Ok(candidate) = serde_json::from_value::<AgentCommandCandidate>(value.clone()) {
+            candidates.insert(candidate.candidate_id.clone(), candidate);
+        }
+    }
+    candidates.into_values().collect()
+}
+
+fn product_version_from_change_set(change_set: &AgentChangeSet) -> Result<ProductVersion, String> {
+    if change_set.operations.len() != 1 {
+        return Err("only one product version operation is supported per ChangeSet".to_string());
+    }
+    let operation = &change_set.operations[0];
+    operation
+        .validate_shape()
+        .map_err(|cause| cause.to_string())?;
+    if operation.resource_kind != AgentResourceKind::ProductVersion {
+        return Err("ChangeSet operation must target a product version".to_string());
+    }
+    if operation.kind == AgentChangeOperationKind::Delete {
+        return Err("product version deletion is not supported by Agent ChangeSets".to_string());
+    }
+    let mut version: ProductVersion = serde_json::from_value(
+        operation
+            .after
+            .clone()
+            .ok_or_else(|| "ChangeSet operation omitted target product version".to_string())?,
+    )
+    .map_err(|cause| format!("invalid target product version: {cause}"))?;
+    let product_id = change_set
+        .target
+        .product_id
+        .as_deref()
+        .ok_or_else(|| "ChangeSet target productId is required".to_string())?;
+    let target_version = change_set
+        .target
+        .product_version
+        .as_deref()
+        .ok_or_else(|| "ChangeSet target productVersion is required".to_string())?;
+    if version.product_id != product_id || version.version != target_version {
+        return Err("ChangeSet operation does not match its product target".to_string());
+    }
+    if operation.resource_id != format!("{product_id}:{target_version}") {
+        return Err("ChangeSet operation resourceId does not match its product target".to_string());
+    }
+    version.status = ProductVersionStatus::Draft;
+    Ok(version)
+}
+
+fn product_version_request(version: &ProductVersion) -> SaveProductVersionRequest {
+    SaveProductVersionRequest {
+        version: version.version.clone(),
+        point_set_ids: version.point_set_ids.clone(),
+        device_models: version.device_models.clone(),
+        devices: version.devices.clone(),
+        protocol_connections: version.protocol_connections.clone(),
+        collection_tasks: version.collection_tasks.clone(),
+        algorithms: version.algorithms.clone(),
+        data_configs: version.data_configs.clone(),
+        command_flows: version.command_flows.clone(),
+        mqtt_uplinks: version.mqtt_uplinks.clone(),
+    }
+}
+
+pub(crate) fn validate_agent_change_set_candidate(
+    state: &AppState,
+    change_set: &AgentChangeSet,
+) -> AgentValidationReport {
+    let mut issues = Vec::new();
+    let version = match product_version_from_change_set(change_set) {
+        Ok(version) => version,
+        Err(message) => {
+            issues.push(agent_validation_issue(
+                AgentValidationSeverity::Error,
+                "invalid_change_set",
+                "operations",
+                message,
+            ));
+            return AgentValidationReport::new(issues, AgentImpactSummary::default());
+        }
+    };
+    let product_id = version.product_id.clone();
+    let (current_revision, current_edges, base_commands) = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        let Some(product) = store.product(&product_id) else {
+            issues.push(agent_validation_issue(
+                AgentValidationSeverity::Error,
+                "missing_product",
+                "target.productId",
+                format!("product `{product_id}` does not exist"),
+            ));
+            return AgentValidationReport::new(issues, AgentImpactSummary::default());
+        };
+        if product.project_id != change_set.target.project_id {
+            issues.push(agent_validation_issue(
+                AgentValidationSeverity::Error,
+                "project_scope_mismatch",
+                "target.projectId",
+                "product is outside the ChangeSet project scope",
+            ));
+        }
+        let base_commands = product
+            .latest_version
+            .as_deref()
+            .and_then(|revision| store.product_version(&product_id, revision))
+            .map(|version| version.command_flows.clone())
+            .unwrap_or_default();
+        let edges = store
+            .edge_nodes()
+            .filter(|edge| edge.product_id.as_deref() == Some(product_id.as_str()))
+            .map(|edge| edge.edge_id.clone())
+            .collect::<BTreeSet<_>>();
+        (product.latest_version.clone(), edges, base_commands)
+    };
+
+    let expected_base = current_revision.as_deref().unwrap_or("none");
+    if change_set.base_revision != expected_base {
+        issues.push(agent_validation_issue(
+            AgentValidationSeverity::Error,
+            "stale_base_revision",
+            "baseRevision",
+            format!(
+                "ChangeSet base `{}` does not match active product version `{expected_base}`",
+                change_set.base_revision
+            ),
+        ));
+    }
+    if current_edges != change_set.target.edge_ids {
+        issues.push(agent_validation_issue(
+            AgentValidationSeverity::Warning,
+            "edge_binding_changed",
+            "target.edgeIds",
+            "product edge bindings changed after this ChangeSet was drafted",
+        ));
+    }
+
+    let request = product_version_request(&version);
+    if let Err((status, Json(body))) =
+        validate_product_version_request(&product_id, &request, state, false)
+    {
+        issues.push(agent_validation_issue(
+            AgentValidationSeverity::Error,
+            format!("product_validation_{}", status.as_u16()),
+            "operations[0].after",
+            body.message,
+        ));
+    }
+    if let Err((status, Json(body))) = validate_publishable_product_version(&version) {
+        issues.push(agent_validation_issue(
+            AgentValidationSeverity::Error,
+            format!("publish_validation_{}", status.as_u16()),
+            "operations[0].after",
+            body.message,
+        ));
+    }
+
+    if !issues
+        .iter()
+        .any(|issue| issue.severity == AgentValidationSeverity::Error)
+    {
+        let store = state.store.lock().expect("store mutex poisoned");
+        for edge_id in &current_edges {
+            match materialize_product_config_package(&store, edge_id, &version) {
+                Ok(package) => {
+                    if let Err(errors) = ReleaseService::prepare_release(&package) {
+                        issues.extend(errors.into_iter().map(|cause| {
+                            agent_validation_issue(
+                                AgentValidationSeverity::Error,
+                                "release_preflight_failed",
+                                format!("target.edgeIds.{edge_id}"),
+                                cause.message,
+                            )
+                        }));
+                    }
+                }
+                Err((status, Json(body))) => issues.push(agent_validation_issue(
+                    AgentValidationSeverity::Error,
+                    format!("package_validation_{}", status.as_u16()),
+                    format!("target.edgeIds.{edge_id}"),
+                    body.message,
+                )),
+            }
+        }
+    }
+
+    let command_path_changed = base_commands != version.command_flows;
+    let mut notes = vec![format!(
+        "{} protocol connection(s), {} point set(s), {} collection flow(s), {} MQTT sink(s)",
+        version.protocol_connections.len(),
+        version.point_set_ids.len(),
+        version.data_configs.len(),
+        version.mqtt_uplinks.len(),
+    )];
+    if !current_edges.is_empty() {
+        notes.push(format!(
+            "{} bound Runtime(s) will receive a real-time config notification",
+            current_edges.len()
+        ));
+    }
+    if command_path_changed {
+        notes.push("downstream writable command paths changed".to_string());
+    }
+    AgentValidationReport::new(
+        issues,
+        AgentImpactSummary {
+            affected_resources: change_set.operations.len(),
+            affected_edges: current_edges.clone(),
+            requires_runtime_sync: !current_edges.is_empty(),
+            command_path_changed,
+            notes,
+        },
+    )
+}
+
+fn simulate_product_version_packages(
+    state: &AppState,
+    change_set: &AgentChangeSet,
+) -> Result<Vec<serde_json::Value>, ApiError> {
+    let version = product_version_from_change_set(change_set)
+        .map_err(|message| error(StatusCode::UNPROCESSABLE_ENTITY, message))?;
+    let edge_ids = change_set
+        .validation
+        .as_ref()
+        .map(|report| report.impact.affected_edges.clone())
+        .unwrap_or_default();
+    let store = state.store.lock().expect("store mutex poisoned");
+    edge_ids
+        .into_iter()
+        .map(|edge_id| {
+            let package = materialize_product_config_package(&store, &edge_id, &version)?;
+            let encoded = serde_json::to_vec(&package)
+                .map_err(|cause| error(StatusCode::INTERNAL_SERVER_ERROR, cause.to_string()))?;
+            Ok(serde_json::json!({
+                "edgeId": edge_id,
+                "version": package.version,
+                "protocolConnections": package.protocol_connections.len(),
+                "pointMappings": package.point_mappings.len(),
+                "collectionFlows": package.data_configs.len(),
+                "commandFlows": package.command_flows.len(),
+                "mqttSinks": package.mqtt_uplinks.len(),
+                "sha256": format!("{:x}", Sha256::digest(encoded)),
+            }))
+        })
+        .collect()
+}
+
+fn agent_validation_issue(
+    severity: AgentValidationSeverity,
+    code: impl Into<String>,
+    path: impl Into<String>,
+    message: impl Into<String>,
+) -> AgentValidationIssue {
+    AgentValidationIssue {
+        severity,
+        code: code.into(),
+        path: path.into(),
+        message: message.into(),
+    }
+}
+
+fn agent_change_set_error(
+    cause: cloud_control::AgentChangeSetError,
+) -> (StatusCode, Json<ErrorResponse>) {
+    let status = match cause {
+        cloud_control::AgentChangeSetError::InvalidTransition { .. }
+        | cloud_control::AgentChangeSetError::ValidationRequired => StatusCode::CONFLICT,
+        cloud_control::AgentChangeSetError::EmptyChangeSet
+        | cloud_control::AgentChangeSetError::InvalidOperation(_)
+        | cloud_control::AgentChangeSetError::HumanConfirmationRequired
+        | cloud_control::AgentChangeSetError::ReviewNoteRequired => StatusCode::BAD_REQUEST,
+    };
+    error(status, cause.to_string())
+}
+
+async fn agent_command_candidates(
+    State(state): State<AppState>,
+    Query(query): Query<AgentCommandCandidateQuery>,
+) -> Json<Vec<AgentCommandCandidate>> {
+    let project_id = normalized_optional(query.project_id);
+    let edge_id = normalized_optional(query.edge_id);
+    let store = state.store.lock().expect("store mutex poisoned");
+    let mut candidates = store
+        .agent_command_candidates()
+        .filter(|candidate| {
+            project_id
+                .as_deref()
+                .is_none_or(|value| candidate.target.project_id == value)
+                && edge_id
+                    .as_deref()
+                    .is_none_or(|value| candidate.target.edge_id == value)
+                && query.status.is_none_or(|status| candidate.status == status)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.updated_at));
+    Json(candidates)
+}
+
+async fn agent_command_candidate(
+    State(state): State<AppState>,
+    Path(candidate_id): Path<String>,
+) -> Result<Json<AgentCommandCandidate>, ApiError> {
+    load_agent_command_candidate(&state, &candidate_id).map(Json)
+}
+
+async fn create_agent_command_candidate(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Json(request): Json<CreateAgentCommandCandidateRequest>,
+) -> Result<(StatusCode, Json<AgentCommandCandidate>), ApiError> {
+    let actor = effective_actor(&principal, "console-operator")?;
+    let project_id = request.project_id.trim().to_string();
+    let edge_id = request.edge_id.trim().to_string();
+    let idempotency_key = request.idempotency_key.trim().to_string();
+    if let Some(existing) = state
+        .store
+        .lock()
+        .expect("store mutex poisoned")
+        .agent_command_candidate_by_idempotency(&project_id, &edge_id, &idempotency_key)
+        .cloned()
+    {
+        return Ok((StatusCode::OK, Json(existing)));
+    }
+
+    let call = AgentToolCall {
+        call_id: uuid::Uuid::new_v4().to_string(),
+        name: "device.command.draft".to_string(),
+        arguments: serde_json::to_value(&request)
+            .map_err(|cause| error(StatusCode::BAD_REQUEST, cause.to_string()))?,
+    };
+    let output = CloudAgentToolRuntime::new(state.store.clone())
+        .execute(
+            &call,
+            &serde_json::json!({
+                "scope": {"projectId": project_id, "edgeId": edge_id}
+            }),
+        )
+        .map_err(|cause| error(StatusCode::UNPROCESSABLE_ENTITY, cause.to_string()))?;
+    let mut candidate: AgentCommandCandidate =
+        serde_json::from_value(output.get("commandCandidate").cloned().ok_or_else(|| {
+            error(
+                StatusCode::BAD_GATEWAY,
+                "Agent tool omitted command candidate",
+            )
+        })?)
+        .map_err(|cause| error(StatusCode::BAD_GATEWAY, cause.to_string()))?;
+    candidate.created_by = actor.clone();
+    let report = validate_agent_command_candidate(&state, &candidate);
+    candidate
+        .record_validation(report)
+        .map_err(agent_command_candidate_error)?;
+    let audit = AuditRecord::by_actor(
+        AuditAction::CreateAgentCommandCandidate,
+        format!("agent-command:{}", candidate.candidate_id),
+        actor,
+    );
+    persist_agent_command_candidate_transition(&state, candidate.clone(), audit).await?;
+    Ok((StatusCode::CREATED, Json(candidate)))
+}
+
+async fn validate_agent_command_candidate_endpoint(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Path(candidate_id): Path<String>,
+) -> Result<Json<AgentCommandCandidate>, ApiError> {
+    let actor = effective_actor(&principal, "console-operator")?;
+    let mut candidate = load_agent_command_candidate(&state, &candidate_id)?;
+    let report = validate_agent_command_candidate(&state, &candidate);
+    candidate
+        .record_validation(report)
+        .map_err(agent_command_candidate_error)?;
+    let audit = AuditRecord::by_actor(
+        AuditAction::ValidateAgentCommandCandidate,
+        format!("agent-command:{candidate_id}"),
+        actor,
+    );
+    persist_agent_command_candidate_transition(&state, candidate.clone(), audit).await?;
+    Ok(Json(candidate))
+}
+
+async fn confirm_agent_command_candidate(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Path(candidate_id): Path<String>,
+    Json(request): Json<ConfirmAgentCommandCandidateRequest>,
+) -> Result<Json<AgentCommandCandidate>, ApiError> {
+    let actor = effective_actor(&principal, "console-operator")?;
+    let mut candidate = load_agent_command_candidate(&state, &candidate_id)?;
+    let report = validate_agent_command_candidate(&state, &candidate);
+    candidate
+        .record_validation(report)
+        .map_err(agent_command_candidate_error)?;
+    if !candidate
+        .validation
+        .as_ref()
+        .is_some_and(|report| report.valid)
+    {
+        let audit = AuditRecord::by_actor(
+            AuditAction::ValidateAgentCommandCandidate,
+            format!("agent-command:{candidate_id}:confirmation-blocked"),
+            actor,
+        );
+        persist_agent_command_candidate_transition(&state, candidate.clone(), audit).await?;
+        return Err(error(
+            StatusCode::CONFLICT,
+            "command candidate validation failed; confirmation is not allowed",
+        ));
+    }
+    let evidence = AgentConfirmationEvidence {
+        confirmed_by: actor.clone(),
+        co_approver: normalized_optional(request.co_approver),
+        note: normalized_optional(request.note),
+        confirmed_at: Utc::now(),
+    };
+    candidate
+        .confirm(evidence)
+        .map_err(agent_command_candidate_error)?;
+    let audit = AuditRecord::by_actor(
+        AuditAction::ConfirmAgentCommandCandidate,
+        format!("agent-command:{candidate_id}"),
+        actor,
+    );
+    persist_agent_command_candidate_transition(&state, candidate.clone(), audit).await?;
+    Ok(Json(candidate))
+}
+
+async fn reject_agent_command_candidate(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Path(candidate_id): Path<String>,
+    Json(request): Json<RejectAgentCommandCandidateRequest>,
+) -> Result<Json<AgentCommandCandidate>, ApiError> {
+    let actor = effective_actor(&principal, "console-operator")?;
+    let mut candidate = load_agent_command_candidate(&state, &candidate_id)?;
+    candidate
+        .reject(&actor, request.note)
+        .map_err(agent_command_candidate_error)?;
+    let audit = AuditRecord::by_actor(
+        AuditAction::RejectAgentCommandCandidate,
+        format!("agent-command:{candidate_id}"),
+        actor,
+    );
+    persist_agent_command_candidate_transition(&state, candidate.clone(), audit).await?;
+    Ok(Json(candidate))
+}
+
+async fn dispatch_agent_command_candidate(
+    State(state): State<AppState>,
+    Extension(principal): Extension<ApiPrincipal>,
+    Path(candidate_id): Path<String>,
+) -> Result<Json<AgentCommandCandidate>, ApiError> {
+    let actor = effective_actor(&principal, "console-operator")?;
+    let mut candidate = load_agent_command_candidate(&state, &candidate_id)?;
+    if candidate.status != AgentCommandCandidateStatus::Confirmed {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "command candidate must be confirmed before dispatch",
+        ));
+    }
+    let report = validate_agent_command_candidate(&state, &candidate);
+    if !report.valid {
+        candidate
+            .record_validation(report)
+            .map_err(agent_command_candidate_error)?;
+        let audit = AuditRecord::by_actor(
+            AuditAction::ValidateAgentCommandCandidate,
+            format!("agent-command:{candidate_id}:dispatch-blocked"),
+            actor,
+        );
+        persist_agent_command_candidate_transition(&state, candidate, audit).await?;
+        return Err(error(
+            StatusCode::CONFLICT,
+            "command candidate became stale or invalid; review and confirm it again",
+        ));
+    }
+
+    let (package, flow, mut uplink, value_path) = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        let package = store
+            .latest_config_package_for_edge(&candidate.target.edge_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::CONFLICT, "edge has no configuration package"))?;
+        let flow = package
+            .command_flows
+            .iter()
+            .find(|flow| flow.flow_id == candidate.target.flow_id)
+            .cloned()
+            .ok_or_else(|| error(StatusCode::CONFLICT, "command flow no longer exists"))?;
+        let uplink = package
+            .mqtt_uplinks
+            .iter()
+            .find(|uplink| uplink.sink_id == flow.mqtt_connection_id)
+            .cloned()
+            .ok_or_else(|| {
+                error(
+                    StatusCode::CONFLICT,
+                    "command MQTT connection no longer exists",
+                )
+            })?;
+        let value_path = flow
+            .nodes
+            .iter()
+            .find(|node| {
+                node.kind == CommandGraphNodeKind::PointWrite
+                    && node.ref_id.as_deref() == Some(candidate.target.point_id.as_str())
+            })
+            .and_then(|node| node.params.get("value_path"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("values.{}", candidate.target.point_id));
+        (package, flow, uplink, value_path)
+    };
+
+    let command_id = candidate.idempotency_key.clone();
+    let confirmation = candidate.confirmation.as_ref().ok_or_else(|| {
+        error(
+            StatusCode::CONFLICT,
+            "command candidate is missing human confirmation evidence",
+        )
+    })?;
+    let confirmation_token = format!(
+        "approval:{}:{}",
+        candidate.candidate_id,
+        uuid::Uuid::new_v4()
+    );
+    let mut payload = serde_json::json!({
+        "commandId": command_id,
+        "pointId": candidate.target.point_id,
+        "deviceId": candidate.target.device_id,
+        "value": candidate.value,
+        "requestedBy": actor,
+        "confirmationToken": confirmation_token,
+        "approvalCandidateId": candidate.candidate_id,
+        "approvedBy": confirmation.confirmed_by,
+        "coApprovedBy": confirmation.co_approver,
+        "approvedAt": confirmation.confirmed_at,
+        "expiresAt": Utc::now() + chrono::Duration::seconds(60),
+    });
+    insert_json_path(&mut payload, &value_path, candidate.value.clone()).map_err(|message| {
+        error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("invalid command value path: {message}"),
+        )
+    })?;
+    let encoded = serde_json::to_vec(&payload)
+        .map_err(|cause| error(StatusCode::INTERNAL_SERVER_ERROR, cause.to_string()))?;
+    plan_command_execution(&package, &flow.flow_id, &encoded).map_err(|cause| {
+        error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("Runtime command preflight failed: {cause}"),
+        )
+    })?;
+
+    candidate
+        .start_dispatch()
+        .map_err(agent_command_candidate_error)?;
+    persist_agent_command_candidate(&state, candidate.clone()).await?;
+
+    uplink.client_id = format!("{}-agent-dispatch", uplink.client_id);
+    let publish = async {
+        let mut publisher = RumqttcMqttPublisher::connect_from_uplink(&uplink)?;
+        publisher
+            .publish(MqttPublishMessage {
+                sink_id: uplink.sink_id.clone(),
+                broker: uplink.broker.clone(),
+                client_id: uplink.client_id.clone(),
+                topic: flow.subscribe_topic.clone(),
+                qos: flow.qos,
+                payload: encoded,
+            })
+            .await
+    }
+    .await;
+
+    match publish {
+        Ok(()) => {
+            candidate
+                .mark_dispatched(serde_json::json!({
+                    "commandId": command_id,
+                    "topic": flow.subscribe_topic,
+                    "qos": flow.qos,
+                    "sinkId": uplink.sink_id,
+                    "broker": uplink.broker,
+                    "dispatchedBy": actor,
+                    "dispatchedAt": Utc::now(),
+                    "brokerAcknowledged": true,
+                }))
+                .map_err(agent_command_candidate_error)?;
+            let audit = AuditRecord::by_actor(
+                AuditAction::DispatchAgentCommandCandidate,
+                format!("agent-command:{candidate_id}"),
+                actor,
+            );
+            persist_agent_command_candidate_transition(&state, candidate.clone(), audit).await?;
+            Ok(Json(candidate))
+        }
+        Err(cause) => {
+            candidate
+                .mark_failed(serde_json::json!({
+                    "message": cause.to_string(),
+                    "failedAt": Utc::now(),
+                    "topic": flow.subscribe_topic,
+                }))
+                .map_err(agent_command_candidate_error)?;
+            let audit = AuditRecord::by_actor(
+                AuditAction::FailAgentCommandCandidate,
+                format!("agent-command:{candidate_id}"),
+                actor,
+            );
+            persist_agent_command_candidate_transition(&state, candidate, audit).await?;
+            Err(error(
+                StatusCode::BAD_GATEWAY,
+                format!("command MQTT dispatch failed: {cause}"),
+            ))
+        }
+    }
+}
+
+fn load_agent_command_candidate(
+    state: &AppState,
+    candidate_id: &str,
+) -> Result<AgentCommandCandidate, ApiError> {
+    state
+        .store
+        .lock()
+        .expect("store mutex poisoned")
+        .agent_command_candidate(candidate_id)
+        .cloned()
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "missing Agent command candidate"))
+}
+
+async fn persist_agent_command_candidate(
+    state: &AppState,
+    candidate: AgentCommandCandidate,
+) -> Result<(), ApiError> {
+    state
+        .persist_agent_command_candidate(candidate.clone())
+        .await
+        .map_err(persistence_error)?;
+    state
+        .store
+        .lock()
+        .expect("store mutex poisoned")
+        .upsert_agent_command_candidate(candidate);
+    Ok(())
+}
+
+pub(crate) async fn persist_agent_command_candidate_transition(
+    state: &AppState,
+    candidate: AgentCommandCandidate,
+    audit: AuditRecord,
+) -> Result<(), ApiError> {
+    state
+        .persist_agent_command_candidate_transition(candidate.clone(), audit.clone())
+        .await
+        .map_err(persistence_error)?;
+    let mut store = state.store.lock().expect("store mutex poisoned");
+    store.upsert_agent_command_candidate(candidate);
+    store.push_audit_record(audit);
+    Ok(())
+}
+
+pub(crate) fn validate_agent_command_candidate(
+    state: &AppState,
+    candidate: &AgentCommandCandidate,
+) -> AgentValidationReport {
+    let mut issues = Vec::new();
+    let store = state.store.lock().expect("store mutex poisoned");
+    let Some(edge) = store.edge_node(&candidate.target.edge_id) else {
+        issues.push(agent_validation_issue(
+            AgentValidationSeverity::Error,
+            "missing_edge",
+            "target.edgeId",
+            format!("edge `{}` does not exist", candidate.target.edge_id),
+        ));
+        return command_validation_report(candidate, issues);
+    };
+    if edge.project_id.as_deref() != Some(candidate.target.project_id.as_str()) {
+        issues.push(agent_validation_issue(
+            AgentValidationSeverity::Error,
+            "project_scope_mismatch",
+            "target.projectId",
+            "edge is outside the command candidate project scope",
+        ));
+    }
+    if candidate.target.product_id.as_deref() != edge.product_id.as_deref() {
+        issues.push(agent_validation_issue(
+            AgentValidationSeverity::Error,
+            "product_binding_changed",
+            "target.productId",
+            "edge product binding changed after the command candidate was drafted",
+        ));
+    }
+
+    let Some(package) = store.latest_config_package_for_edge(&candidate.target.edge_id) else {
+        issues.push(agent_validation_issue(
+            AgentValidationSeverity::Error,
+            "missing_config_package",
+            "target.edgeId",
+            "edge has no active configuration package",
+        ));
+        return command_validation_report(candidate, issues);
+    };
+    if candidate.target.product_version.as_deref() != Some(package.version.as_str()) {
+        issues.push(agent_validation_issue(
+            AgentValidationSeverity::Error,
+            "stale_product_version",
+            "target.productVersion",
+            format!(
+                "command candidate targets `{}`, but edge currently runs `{}`",
+                candidate
+                    .target
+                    .product_version
+                    .as_deref()
+                    .unwrap_or("none"),
+                package.version
+            ),
+        ));
+    }
+    let Some(flow) = package
+        .command_flows
+        .iter()
+        .find(|flow| flow.flow_id == candidate.target.flow_id)
+    else {
+        issues.push(agent_validation_issue(
+            AgentValidationSeverity::Error,
+            "missing_command_flow",
+            "target.flowId",
+            "command flow no longer exists in the active package",
+        ));
+        return command_validation_report(candidate, issues);
+    };
+    if !flow.enabled {
+        issues.push(agent_validation_issue(
+            AgentValidationSeverity::Error,
+            "command_flow_disabled",
+            "target.flowId",
+            "command flow is disabled",
+        ));
+    }
+    if flow.protocol_connection_id != candidate.target.protocol_connection_id {
+        issues.push(agent_validation_issue(
+            AgentValidationSeverity::Error,
+            "protocol_connection_changed",
+            "target.protocolConnectionId",
+            "command flow protocol connection changed",
+        ));
+    }
+    if let Err(cause) = validate_command_flow(flow, &package.point_mappings) {
+        issues.push(agent_validation_issue(
+            AgentValidationSeverity::Error,
+            "invalid_command_topology",
+            "target.flowId",
+            cause.to_string(),
+        ));
+    }
+    if !flow
+        .nodes
+        .iter()
+        .any(|node| node.kind == CommandGraphNodeKind::SafetyGate)
+    {
+        issues.push(agent_validation_issue(
+            AgentValidationSeverity::Error,
+            "missing_safety_gate",
+            "target.flowId",
+            "Agent-issued device commands require a safety gate in the command flow",
+        ));
+    }
+    if !flow.nodes.iter().any(|node| {
+        node.kind == CommandGraphNodeKind::PointWrite
+            && node.ref_id.as_deref() == Some(candidate.target.point_id.as_str())
+    }) {
+        issues.push(agent_validation_issue(
+            AgentValidationSeverity::Error,
+            "point_not_exposed_by_flow",
+            "target.pointId",
+            "command flow does not expose the selected writable point",
+        ));
+    }
+    let mapping = package
+        .point_mappings
+        .iter()
+        .find(|mapping| mapping.point_id == candidate.target.point_id);
+    match mapping {
+        None => issues.push(agent_validation_issue(
+            AgentValidationSeverity::Error,
+            "missing_point_mapping",
+            "target.pointId",
+            "point mapping no longer exists",
+        )),
+        Some(mapping) => {
+            if !mapping.access.is_writable() {
+                issues.push(agent_validation_issue(
+                    AgentValidationSeverity::Error,
+                    "point_is_read_only",
+                    "target.pointId",
+                    "point is not writable",
+                ));
+            }
+            if mapping.device_id != candidate.target.device_id
+                || mapping.protocol_connection_id != candidate.target.protocol_connection_id
+            {
+                issues.push(agent_validation_issue(
+                    AgentValidationSeverity::Error,
+                    "point_target_changed",
+                    "target.pointId",
+                    "point device or protocol connection changed",
+                ));
+            }
+            if let Err(cause) =
+                validate_agent_command_value(&candidate.value, mapping.value_type, mapping.range)
+            {
+                issues.push(agent_validation_issue(
+                    AgentValidationSeverity::Error,
+                    "invalid_command_value",
+                    "value",
+                    cause,
+                ));
+            }
+        }
+    }
+    if !package
+        .mqtt_uplinks
+        .iter()
+        .any(|uplink| uplink.sink_id == flow.mqtt_connection_id)
+    {
+        issues.push(agent_validation_issue(
+            AgentValidationSeverity::Error,
+            "missing_command_mqtt_connection",
+            "target.flowId",
+            "command flow MQTT connection no longer exists",
+        ));
+    }
+    match store.runtime_metrics(&candidate.target.edge_id) {
+        Some(metrics) if !metrics.cloud_sync.connected => issues.push(agent_validation_issue(
+            AgentValidationSeverity::Warning,
+            "runtime_cloud_link_disconnected",
+            "target.edgeId",
+            "Runtime reports that its cloud control link is disconnected",
+        )),
+        Some(metrics)
+            if Utc::now()
+                .signed_duration_since(metrics.timestamp)
+                .num_seconds()
+                > 90 =>
+        {
+            issues.push(agent_validation_issue(
+                AgentValidationSeverity::Warning,
+                "runtime_metrics_stale",
+                "target.edgeId",
+                "Runtime metrics are older than 90 seconds; MQTT delivery can still be attempted",
+            ));
+        }
+        None => issues.push(agent_validation_issue(
+            AgentValidationSeverity::Warning,
+            "runtime_metrics_missing",
+            "target.edgeId",
+            "Runtime has not reported metrics; MQTT delivery can still be attempted",
+        )),
+        _ => {}
+    }
+    command_validation_report(candidate, issues)
+}
+
+fn command_validation_report(
+    candidate: &AgentCommandCandidate,
+    issues: Vec<AgentValidationIssue>,
+) -> AgentValidationReport {
+    AgentValidationReport::new(
+        issues,
+        AgentImpactSummary {
+            affected_resources: 1,
+            affected_edges: BTreeSet::from([candidate.target.edge_id.clone()]),
+            requires_runtime_sync: false,
+            command_path_changed: true,
+            notes: vec![format!(
+                "writes point `{}` through command flow `{}`; no configuration is modified",
+                candidate.target.point_id, candidate.target.flow_id
+            )],
+        },
+    )
+}
+
+fn validate_agent_command_value(
+    value: &serde_json::Value,
+    value_type: TelemetryType,
+    range: Option<NumberRange>,
+) -> Result<(), String> {
+    let numeric = match value_type {
+        TelemetryType::Float => Some(
+            value
+                .as_f64()
+                .ok_or_else(|| "float point requires a JSON number".to_string())?,
+        ),
+        TelemetryType::Integer => Some(
+            value
+                .as_i64()
+                .ok_or_else(|| "integer point requires a JSON integer".to_string())?
+                as f64,
+        ),
+        TelemetryType::Boolean => {
+            if !value.is_boolean() {
+                return Err("boolean point requires true or false".to_string());
+            }
+            None
+        }
+        TelemetryType::Text => {
+            if !value.is_string() {
+                return Err("text point requires a JSON string".to_string());
+            }
+            None
+        }
+    };
+    if let (Some(range), Some(numeric)) = (range, numeric) {
+        if !range.contains(numeric) {
+            return Err(format!(
+                "command value {numeric} is outside [{}, {}]",
+                range.min, range.max
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn insert_json_path(
+    document: &mut serde_json::Value,
+    path: &str,
+    value: serde_json::Value,
+) -> Result<(), String> {
+    let segments = path
+        .split('.')
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.is_empty() {
+        return Err("value path is empty".to_string());
+    }
+    let mut cursor = document;
+    for segment in &segments[..segments.len() - 1] {
+        if !cursor.is_object() {
+            return Err(format!("`{segment}` traverses a non-object value"));
+        }
+        cursor = cursor
+            .as_object_mut()
+            .expect("object checked above")
+            .entry((*segment).to_string())
+            .or_insert_with(|| serde_json::json!({}));
+    }
+    let Some(object) = cursor.as_object_mut() else {
+        return Err("value path parent is not an object".to_string());
+    };
+    object.insert(segments[segments.len() - 1].to_string(), value);
+    Ok(())
+}
+
+fn agent_command_candidate_error(
+    cause: cloud_control::AgentCommandCandidateError,
+) -> (StatusCode, Json<ErrorResponse>) {
+    let status = match cause {
+        cloud_control::AgentCommandCandidateError::InvalidTransition { .. }
+        | cloud_control::AgentCommandCandidateError::ValidationRequired => StatusCode::CONFLICT,
+        cloud_control::AgentCommandCandidateError::MissingTargetField(_)
+        | cloud_control::AgentCommandCandidateError::IdempotencyKeyRequired
+        | cloud_control::AgentCommandCandidateError::HumanConfirmationRequired
+        | cloud_control::AgentCommandCandidateError::ReviewNoteRequired
+        | cloud_control::AgentCommandCandidateError::TwoPersonConfirmationRequired => {
+            StatusCode::BAD_REQUEST
+        }
+    };
+    error(status, cause.to_string())
 }
 
 async fn save_point_mapping(
@@ -5013,13 +6587,7 @@ fn materialize_product_config_package(
             .iter()
             .cloned()
             .map(|mut uplink| {
-                uplink.client_id = if uplink.client_id.contains("{edge_id}") {
-                    uplink.client_id.replace("{edge_id}", edge_id)
-                } else if let Some(suffix) = uplink.client_id.strip_prefix("edge-dev") {
-                    format!("{edge_id}{suffix}")
-                } else {
-                    uplink.client_id
-                };
+                uplink.client_id = edge_id.to_string();
                 uplink
             })
             .collect(),
@@ -5107,6 +6675,7 @@ fn materialize_product_point_mappings(
             mapping.iec104 = point.iec104;
             mapping.bacnet = point.bacnet;
             mapping.unit = point.unit.clone();
+            mapping.read_transforms = point.read_transforms.clone();
             point_mappings.push(mapping);
         }
     }
@@ -6003,6 +7572,17 @@ fn validate_point_set_request(
                 ),
             ));
         }
+        validate_point_read_transforms(&point.read_transforms, point.value_type).map_err(
+            |cause| {
+                error(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    format!(
+                        "point {} read processing is invalid: {cause}",
+                        point.point_id
+                    ),
+                )
+            },
+        )?;
         if !point_ids.insert(point.point_id.as_str()) {
             return Err(error(
                 StatusCode::CONFLICT,
@@ -6516,86 +8096,9 @@ fn retrieve_agent_knowledge(
     query: &str,
     project_id: Option<&str>,
 ) -> Vec<serde_json::Value> {
-    let terms = knowledge_search_terms(query);
-    let mut matches = store
-        .knowledge_documents()
-        .filter(|document| {
-            document.enabled
-                && (document.project_id.is_none() || document.project_id.as_deref() == project_id)
-        })
-        .filter_map(|document| {
-            let title = document.title.to_lowercase();
-            let content = document.content.to_lowercase();
-            let tags = document.tags.join(" ").to_lowercase();
-            let score = terms.iter().fold(0usize, |score, term| {
-                score
-                    + usize::from(title.contains(term)) * 5
-                    + usize::from(tags.contains(term)) * 3
-                    + usize::from(content.contains(term))
-            });
-            (score > 0).then_some((score, document))
-        })
-        .collect::<Vec<_>>();
-    matches.sort_by(|(left_score, left), (right_score, right)| {
-        right_score
-            .cmp(left_score)
-            .then_with(|| right.updated_at.cmp(&left.updated_at))
-    });
-    matches
+    crate::agent_knowledge::search_agent_knowledge(store, query, project_id, None)
         .into_iter()
-        .take(5)
-        .map(|(_, document)| {
-            serde_json::json!({
-                "documentId": document.document_id,
-                "title": document.title,
-                "sourceUri": document.source_uri,
-                "excerpt": safe_knowledge_excerpt(&document.content, 600),
-            })
-        })
-        .collect()
-}
-
-fn knowledge_search_terms(query: &str) -> BTreeSet<String> {
-    const CJK_STOP: &str = "的是了在和与及或一个这那请帮我如何当前进行支持";
-    let normalized = query.to_lowercase();
-    let mut terms = normalized
-        .split(|character: char| !character.is_alphanumeric())
-        .filter(|term| term.chars().count() >= 2 && term.chars().count() <= 32)
-        .map(str::to_string)
-        .collect::<BTreeSet<_>>();
-    terms.extend(
-        normalized
-            .chars()
-            .filter(|character| {
-                ('\u{4e00}'..='\u{9fff}').contains(character) && !CJK_STOP.contains(*character)
-            })
-            .map(|character| character.to_string()),
-    );
-    terms
-}
-
-fn safe_knowledge_excerpt(content: &str, max_chars: usize) -> String {
-    const SENSITIVE_MARKERS: [&str; 7] = [
-        "password",
-        "secret",
-        "api_key",
-        "apikey",
-        "access_token",
-        "private key",
-        "authorization:",
-    ];
-    content
-        .lines()
-        .filter(|line| {
-            let normalized = line.to_lowercase();
-            !SENSITIVE_MARKERS
-                .iter()
-                .any(|marker| normalized.contains(marker))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        .chars()
-        .take(max_chars)
+        .map(|hit| serde_json::json!(hit))
         .collect()
 }
 
@@ -6997,6 +8500,19 @@ fn format_audit_action(action: AuditAction) -> String {
         AuditAction::DeleteKnowledgeDocument => "delete_knowledge_document",
         AuditAction::CreateAgentConversation => "create_agent_conversation",
         AuditAction::DeleteAgentConversation => "delete_agent_conversation",
+        AuditAction::InvokeAgentTool => "invoke_agent_tool",
+        AuditAction::CreateAgentChangeSet => "create_agent_change_set",
+        AuditAction::ValidateAgentChangeSet => "validate_agent_change_set",
+        AuditAction::ConfirmAgentChangeSet => "confirm_agent_change_set",
+        AuditAction::RejectAgentChangeSet => "reject_agent_change_set",
+        AuditAction::ApplyAgentChangeSet => "apply_agent_change_set",
+        AuditAction::FailAgentChangeSet => "fail_agent_change_set",
+        AuditAction::CreateAgentCommandCandidate => "create_agent_command_candidate",
+        AuditAction::ValidateAgentCommandCandidate => "validate_agent_command_candidate",
+        AuditAction::ConfirmAgentCommandCandidate => "confirm_agent_command_candidate",
+        AuditAction::RejectAgentCommandCandidate => "reject_agent_command_candidate",
+        AuditAction::DispatchAgentCommandCandidate => "dispatch_agent_command_candidate",
+        AuditAction::FailAgentCommandCandidate => "fail_agent_command_candidate",
     }
     .to_string()
 }

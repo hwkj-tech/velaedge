@@ -1,7 +1,8 @@
 use chrono::Utc;
 use cloud_control::{
-    AgentProposal, AgentProposalKind, AgentProposalStatus, AuditAction, AuditRecord, EdgeNode,
-    ReleaseRecord, ReleaseStatus, SqliteCloudStore,
+    AgentCommandCandidate, AgentCommandCandidateStatus, AgentCommandTarget, AgentImpactSummary,
+    AgentProposal, AgentProposalKind, AgentProposalStatus, AgentRiskLevel, AgentValidationReport,
+    AuditAction, AuditRecord, EdgeNode, ReleaseRecord, ReleaseStatus, SqliteCloudStore,
 };
 use edge_core::{
     AlgorithmRuntime, CloudSyncMetrics, CollectionRuntimeMetrics, CollectionTask, DeviceInstance,
@@ -10,6 +11,7 @@ use edge_core::{
     PointMappingSuggestion, ProtocolConnection, ProtocolType, RuntimeEventCategory,
     RuntimeEventSeverity, SystemRuntimeMetrics, TelemetryPointMapping, TelemetryType,
 };
+use serde_json::json;
 
 fn valid_package(version: &str) -> EdgeConfigPackage {
     EdgeConfigPackage::new("edge-dev", version)
@@ -277,6 +279,67 @@ async fn sqlite_store_persists_agent_proposal_review_with_audit() {
 
     let reopened = SqliteCloudStore::connect(&database_url).await.unwrap();
     assert_eq!(reopened.agent_proposals().await.unwrap(), vec![proposal]);
+    assert_eq!(reopened.audit_records().await.unwrap(), vec![audit]);
+}
+
+#[tokio::test]
+async fn sqlite_store_persists_command_candidate_transition_with_audit() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let database_url = format!("sqlite://{}", tempdir.path().join("cloud.db").display());
+    let mut candidate = AgentCommandCandidate::new(
+        "Start pump",
+        "Operator requested a controlled start",
+        AgentCommandTarget {
+            project_id: "plant-a".to_owned(),
+            edge_id: "edge-dev".to_owned(),
+            product_id: Some("pump-product".to_owned()),
+            product_version: Some("v2.2.0".to_owned()),
+            flow_id: "pump-command".to_owned(),
+            protocol_connection_id: "modbus-line".to_owned(),
+            device_id: "pump-1".to_owned(),
+            point_id: "pump-start".to_owned(),
+        },
+        json!(true),
+        "operator-42-start-pump-1",
+        AgentRiskLevel::High,
+        "operator-42",
+    )
+    .unwrap();
+    candidate
+        .record_validation(AgentValidationReport::new(
+            Vec::new(),
+            AgentImpactSummary {
+                affected_resources: 1,
+                affected_edges: ["edge-dev".to_owned()].into_iter().collect(),
+                requires_runtime_sync: false,
+                command_path_changed: true,
+                notes: vec!["writes one governed point".to_owned()],
+            },
+        ))
+        .unwrap();
+    assert_eq!(
+        candidate.status,
+        AgentCommandCandidateStatus::AwaitingConfirmation
+    );
+    let audit = AuditRecord::by_actor(
+        AuditAction::ValidateAgentCommandCandidate,
+        format!("agent-command-candidate:{}", candidate.candidate_id),
+        "operator-42",
+    );
+
+    {
+        let store = SqliteCloudStore::connect(&database_url).await.unwrap();
+        store
+            .upsert_agent_command_candidate_with_audit(candidate.clone(), audit.clone())
+            .await
+            .unwrap();
+    }
+
+    let reopened = SqliteCloudStore::connect(&database_url).await.unwrap();
+    assert_eq!(
+        reopened.agent_command_candidates().await.unwrap(),
+        vec![candidate]
+    );
     assert_eq!(reopened.audit_records().await.unwrap(), vec![audit]);
 }
 

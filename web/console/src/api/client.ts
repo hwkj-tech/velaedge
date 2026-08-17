@@ -2,8 +2,14 @@ import type {
   AgentActionResponse,
   AgentChatRequest,
   AgentChatResponse,
+  AgentChangeSetResponse,
+  AgentChangeSetSimulationResponse,
+  AgentChangeSetStatus,
+  AgentCommandCandidateResponse,
+  AgentCommandCandidateStatus,
   AgentConversationResponse,
   AgentKnowledgeDocumentResponse,
+  AgentObservabilityResponse,
   AgentProviderStatusResponse,
   AgentProposalResponse,
   AlgorithmResponse,
@@ -13,6 +19,7 @@ import type {
   CollectionTaskResponse,
   CreateAlgorithmRequest,
   CreateAgentProposalRequest,
+  ConfirmAgentGovernanceRequest,
   CreateCollectionTaskRequest,
   CreateDeviceModelRequest,
   CreateEdgeNodeRequest,
@@ -37,8 +44,10 @@ import type {
   RunDiscoveryRequest,
   RuntimeStatusResponse,
   ReviewAgentProposalRequest,
+  RejectAgentGovernanceRequest,
   SaveAgentKnowledgeDocumentRequest,
   ManagementActionResponse,
+  McpStatusResponse,
   SaveAlgorithmRequest,
   SaveCollectionTaskRequest,
   SaveDataConfigRequest,
@@ -210,6 +219,7 @@ function normalizePointSet(pointSet: PointSetResponse): PointSetResponse {
     points: (pointSet.points ?? []).map((point) => ({
       ...point,
       access: point.access ?? 'read_only',
+      readTransforms: point.readTransforms ?? [],
       valueType: pointSetValueTypeFromCore(point.valueType),
     })),
   };
@@ -626,6 +636,12 @@ export async function fetchAuditRecords(
   return requestJson<AuditRecordResponse[]>('/api/audit-records', fetcher);
 }
 
+export async function fetchMcpStatus(
+  fetcher: typeof fetch = fetch,
+): Promise<McpStatusResponse> {
+  return requestJson<McpStatusResponse>('/api/mcp/status', fetcher);
+}
+
 export async function fetchRuntimeStatus(
   fetcher: typeof fetch = fetch,
 ): Promise<RuntimeStatusResponse> {
@@ -932,6 +948,12 @@ export async function fetchAgentProviderStatus(
   return requestJson<AgentProviderStatusResponse>('/api/agent/provider', fetcher);
 }
 
+export async function fetchAgentMetrics(
+  fetcher: typeof fetch = fetch,
+): Promise<AgentObservabilityResponse> {
+  return requestJson<AgentObservabilityResponse>('/api/agent/metrics', fetcher);
+}
+
 export async function sendAgentChat(
   request: AgentChatRequest,
   fetcher: typeof fetch = fetch,
@@ -1050,6 +1072,143 @@ export async function reviewAgentProposal(
       method: 'POST',
     },
   );
+}
+
+export async function fetchAgentChangeSets(
+  projectId?: string,
+  status?: AgentChangeSetStatus,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentChangeSetResponse[]> {
+  const params = new URLSearchParams();
+  if (projectId) params.set('projectId', projectId);
+  if (status) params.set('status', status);
+  const query = params.size > 0 ? `?${params.toString()}` : '';
+  return requestJson<AgentChangeSetResponse[]>(`/api/agent/change-sets${query}`, fetcher);
+}
+
+export async function validateAgentChangeSet(
+  changeSetId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentChangeSetResponse> {
+  return requestJson<AgentChangeSetResponse>(
+    `/api/agent/change-sets/${encodeURIComponent(changeSetId)}/validate`,
+    fetcher,
+    { method: 'POST' },
+  );
+}
+
+export async function simulateAgentChangeSet(
+  changeSetId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentChangeSetSimulationResponse> {
+  return requestJson<AgentChangeSetSimulationResponse>(
+    `/api/agent/change-sets/${encodeURIComponent(changeSetId)}/simulate`,
+    fetcher,
+    { method: 'POST' },
+  );
+}
+
+export async function confirmAgentChangeSet(
+  changeSetId: string,
+  request: ConfirmAgentGovernanceRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentChangeSetResponse> {
+  return requestJson<AgentChangeSetResponse>(
+    `/api/agent/change-sets/${encodeURIComponent(changeSetId)}/confirm`,
+    fetcher,
+    jsonPost(request),
+  );
+}
+
+export async function rejectAgentChangeSet(
+  changeSetId: string,
+  request: RejectAgentGovernanceRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentChangeSetResponse> {
+  return requestJson<AgentChangeSetResponse>(
+    `/api/agent/change-sets/${encodeURIComponent(changeSetId)}/reject`,
+    fetcher,
+    jsonPost(request),
+  );
+}
+
+export async function applyAgentChangeSet(
+  changeSetId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentChangeSetResponse> {
+  return requestJson<AgentChangeSetResponse>(
+    `/api/agent/change-sets/${encodeURIComponent(changeSetId)}/apply`,
+    fetcher,
+    { method: 'POST' },
+  );
+}
+
+export async function fetchAgentCommandCandidates(
+  projectId?: string,
+  edgeId?: string,
+  status?: AgentCommandCandidateStatus,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentCommandCandidateResponse[]> {
+  const params = new URLSearchParams();
+  if (projectId) params.set('projectId', projectId);
+  if (edgeId) params.set('edgeId', edgeId);
+  if (status) params.set('status', status);
+  const query = params.size > 0 ? `?${params.toString()}` : '';
+  return requestJson<AgentCommandCandidateResponse[]>(`/api/agent/commands${query}`, fetcher);
+}
+
+export async function validateAgentCommandCandidate(
+  candidateId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentCommandCandidateResponse> {
+  return requestJson<AgentCommandCandidateResponse>(
+    `/api/agent/commands/${encodeURIComponent(candidateId)}/validate`,
+    fetcher,
+    { method: 'POST' },
+  );
+}
+
+export async function confirmAgentCommandCandidate(
+  candidateId: string,
+  request: ConfirmAgentGovernanceRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentCommandCandidateResponse> {
+  return requestJson<AgentCommandCandidateResponse>(
+    `/api/agent/commands/${encodeURIComponent(candidateId)}/confirm`,
+    fetcher,
+    jsonPost(request),
+  );
+}
+
+export async function rejectAgentCommandCandidate(
+  candidateId: string,
+  request: RejectAgentGovernanceRequest,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentCommandCandidateResponse> {
+  return requestJson<AgentCommandCandidateResponse>(
+    `/api/agent/commands/${encodeURIComponent(candidateId)}/reject`,
+    fetcher,
+    jsonPost(request),
+  );
+}
+
+export async function dispatchAgentCommandCandidate(
+  candidateId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<AgentCommandCandidateResponse> {
+  return requestJson<AgentCommandCandidateResponse>(
+    `/api/agent/commands/${encodeURIComponent(candidateId)}/dispatch`,
+    fetcher,
+    { method: 'POST' },
+  );
+}
+
+function jsonPost(request: unknown): RequestInit {
+  return {
+    body: JSON.stringify(request),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  };
 }
 
 async function requestJson<T>(

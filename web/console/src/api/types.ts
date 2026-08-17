@@ -79,8 +79,25 @@ export interface PointSetPointResponse {
   iec104?: CatalogIec104PointOptions;
   bacnet?: CatalogBacnetPointOptions;
   unit?: string | null;
+  readTransforms?: PointReadTransform[];
   intervalMs: number;
 }
+
+export type PointReadTransform =
+  | { kind: 'linear'; factor: number; offset: number }
+  | { kind: 'clamp'; min: number; max: number }
+  | { kind: 'round'; decimals: number }
+  | { kind: 'absolute' }
+  | { kind: 'square_root' }
+  | { kind: 'power'; exponent: number }
+  | {
+      kind: 'map_range';
+      inputMin: number;
+      inputMax: number;
+      outputMin: number;
+      outputMax: number;
+      clamp: boolean;
+    };
 
 export interface PointSetResponse {
   pointSetId: string;
@@ -374,7 +391,58 @@ export interface AgentProviderStatusResponse {
   configured: boolean;
   mode: 'deterministic' | 'openai_compatible';
   model: string;
+  streaming: boolean;
+  toolCalling: boolean;
 }
+
+export interface AgentObservabilityResponse {
+  requestCount: number;
+  providerSuccessCount: number;
+  deterministicCount: number;
+  fallbackCount: number;
+  failedRequestCount: number;
+  providerAttemptCount: number;
+  toolCallCount: number;
+  toolFailureCount: number;
+  securityBlockCount: number;
+  securityFilterCount: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  totalLatencyMs: number;
+  lastLatencyMs: number;
+  averageLatencyMs: number;
+  estimatedCostMicrousd: number;
+}
+
+export interface AgentTokenUsageResponse {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface AgentToolCallResponse {
+  callId: string;
+  name: string;
+  arguments: unknown;
+}
+
+export type AgentStreamEventResponse =
+  | { type: 'started'; model: string }
+  | { type: 'provider_attempt'; round: number; attempt: number }
+  | { type: 'text_delta'; delta: string }
+  | { type: 'tool_call_started'; call: AgentToolCallResponse }
+  | {
+      type: 'tool_call_completed';
+      call_id: string;
+      tool_name: string;
+      success: boolean;
+      output: unknown;
+    }
+  | { type: 'security_blocked'; code: string }
+  | { type: 'security_filtered'; source: string; item_count: number }
+  | { type: 'fallback'; reason: string }
+  | { type: 'completed'; mode: 'deterministic' | 'openai_compatible'; model: string };
 
 export interface AgentChatRequest {
   message: string;
@@ -389,15 +457,149 @@ export interface AgentChatResponse {
   mode: 'deterministic' | 'openai_compatible';
   model: string;
   citations: AgentCitationResponse[];
+  usage?: AgentTokenUsageResponse;
+  events?: AgentStreamEventResponse[];
+  changeSets?: AgentChangeSetResponse[];
+  commandCandidates?: AgentCommandCandidateResponse[];
+  fallbackReason?: string;
   conversationId?: string;
   conversationTitle?: string;
 }
 
+export type AgentRiskLevel = 'low' | 'medium' | 'high' | 'critical';
+export type AgentValidationSeverity = 'info' | 'warning' | 'error';
+
+export interface AgentValidationIssueResponse {
+  severity: AgentValidationSeverity;
+  code: string;
+  path: string;
+  message: string;
+}
+
+export interface AgentImpactSummaryResponse {
+  affectedResources: number;
+  affectedEdges: string[];
+  requiresRuntimeSync: boolean;
+  commandPathChanged: boolean;
+  notes: string[];
+}
+
+export interface AgentValidationReportResponse {
+  valid: boolean;
+  checkedAt: string;
+  issues: AgentValidationIssueResponse[];
+  impact: AgentImpactSummaryResponse;
+}
+
+export interface AgentConfirmationResponse {
+  confirmedBy: string;
+  coApprover?: string | null;
+  note?: string | null;
+  confirmedAt: string;
+}
+
+export type AgentChangeSetStatus =
+  | 'draft'
+  | 'awaiting_confirmation'
+  | 'confirmed'
+  | 'applying'
+  | 'applied'
+  | 'rejected'
+  | 'failed';
+
+export interface AgentChangeOperationResponse {
+  operationId: string;
+  kind: 'create' | 'update' | 'delete';
+  resourceKind: string;
+  resourceId: string;
+  before?: unknown;
+  after?: unknown;
+  dependsOn: string[];
+}
+
+export interface AgentChangeSetResponse {
+  changeSetId: string;
+  title: string;
+  rationale: string;
+  target: {
+    projectId: string;
+    productId?: string | null;
+    productVersion?: string | null;
+    edgeIds: string[];
+  };
+  baseRevision: string;
+  operations: AgentChangeOperationResponse[];
+  risk: AgentRiskLevel;
+  status: AgentChangeSetStatus;
+  validation?: AgentValidationReportResponse | null;
+  confirmation?: AgentConfirmationResponse | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  result?: unknown;
+}
+
+export interface AgentChangeSetSimulationResponse {
+  changeSet: AgentChangeSetResponse;
+  packages: unknown[];
+  applied: false;
+}
+
+export type AgentCommandCandidateStatus =
+  | 'draft'
+  | 'awaiting_confirmation'
+  | 'confirmed'
+  | 'dispatching'
+  | 'dispatched'
+  | 'rejected'
+  | 'failed';
+
+export interface AgentCommandCandidateResponse {
+  candidateId: string;
+  title: string;
+  rationale: string;
+  target: {
+    projectId: string;
+    edgeId: string;
+    productId?: string | null;
+    productVersion?: string | null;
+    flowId: string;
+    protocolConnectionId: string;
+    deviceId: string;
+    pointId: string;
+  };
+  value: unknown;
+  idempotencyKey: string;
+  risk: AgentRiskLevel;
+  status: AgentCommandCandidateStatus;
+  validation?: AgentValidationReportResponse | null;
+  confirmation?: AgentConfirmationResponse | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  result?: unknown;
+}
+
+export interface ConfirmAgentGovernanceRequest {
+  note?: string | null;
+  coApprover?: string | null;
+}
+
+export interface RejectAgentGovernanceRequest {
+  note: string;
+}
+
 export interface AgentCitationResponse {
   documentId: string;
+  chunkId?: string;
   title: string;
   sourceUri: string | null;
   excerpt: string;
+  sourceRevision?: string;
+  sourceType?: 'managed_document' | 'runtime_catalog' | 'built_in_runbook' | 'configuration_schema';
+  score?: number;
+  contentHash?: string;
+  untrustedContent?: boolean;
 }
 
 export interface AgentConversationMessageResponse {
@@ -852,6 +1054,44 @@ export interface AuditRecordResponse {
   action: string;
   target: string;
   result: string;
+}
+
+export interface McpToolStatusResponse {
+  name: string;
+  description: string;
+  effect: 'read_only' | 'draft_change_set' | 'draft_device_command';
+  risk: AgentRiskLevel;
+  readOnly: boolean;
+  humanReviewRequired: boolean;
+}
+
+export interface McpStatusResponse {
+  enabled: boolean;
+  endpoint: string;
+  transport: 'streamable_http';
+  protocolVersion: string;
+  serverVersion: string;
+  authentication: {
+    required: boolean;
+    scheme: 'bearer' | 'local_development';
+    principal: string;
+    role: 'viewer' | 'operator' | 'admin';
+  };
+  scope: {
+    projects: string[];
+    edges: string[];
+    projectHeader: string;
+    edgeHeader: string;
+  };
+  controls: {
+    originValidation: boolean;
+    allowedOriginCount: number;
+    rateLimitPerMinute: number;
+    auditEnabled: boolean;
+    executionToolsExposed: boolean;
+    draftOnlyMutations: boolean;
+  };
+  tools: McpToolStatusResponse[];
 }
 
 export type EdgeHealth = 'Healthy' | 'Degraded' | 'Critical' | 'Offline';

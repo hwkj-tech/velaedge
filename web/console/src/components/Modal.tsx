@@ -2,9 +2,11 @@ import { type ReactNode, useEffect, useRef } from 'react';
 
 export function Modal({
   children,
+  closeOnBackdrop = false,
   onClose,
 }: {
   children: ReactNode;
+  closeOnBackdrop?: boolean;
   onClose?: () => void;
 }) {
   const backdropRef = useRef<HTMLDivElement>(null);
@@ -33,7 +35,16 @@ export function Modal({
   }, [onClose]);
 
   return (
-    <div className="modal-backdrop" data-modal-backdrop="true" ref={backdropRef}>
+    <div
+      className="modal-backdrop"
+      data-modal-backdrop="true"
+      onMouseDown={(event) => {
+        if (closeOnBackdrop && event.target === event.currentTarget) {
+          onClose?.();
+        }
+      }}
+      ref={backdropRef}
+    >
       {children}
     </div>
   );

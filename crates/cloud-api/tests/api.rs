@@ -5,7 +5,8 @@ use axum::{
 use cloud_api::{app, AgentService, ApiAuthConfig, ApiRole, AppState};
 use cloud_control::{EdgeNode, SqliteCloudStore};
 use edge_core::{
-    CollectionTask, DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, OpcUaConnectionSettings,
+    CollectionTask, CommandFlowConfig, CommandGraphEdge, CommandGraphNode, CommandGraphNodeKind,
+    DeviceInstance, EdgeConfigPackage, MqttUplinkConfig, OpcUaConnectionSettings, PointAccess,
     PointAddress, ProtocolConnection, SerialConnectionSettings, TelemetryPointMapping,
     TelemetryType,
 };
@@ -42,6 +43,80 @@ fn rbac_router() -> axum::Router {
     ])
     .unwrap();
     app(AppState::default().with_api_auth(auth))
+}
+
+fn command_rbac_router() -> axum::Router {
+    let state = AppState::default();
+    {
+        let mut store = state.store.lock().unwrap();
+        let mut package = store
+            .latest_config_package_for_edge("edge-dev")
+            .unwrap()
+            .clone();
+        package
+            .point_mappings
+            .iter_mut()
+            .find(|mapping| mapping.point_id == "running")
+            .unwrap()
+            .access = PointAccess::ReadWrite;
+        let mut safety = CommandGraphNode::new(
+            "safety",
+            CommandGraphNodeKind::SafetyGate,
+            "Human-confirmed safety gate",
+        );
+        safety
+            .params
+            .insert("require_confirmation".to_owned(), json!(true));
+        let mut write = CommandGraphNode::new(
+            "write-running",
+            CommandGraphNodeKind::PointWrite,
+            "Write running",
+        )
+        .with_ref("running");
+        write
+            .params
+            .insert("value_path".to_owned(), json!("values.running"));
+        let mut flow = CommandFlowConfig::new(
+            "pump-command",
+            "Pump command",
+            "velamq-main",
+            "factory/edge-dev/pump-1/command",
+            "factory/edge-dev/pump-1/command/reply/{command_id}",
+        )
+        .with_protocol_connection("modbus-line-a");
+        flow.nodes = vec![
+            CommandGraphNode::new("input", CommandGraphNodeKind::MqttInput, "MQTT input"),
+            safety,
+            write,
+            CommandGraphNode::new("reply", CommandGraphNodeKind::MqttReply, "MQTT reply"),
+        ];
+        flow.edges = vec![
+            CommandGraphEdge::new("input-safety", "input", "safety"),
+            CommandGraphEdge::new("safety-write", "safety", "write-running"),
+            CommandGraphEdge::new("write-reply", "write-running", "reply"),
+        ];
+        package.command_flows = vec![flow];
+        store.upsert_config_package(package);
+    }
+    let auth = ApiAuthConfig::required(vec![
+        (
+            "read-only".to_string(),
+            ApiRole::Viewer,
+            VIEWER_TOKEN.to_string(),
+        ),
+        (
+            "config-operator".to_string(),
+            ApiRole::Operator,
+            OPERATOR_TOKEN.to_string(),
+        ),
+        (
+            "platform-admin".to_string(),
+            ApiRole::Admin,
+            ADMIN_TOKEN.to_string(),
+        ),
+    ])
+    .unwrap();
+    app(state.with_api_auth(auth))
 }
 
 #[tokio::test]
@@ -271,6 +346,257 @@ async fn authenticated_admin_cannot_review_own_agent_proposal() {
     assert_eq!(reviewed.status(), StatusCode::CONFLICT);
 }
 
+#[tokio::test]
+async fn agent_change_set_requires_validation_confirmation_and_applies_product_version() {
+    let router = rbac_router();
+    let create = router
+        .clone()
+        .oneshot(
+            Request::post("/api/agent/change-sets")
+                .header("authorization", bearer(OPERATOR_TOKEN))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "projectId": "demo-plant",
+                        "productId": "pump-collection-uplink",
+                        "baseVersion": "v1.4.3",
+                        "targetVersion": "v1.4.4-agent",
+                        "title": "调整泵站采集周期",
+                        "rationale": "降低现场总线轮询压力",
+                        "patch": {
+                            "collectionTasks": [{
+                                "task_id": "pump-main",
+                                "device_id": "pump-1",
+                                "point_ids": ["pump_pressure", "pump_running"],
+                                "interval_ms": 2000,
+                                "enabled": true
+                            }]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::CREATED);
+    let body = to_bytes(create.into_body(), usize::MAX).await.unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(created["status"], "awaiting_confirmation");
+    assert_eq!(created["validation"]["valid"], true);
+    assert_eq!(created["createdBy"], "config-operator");
+    let change_set_id = created["changeSetId"].as_str().unwrap();
+
+    let unconfirmed_apply = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/agent/change-sets/{change_set_id}/apply"))
+                .header("authorization", bearer(ADMIN_TOKEN))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unconfirmed_apply.status(), StatusCode::CONFLICT);
+
+    let simulation = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/agent/change-sets/{change_set_id}/simulate"))
+                .header("authorization", bearer(OPERATOR_TOKEN))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(simulation.status(), StatusCode::OK);
+    let body = to_bytes(simulation.into_body(), usize::MAX).await.unwrap();
+    let simulation: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(simulation["applied"], false);
+    assert_eq!(simulation["packages"][0]["edgeId"], "edge-dev");
+    assert_eq!(simulation["packages"][0]["collectionFlows"], 1);
+
+    let operator_confirmation = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/agent/change-sets/{change_set_id}/confirm"))
+                .header("authorization", bearer(OPERATOR_TOKEN))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"note": "已复核"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(operator_confirmation.status(), StatusCode::FORBIDDEN);
+
+    let confirmation = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/agent/change-sets/{change_set_id}/confirm"))
+                .header("authorization", bearer(ADMIN_TOKEN))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"note": "已复核"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(confirmation.status(), StatusCode::OK);
+    let body = to_bytes(confirmation.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let confirmed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(confirmed["status"], "confirmed");
+    assert_eq!(confirmed["confirmation"]["confirmedBy"], "platform-admin");
+
+    let applied = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/agent/change-sets/{change_set_id}/apply"))
+                .header("authorization", bearer(ADMIN_TOKEN))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(applied.status(), StatusCode::OK);
+    let body = to_bytes(applied.into_body(), usize::MAX).await.unwrap();
+    let applied: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(applied["status"], "applied");
+    assert_eq!(applied["result"]["productVersion"], "v1.4.4-agent");
+    assert_eq!(applied["result"]["runtimeSync"], "notified");
+
+    let versions = router
+        .clone()
+        .oneshot(
+            Request::get("/api/products/pump-collection-uplink/versions")
+                .header("authorization", bearer(VIEWER_TOKEN))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(versions.status(), StatusCode::OK);
+    let body = to_bytes(versions.into_body(), usize::MAX).await.unwrap();
+    let versions: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(versions.as_array().unwrap().iter().any(|version| {
+        version["version"] == "v1.4.4-agent" && version["status"] == "published"
+    }));
+
+    let edges = router
+        .oneshot(
+            Request::get("/api/edge-nodes")
+                .header("authorization", bearer(VIEWER_TOKEN))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(edges.into_body(), usize::MAX).await.unwrap();
+    let edges: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(edges[0]["desiredProductVersion"], "v1.4.4-agent");
+}
+
+#[tokio::test]
+async fn agent_command_candidate_requires_admin_confirmation_and_is_idempotent() {
+    let router = command_rbac_router();
+    let request = json!({
+        "projectId": "demo-plant",
+        "edgeId": "edge-dev",
+        "flowId": "pump-command",
+        "pointId": "running",
+        "deviceId": "pump-1",
+        "value": true,
+        "title": "Start pump",
+        "rationale": "Controlled maintenance start",
+        "idempotencyKey": "maintenance-start-pump-1-001"
+    });
+    let created = router
+        .clone()
+        .oneshot(
+            Request::post("/api/agent/commands")
+                .header("authorization", bearer(OPERATOR_TOKEN))
+                .header("content-type", "application/json")
+                .body(Body::from(request.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let body = to_bytes(created.into_body(), usize::MAX).await.unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(created["status"], "awaiting_confirmation");
+    assert_eq!(created["validation"]["valid"], true);
+    assert_eq!(created["createdBy"], "config-operator");
+    let candidate_id = created["candidateId"].as_str().unwrap();
+
+    let duplicate = router
+        .clone()
+        .oneshot(
+            Request::post("/api/agent/commands")
+                .header("authorization", bearer(OPERATOR_TOKEN))
+                .header("content-type", "application/json")
+                .body(Body::from(request.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::OK);
+    let body = to_bytes(duplicate.into_body(), usize::MAX).await.unwrap();
+    let duplicate: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(duplicate["candidateId"], candidate_id);
+
+    let operator_confirmation = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/agent/commands/{candidate_id}/confirm"))
+                .header("authorization", bearer(OPERATOR_TOKEN))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"note": "reviewed"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(operator_confirmation.status(), StatusCode::FORBIDDEN);
+
+    let confirmation = router
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/agent/commands/{candidate_id}/confirm"))
+                .header("authorization", bearer(ADMIN_TOKEN))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"note": "Verified pump and maintenance window"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(confirmation.status(), StatusCode::OK);
+    let body = to_bytes(confirmation.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let confirmed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(confirmed["status"], "confirmed");
+    assert_eq!(confirmed["confirmation"]["confirmedBy"], "platform-admin");
+
+    let listed = router
+        .oneshot(
+            Request::get(
+                "/api/agent/commands?projectId=demo-plant&edgeId=edge-dev&status=confirmed",
+            )
+            .header("authorization", bearer(VIEWER_TOKEN))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    let body = to_bytes(listed.into_body(), usize::MAX).await.unwrap();
+    let listed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["candidateId"], candidate_id);
+}
+
 fn bearer(token: &str) -> String {
     format!("Bearer {token}")
 }
@@ -306,6 +632,61 @@ async fn management_api_enforces_authentication_and_role_hierarchy() {
     assert_eq!(status["subject"], "read-only");
     assert_eq!(status["role"], "viewer");
     assert_eq!(status["authenticationEnabled"], true);
+
+    let viewer_agent_metrics = router
+        .clone()
+        .oneshot(
+            Request::get("/api/agent/metrics")
+                .header("authorization", bearer(VIEWER_TOKEN))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(viewer_agent_metrics.status(), StatusCode::OK);
+
+    let viewer_agent_chat = router
+        .clone()
+        .oneshot(
+            Request::post("/api/agent/chat")
+                .header("authorization", bearer(VIEWER_TOKEN))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"message": "检查状态"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(viewer_agent_chat.status(), StatusCode::FORBIDDEN);
+
+    let operator_agent_chat = router
+        .clone()
+        .oneshot(
+            Request::post("/api/agent/chat")
+                .header("authorization", bearer(OPERATOR_TOKEN))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"message": "检查状态", "operatorId": "config-operator"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(operator_agent_chat.status(), StatusCode::OK);
+
+    let operator_agent_execution = router
+        .clone()
+        .oneshot(
+            Request::post("/api/agent/change-sets/missing/confirm")
+                .header("authorization", bearer(OPERATOR_TOKEN))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"actor": "config-operator", "note": "test"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(operator_agent_execution.status(), StatusCode::FORBIDDEN);
 
     let project = json!({
         "projectId": "rbac-acceptance",
@@ -2013,6 +2394,22 @@ async fn agent_chat_uses_scoped_backend_context_without_execution_side_effects()
     assert_eq!(provider["configured"], false);
     assert_eq!(provider["mode"], "deterministic");
 
+    let metrics_before = router
+        .clone()
+        .oneshot(
+            Request::get("/api/agent/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(metrics_before.status(), StatusCode::OK);
+    let body = to_bytes(metrics_before.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let metrics_before: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(metrics_before["requestCount"], 0);
+
     let response = router
         .clone()
         .oneshot(
@@ -2039,6 +2436,24 @@ async fn agent_chat_uses_scoped_backend_context_without_execution_side_effects()
         .as_str()
         .unwrap()
         .contains("有效配置会自动同步到 Runtime"));
+
+    let metrics_after = router
+        .clone()
+        .oneshot(
+            Request::get("/api/agent/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(metrics_after.status(), StatusCode::OK);
+    let body = to_bytes(metrics_after.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let metrics_after: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(metrics_after["requestCount"], 1);
+    assert_eq!(metrics_after["deterministicCount"], 1);
+    assert_eq!(metrics_after["failedRequestCount"], 0);
     assert_eq!(
         state
             .store
@@ -2186,17 +2601,30 @@ async fn governed_agent_knowledge_is_scoped_cited_redacted_and_persistent() {
     assert_eq!(chat.status(), StatusCode::OK);
     let body = to_bytes(chat.into_body(), usize::MAX).await.unwrap();
     let chat: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(chat["citations"].as_array().unwrap().len(), 1);
-    assert_eq!(chat["citations"][0]["documentId"], demo_id);
-    assert_eq!(chat["citations"][0]["title"], "泵站压力超时处理");
-    assert!(!chat["citations"][0]["excerpt"]
+    let citations = chat["citations"].as_array().unwrap();
+    assert!(!citations.is_empty());
+    let project_citation = citations
+        .iter()
+        .find(|citation| citation["documentId"] == demo_id)
+        .expect("project runbook should be cited");
+    assert_eq!(project_citation["title"], "泵站压力超时处理");
+    assert!(project_citation["chunkId"].as_str().is_some());
+    assert!(project_citation["contentHash"]
         .as_str()
-        .unwrap()
-        .contains("password"));
+        .is_some_and(|hash| hash.starts_with("sha256:")));
+    assert!(citations.iter().all(|citation| {
+        citation["title"] != "电表压力术语" && citation["title"] != "旧版压力手册"
+    }));
+    assert!(citations.iter().all(|citation| {
+        !citation["excerpt"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("password")
+    }));
     assert!(chat["message"]
         .as_str()
         .unwrap()
-        .contains("命中 1 条受管知识"));
+        .contains(&format!("命中 {} 条受管知识", citations.len())));
 
     let reopened = app(AppState::with_sqlite(&database_url)
         .await

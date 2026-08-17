@@ -68,7 +68,6 @@ test('operates the real project, product, and edge enrollment workflow', async (
   await pointSetDialog.getByLabel('点位 1 Point ID').fill('e2e_pressure');
   await pointSetDialog.getByLabel('点位 1 语义 ID').fill('pump.pressure');
   await pointSetDialog.getByLabel('点位 1 地址值').fill('40001');
-  await pointSetDialog.getByLabel('点位 1 单位').fill('MPa');
   await pointSetDialog.getByRole('button', { name: '保存', exact: true }).click();
   await expect(pointSetDialog).toBeHidden();
   await expect(
@@ -217,5 +216,85 @@ test('operates the real project, product, and edge enrollment workflow', async (
     fullPage: true,
     path: test.info().outputPath('management-workflow.png'),
   });
+  expect(browserErrors).toEqual([]);
+});
+
+test('exposes governed MCP capabilities without direct execution tools', async ({
+  page,
+  request,
+}, testInfo) => {
+  const browserErrors: string[] = [];
+  page.on('pageerror', (error) => browserErrors.push(error.message));
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'AI 集成', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { level: 2, name: 'AI 集成治理', exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText('MCP 在线', { exact: true })).toBeVisible();
+  await expect(page.getByText('Streamable HTTP', { exact: true })).toBeVisible();
+  await expect(page.getByText('只读 + 候选草案', { exact: true })).toBeVisible();
+  await expect(page.getByText('configuration.change_set.draft', { exact: true })).toBeVisible();
+  await expect(page.getByText('device.command.draft', { exact: true })).toBeVisible();
+  await expect(page.getByText('configuration.change_set.apply', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('device.command.dispatch', { exact: true })).toHaveCount(0);
+
+  const statusResponse = await request.get('/api/mcp/status');
+  expect(statusResponse.ok()).toBe(true);
+  const status = await statusResponse.json();
+  expect(status.enabled).toBe(true);
+  expect(status.endpoint).toBe('/mcp');
+  expect(status.controls.executionToolsExposed).toBe(false);
+  expect(status.controls.draftOnlyMutations).toBe(true);
+
+  const initializeResponse = await request.post('/mcp', {
+    headers: {
+      accept: 'application/json, text/event-stream',
+    },
+    data: {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-11-25',
+        capabilities: {},
+        clientInfo: { name: 'console-e2e', version: '1.0.0' },
+      },
+    },
+  });
+  expect(initializeResponse.ok()).toBe(true);
+  const initialize = await initializeResponse.json();
+  expect(initialize.result.protocolVersion).toBe('2025-11-25');
+  expect(initialize.result.serverInfo.name).toBe('velaedge');
+
+  const toolsResponse = await request.post('/mcp', {
+    headers: {
+      accept: 'application/json, text/event-stream',
+    },
+    data: {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/list',
+      params: {},
+    },
+  });
+  expect(toolsResponse.ok()).toBe(true);
+  const toolsPayload = await toolsResponse.json();
+  const toolNames = toolsPayload.result.tools.map((tool: { name: string }) => tool.name);
+  expect(toolNames).toContain('configuration.change_set.draft');
+  expect(toolNames).toContain('device.command.draft');
+  expect(toolNames).not.toContain('configuration.change_set.apply');
+  expect(toolNames).not.toContain('device.command.dispatch');
+
+  await page.getByRole('button', { name: /审批中心/ }).click();
+  await expect(page.getByRole('heading', { level: 3, name: '候选审批' })).toBeVisible();
+  await page.getByRole('button', { name: '调用审计', exact: true }).click();
+  await expect(page.getByRole('heading', { level: 3, name: 'MCP 调用审计' })).toBeVisible();
+  await page.getByRole('button', { name: '能力目录', exact: true }).click();
+  await page.screenshot({
+    fullPage: true,
+    path: testInfo.outputPath('ai-integration-governance.png'),
+  });
+
   expect(browserErrors).toEqual([]);
 });

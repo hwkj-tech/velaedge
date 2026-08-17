@@ -156,6 +156,10 @@ async fn gateway_acknowledges_runtime_hello_and_records_session_identity() {
     let session = gateway.await.expect("gateway task should finish");
     assert_eq!(session.edge_id, "edge-dev");
     assert_eq!(session.runtime_id, "runtime-dev");
+    assert_eq!(
+        session.applied_config_version.as_deref(),
+        Some("2026.06.26-001")
+    );
     assert!(session.peer_addr.ip().is_loopback());
 }
 
@@ -508,6 +512,128 @@ async fn gateway_deploys_latest_config_and_marks_release_applied_from_report() {
         .expect("release should still exist");
     assert_eq!(updated.status, ReleaseStatus::Applied);
     assert_eq!(updated.reported_version.as_deref(), Some("2026.06.27-010"));
+}
+
+#[tokio::test]
+async fn gateway_redeploys_applied_config_when_runtime_lost_local_state() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let gateway_addr = listener.local_addr().expect("listener should expose addr");
+    let mut seeded = CloudControlStore::default();
+    let release = ReleaseService::create_release(
+        &mut seeded,
+        EdgeConfigPackage::new("edge-recover", "v2.2.0-002"),
+    )
+    .expect("release should be valid");
+    ReleaseService::mark_reported(&mut seeded, release.release_id, "v2.2.0-002")
+        .expect("release should be marked applied");
+    let store = Arc::new(Mutex::new(seeded));
+    let gateway_store = store.clone();
+
+    let gateway = tokio::spawn(async move {
+        let (stream, peer_addr) = listener.accept().await.expect("runtime should connect");
+        handle_edgelink_session_with_store(stream, peer_addr, gateway_store)
+            .await
+            .expect("session should restore the Runtime configuration")
+    });
+
+    let mut runtime = TcpStream::connect(gateway_addr)
+        .await
+        .expect("runtime should connect to gateway");
+    let hello = EdgeLinkMessage::hello(
+        "edge-recover",
+        "runtime-recover",
+        "0.1.0",
+        Some("unconfigured".to_string()),
+        Vec::new(),
+    );
+    write_one_message(&mut runtime, &hello).await;
+    assert_ack_for(&mut runtime, &hello).await;
+
+    let deploy = read_one_message(&mut runtime).await;
+    let EdgeLinkPayload::ConfigDeploy(package) = deploy.payload else {
+        panic!("expected config deploy payload");
+    };
+    assert_eq!(package.edge_id, "edge-recover");
+    assert_eq!(package.version, "v2.2.0-002");
+
+    let report = EdgeLinkMessage::config_report(
+        "edge-recover",
+        "runtime-recover",
+        deploy.sequence + 1,
+        "v2.2.0-002",
+        Some("v2.2.0-002".to_string()),
+        true,
+        None,
+    );
+    write_one_message(&mut runtime, &report).await;
+    assert_ack_for(&mut runtime, &report).await;
+    drop(runtime);
+
+    let session = gateway.await.expect("gateway task should finish");
+    assert_eq!(session.config_report_count, 1);
+    assert_eq!(
+        session.session.applied_config_version.as_deref(),
+        Some("unconfigured")
+    );
+
+    let store = store.lock().expect("store mutex should not be poisoned");
+    let release = store
+        .release(release.release_id)
+        .expect("release should remain available");
+    assert_eq!(release.status, ReleaseStatus::Applied);
+    assert_eq!(release.reported_version.as_deref(), Some("v2.2.0-002"));
+}
+
+#[tokio::test]
+async fn gateway_does_not_replace_the_latest_applied_config_with_an_older_release() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let gateway_addr = listener.local_addr().expect("listener should expose addr");
+    let mut seeded = CloudControlStore::default();
+    let old_release = ReleaseService::create_release(
+        &mut seeded,
+        EdgeConfigPackage::new("edge-stable", "v2.2.0-001"),
+    )
+    .expect("old release should be valid");
+    ReleaseService::mark_reported(&mut seeded, old_release.release_id, "v2.2.0-001")
+        .expect("old release should be marked applied");
+    let current_release = ReleaseService::create_release(
+        &mut seeded,
+        EdgeConfigPackage::new("edge-stable", "v2.2.0-002"),
+    )
+    .expect("current release should be valid");
+    ReleaseService::mark_reported(&mut seeded, current_release.release_id, "v2.2.0-002")
+        .expect("current release should be marked applied");
+    let store = Arc::new(Mutex::new(seeded));
+
+    let gateway = tokio::spawn(async move {
+        let (stream, peer_addr) = listener.accept().await.expect("runtime should connect");
+        handle_edgelink_session_with_store(stream, peer_addr, store).await
+    });
+
+    let mut runtime = TcpStream::connect(gateway_addr)
+        .await
+        .expect("runtime should connect to gateway");
+    let hello = EdgeLinkMessage::hello(
+        "edge-stable",
+        "runtime-stable",
+        "0.1.0",
+        Some("v2.2.0-002".to_string()),
+        Vec::new(),
+    );
+    write_one_message(&mut runtime, &hello).await;
+    assert_ack_for(&mut runtime, &hello).await;
+
+    let deploy = timeout(Duration::from_millis(100), read_one_message(&mut runtime)).await;
+    assert!(
+        deploy.is_err(),
+        "an up-to-date Runtime must not receive an older applied release"
+    );
+    drop(runtime);
+    gateway.abort();
 }
 
 #[tokio::test]

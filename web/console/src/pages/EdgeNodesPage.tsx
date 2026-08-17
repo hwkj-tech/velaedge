@@ -235,9 +235,10 @@ export function EdgeNodesPage({
                           className="secondary-button compact"
                           onClick={() => {
                             setSaveState('idle');
+                            const configured = mqttUplink ?? defaultMqttUplink(edge.edgeId);
                             setMqttDialog({
                               edgeId: edge.edgeId,
-                              form: mqttUplink ?? defaultMqttUplink(edge.edgeId),
+                              form: { ...configured, clientId: edge.edgeId },
                             });
                           }}
                           type="button"
@@ -466,8 +467,12 @@ export function EdgeNodesPage({
               event.preventDefault();
               setSaveState('saving');
               try {
-                const saved = await onSaveMqttUplink?.(mqttDialog.edgeId, mqttDialog.form);
-                setMqttDialog(saved ? { ...mqttDialog, form: saved } : mqttDialog);
+                const request = { ...mqttDialog.form, clientId: mqttDialog.edgeId };
+                const saved = await onSaveMqttUplink?.(mqttDialog.edgeId, request);
+                setMqttDialog({
+                  ...mqttDialog,
+                  form: { ...(saved ?? request), clientId: mqttDialog.edgeId },
+                });
                 setSaveState('saved');
               } catch (error) {
                 setSaveState('error');
@@ -486,6 +491,7 @@ export function EdgeNodesPage({
               </button>
             </div>
             <MqttConnectionForm
+              clientIdLocked
               form={mqttDialog.form}
               onChange={(form) => setMqttDialog({ ...mqttDialog, form })}
             />
@@ -627,7 +633,7 @@ function defaultMqttUplink(edgeId: string): MqttUplinkResponse {
   return {
     batchSize: 100,
     broker: '',
-    clientId: `${edgeId}-runtime`,
+    clientId: edgeId,
     cleanSession: true,
     cleanStart: true,
     flushIntervalMs: 1000,

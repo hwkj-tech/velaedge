@@ -2,7 +2,10 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  applyAgentChangeSet,
   bindEdgeProduct,
+  confirmAgentChangeSet,
+  confirmAgentCommandCandidate,
   createAgentProposal,
   createAlgorithmDraft,
   createCollectionTaskDraft,
@@ -13,6 +16,9 @@ import {
   createProject,
   createPointMappingDraft,
   fetchAlgorithms,
+  fetchAgentChangeSets,
+  fetchAgentCommandCandidates,
+  fetchAgentMetrics,
   fetchAgentProposals,
   fetchAgentProviderStatus,
   fetchAuditRecords,
@@ -37,20 +43,26 @@ import {
   fetchRuntimeStatus,
   fetchSummary,
   fetchMqttUplink,
+  fetchMcpStatus,
   fetchDiscoverySuggestions,
   generateEdgeAccessToken,
   generateAgentSuggestions,
   publishLatestRelease,
+  publishProductVersion,
+  rejectAgentChangeSet,
+  rejectAgentCommandCandidate,
   reviewAgentProposal,
   runDiscovery,
   runAgentSafetyCheck,
   runConfigValidation,
   runReleaseDiff,
+  simulateAgentChangeSet,
   createEdgeProtocolConnection,
   deleteEdgeNode,
   deleteEdgeDataConfig,
   deleteProduct,
   deleteProject,
+  dispatchAgentCommandCandidate,
   saveEdgeAlgorithm,
   saveEdgeCollectionTask,
   saveEdgeDataConfig,
@@ -62,6 +74,8 @@ import {
   saveProject,
   sendAgentChat,
   setApiToken,
+  validateAgentChangeSet,
+  validateAgentCommandCandidate,
 } from './api/client';
 import type {
   AlgorithmResponse,
@@ -93,7 +107,10 @@ import {
 } from './App';
 
 vi.mock('./api/client', () => ({
+  applyAgentChangeSet: vi.fn(),
   bindEdgeProduct: vi.fn(),
+  confirmAgentChangeSet: vi.fn(),
+  confirmAgentCommandCandidate: vi.fn(),
   createAgentProposal: vi.fn(),
   createAlgorithmDraft: vi.fn(),
   createCollectionTaskDraft: vi.fn(),
@@ -105,6 +122,9 @@ vi.mock('./api/client', () => ({
   createDeviceModelDraft: vi.fn(),
   createPointMappingDraft: vi.fn(),
   fetchAlgorithms: vi.fn(),
+  fetchAgentChangeSets: vi.fn(),
+  fetchAgentCommandCandidates: vi.fn(),
+  fetchAgentMetrics: vi.fn(),
   fetchAgentProposals: vi.fn(),
   fetchAgentProviderStatus: vi.fn(),
   fetchAuditRecords: vi.fn(),
@@ -129,20 +149,26 @@ vi.mock('./api/client', () => ({
   fetchRuntimeStatus: vi.fn(),
   fetchSummary: vi.fn(),
   fetchMqttUplink: vi.fn(),
+  fetchMcpStatus: vi.fn(),
   fetchDiscoverySuggestions: vi.fn(),
   generateEdgeAccessToken: vi.fn(),
   generateAgentSuggestions: vi.fn(),
   publishLatestRelease: vi.fn(),
+  publishProductVersion: vi.fn(),
+  rejectAgentChangeSet: vi.fn(),
+  rejectAgentCommandCandidate: vi.fn(),
   reviewAgentProposal: vi.fn(),
   runDiscovery: vi.fn(),
   runAgentSafetyCheck: vi.fn(),
   runConfigValidation: vi.fn(),
   runReleaseDiff: vi.fn(),
+  simulateAgentChangeSet: vi.fn(),
   createEdgeProtocolConnection: vi.fn(),
   deleteEdgeNode: vi.fn(),
   deleteEdgeDataConfig: vi.fn(),
   deleteProduct: vi.fn(),
   deleteProject: vi.fn(),
+  dispatchAgentCommandCandidate: vi.fn(),
   saveEdgeAlgorithm: vi.fn(),
   saveEdgeCollectionTask: vi.fn(),
   saveEdgeDataConfig: vi.fn(),
@@ -154,6 +180,8 @@ vi.mock('./api/client', () => ({
   saveProject: vi.fn(),
   sendAgentChat: vi.fn(),
   setApiToken: vi.fn(),
+  validateAgentChangeSet: vi.fn(),
+  validateAgentCommandCandidate: vi.fn(),
 }));
 
 const basePoint: PointMappingResponse = {
@@ -410,6 +438,14 @@ const auditRecords: AuditRecordResponse[] = [
     target: 'release-1',
     result: '成功',
   },
+  {
+    createdAt: '2026-06-26T10:01:00Z',
+    time: '10:01:00',
+    actor: 'external-agent',
+    action: 'invoke_agent_tool',
+    target: 'mcp-tool:runtime.metrics',
+    result: '成功',
+  },
 ];
 
 const runtimeStatus: RuntimeStatusResponse = {
@@ -586,13 +622,81 @@ describe('App cloud console write actions', () => {
     vi.mocked(fetchReleaseList).mockResolvedValue(initialReleaseList);
     vi.mocked(fetchRuntimeStatus).mockResolvedValue(runtimeStatus);
     vi.mocked(fetchAuditRecords).mockResolvedValue(auditRecords);
+    vi.mocked(fetchMcpStatus).mockResolvedValue({
+      authentication: {
+        principal: 'local-development',
+        required: false,
+        role: 'admin',
+        scheme: 'local_development',
+      },
+      controls: {
+        allowedOriginCount: 4,
+        auditEnabled: true,
+        draftOnlyMutations: true,
+        executionToolsExposed: false,
+        originValidation: true,
+        rateLimitPerMinute: 120,
+      },
+      enabled: true,
+      endpoint: '/mcp',
+      protocolVersion: '2025-11-25',
+      scope: {
+        edgeHeader: 'x-velaedge-edge-id',
+        edges: [],
+        projectHeader: 'x-velaedge-project-id',
+        projects: [],
+      },
+      serverVersion: '0.1.0',
+      tools: [
+        {
+          description: '读取 Runtime 实时运行指标',
+          effect: 'read_only',
+          humanReviewRequired: false,
+          name: 'runtime.metrics',
+          readOnly: true,
+          risk: 'low',
+        },
+        {
+          description: '创建待审批配置变更集',
+          effect: 'draft_change_set',
+          humanReviewRequired: true,
+          name: 'configuration.change_set.draft',
+          readOnly: false,
+          risk: 'medium',
+        },
+      ],
+      transport: 'streamable_http',
+    });
     vi.mocked(fetchMqttUplink).mockResolvedValue(mqttUplink);
     vi.mocked(fetchDiscoverySuggestions).mockResolvedValue(discoverySuggestions);
+    vi.mocked(fetchAgentChangeSets).mockResolvedValue([]);
+    vi.mocked(fetchAgentCommandCandidates).mockResolvedValue([]);
+    vi.mocked(fetchAgentMetrics).mockResolvedValue({
+      averageLatencyMs: 0,
+      completionTokens: 0,
+      deterministicCount: 0,
+      estimatedCostMicrousd: 0,
+      failedRequestCount: 0,
+      fallbackCount: 0,
+      lastLatencyMs: 0,
+      promptTokens: 0,
+      providerAttemptCount: 0,
+      providerSuccessCount: 0,
+      requestCount: 0,
+      securityBlockCount: 0,
+      securityFilterCount: 0,
+      toolCallCount: 0,
+      toolFailureCount: 0,
+      totalLatencyMs: 0,
+      totalTokens: 0,
+    });
     vi.mocked(fetchAgentProposals).mockResolvedValue([]);
     vi.mocked(fetchAgentProviderStatus).mockResolvedValue({
       configured: false,
       mode: 'deterministic',
       model: 'edgeops-local-analysis',
+      streaming: false,
+      toolCalling: true,
     });
     vi.mocked(sendAgentChat).mockResolvedValue({
       citations: [],
@@ -640,16 +744,30 @@ describe('App cloud console write actions', () => {
       ...request,
       createdAt: '2026-06-26T00:00:00Z',
       productId,
-      status: 'draft',
+      status: 'published',
     }));
     vi.mocked(saveProductVersion).mockImplementation(
       async (productId, _version, request) => ({
         ...request,
         createdAt: '2026-06-26T00:00:00Z',
         productId,
-        status: 'draft',
+        status: 'published',
       }),
     );
+    vi.mocked(publishProductVersion).mockImplementation(async (productId, version) => {
+      const createCalls = vi.mocked(createProductVersion).mock.calls;
+      const saveCalls = vi.mocked(saveProductVersion).mock.calls;
+      const request = saveCalls[saveCalls.length - 1]?.[2]
+        ?? createCalls[createCalls.length - 1]?.[1];
+      if (!request) throw new Error('missing product version request');
+      return {
+        ...request,
+        createdAt: '2026-06-26T00:00:00Z',
+        productId,
+        status: 'published',
+        version,
+      };
+    });
     vi.mocked(createProject).mockImplementation(async (request) => ({
       ...request,
       createdAt: '2026-06-26T00:00:00Z',
@@ -785,7 +903,8 @@ describe('App cloud console write actions', () => {
 
     render(<App />);
 
-    expect(await screen.findByText('项目: 暂无项目')).toBeInTheDocument();
+    await waitFor(() => expect(fetchProjects).toHaveBeenCalledOnce());
+    expect(screen.queryByText('项目: 暂无项目')).not.toBeInTheDocument();
     expect(fetchEdgeProtocolConnections).not.toHaveBeenCalled();
     expect(fetchEdgePointMappings).not.toHaveBeenCalled();
     expect(fetchEdgeCollectionTasks).not.toHaveBeenCalled();
@@ -1446,6 +1565,12 @@ describe('App cloud console write actions', () => {
   });
 
   it('configures product-bound points and collection orchestration in the product dialog', async () => {
+    const boundMeterEdge = {
+      ...edgeNodes[0],
+      productId: 'modbus-rtu-meter-basic',
+    };
+    vi.mocked(fetchEdgeNodes).mockResolvedValue([boundMeterEdge]);
+    vi.mocked(bindEdgeProduct).mockResolvedValue(boundMeterEdge);
     render(<App />);
 
     fireEvent.click(screen.getByRole('button', { name: /产品管理/ }));
@@ -1458,6 +1583,14 @@ describe('App cloud console write actions', () => {
     const workspace = screen.getByRole('dialog', { name: /协议连接工作区/ });
     fireEvent.click(within(workspace).getByRole('tab', { name: /绑定点位/ }));
     expect(within(workspace).getByText(/仅展示与当前协议兼容的点位集/)).toBeInTheDocument();
+    expect(workspace.querySelector('.point-set-detail-row')).not.toBeInTheDocument();
+    fireEvent.click(within(workspace).getByRole('button', { name: '查看参数' }));
+    const pointSetParametersDialog = screen.getByRole('dialog', { name: /点位集参数/ });
+    expect(within(pointSetParametersDialog).getByText('设备连接')).toBeInTheDocument();
+    expect(within(pointSetParametersDialog).getByText('协议地址')).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: /点位集参数/ })).not.toBeInTheDocument();
+    expect(workspace).toBeInTheDocument();
     fireEvent.click(within(workspace).getByRole('button', { name: '绑定' }));
     expect(within(dialog).getByText('有未保存修改')).toBeInTheDocument();
 
@@ -1483,6 +1616,8 @@ describe('App cloud console write actions', () => {
     expect(within(inspector).queryByRole('heading', { name: '处理方式' })).not.toBeInTheDocument();
     expect(within(inspector).queryByLabelText('流水线 ID')).not.toBeInTheDocument();
     expect(within(inspector).queryByLabelText('采集周期(ms)')).not.toBeInTheDocument();
+    fireEvent.click(within(inspector).getByRole('checkbox', { name: 'first' }));
+    fireEvent.click(within(inspector).getByRole('checkbox', { name: 'last' }));
     expect(within(dialog).getByText('流程设置')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: /流程节点 voltage_a/ }));
     expect(within(dialog).queryByLabelText('产品 JSON 字段 meter_voltage_a')).not.toBeInTheDocument();
@@ -1579,6 +1714,13 @@ describe('App cloud console write actions', () => {
     expect(savedDataConfig.visual_graph.nodes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          kind: 'Algorithm',
+          params: expect.objectContaining({
+            metrics: ['avg', 'min', 'max', 'sum', 'count', 'first', 'last'],
+          }),
+          ref_id: expect.stringContaining('window_aggregate'),
+        }),
+        expect.objectContaining({
           kind: 'Mqtt',
           ref_id: 'factory/{edge_id}/pump/status',
         }),
@@ -1600,6 +1742,28 @@ describe('App cloud console write actions', () => {
         expect.objectContaining({ from_port: 'output', to_port: 'payload' }),
       ]),
     );
+    const savedAlgorithms = savedRequest.algorithms as Array<{
+      algorithmId: string;
+      dsl: { steps: Array<{ functions?: Array<{ function: string; output: string }>; type: string }> };
+    }>;
+    const windowAlgorithm = savedAlgorithms.find(
+      (algorithm) => algorithm.algorithmId === 'window-aggregate',
+    ) ?? savedAlgorithms.find(
+      (algorithm) => algorithm.dsl.steps.some((step) => step.type === 'windowAggregate'),
+    );
+    expect(windowAlgorithm?.dsl.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          functions: ['avg', 'min', 'max', 'sum', 'count', 'first', 'last'].map(
+            (name) => ({ function: name, output: name }),
+          ),
+          type: 'windowAggregate',
+        }),
+      ]),
+    );
+    expect(publishProductVersion).not.toHaveBeenCalled();
+    expect(bindEdgeProduct).not.toHaveBeenCalled();
+    expect(publishLatestRelease).not.toHaveBeenCalled();
     expect(within(dialog).getByRole('status')).toHaveTextContent(
       /已保存并触发自动同步|已保存，配置待完善/,
     );
@@ -1800,35 +1964,28 @@ describe('App cloud console write actions', () => {
     expect(publishLatestRelease).not.toHaveBeenCalled();
   });
 
-  it('runs agent actions through API clients without exposing model/discovery global navigation', async () => {
+  it('exposes MCP capabilities, approvals, and call audit without a built-in chat assistant', async () => {
     render(<App />);
 
     expect(screen.queryByRole('button', { name: /设备模型/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /点位探测/ })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Agent 助手/ }));
-    expect(await screen.findByText('云边配置助手')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '安全策略检查' }));
-    await waitFor(() => {
-      expect(runAgentSafetyCheck).toHaveBeenCalledOnce();
-    });
-    expect(await screen.findByText('安全策略结果')).toBeInTheDocument();
-    expect(screen.getByText(/安全策略检查 已通过/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /AI 集成/ }));
 
-    fireEvent.click(screen.getByRole('button', { name: '生成候选建议' }));
-    await waitFor(() => {
-      expect(generateAgentSuggestions).toHaveBeenCalledOnce();
-    });
-    expect(screen.getAllByText('候选建议').length).toBeGreaterThan(0);
-    expect(screen.getByText('已生成 1 条候选建议。建议只进入候选队列，不会自动修改配置。')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'AI 集成治理' })).toBeInTheDocument();
+    expect(await screen.findByText('/mcp')).toBeInTheDocument();
+    expect(screen.getByText('MCP 在线')).toBeInTheDocument();
+    expect(screen.getByText('runtime.metrics')).toBeInTheDocument();
+    expect(screen.getByText('configuration.change_set.draft')).toBeInTheDocument();
+    expect(screen.queryByLabelText('输入 Agent 问题')).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('输入 Agent 问题'), {
-      target: { value: '分析 edge-dev 状态' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: '发送' }));
-    await waitFor(() => expect(sendAgentChat).toHaveBeenCalledOnce());
-    expect(await screen.findByText('本地分析')).toBeInTheDocument();
-    expect(screen.getByText('当前边端健康，建议先校验配置差异。')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /审批中心/ }));
+    expect(await screen.findByText('暂无候选审批')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /调用审计/ }));
+    expect(await screen.findByText('mcp-tool:runtime.metrics')).toBeInTheDocument();
+    expect(fetchMcpStatus).toHaveBeenCalledOnce();
+    expect(sendAgentChat).not.toHaveBeenCalled();
   });
 
   it('loads runtime status into the runtime monitoring page', async () => {

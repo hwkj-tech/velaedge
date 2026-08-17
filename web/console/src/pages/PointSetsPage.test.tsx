@@ -195,6 +195,38 @@ describe('PointSetsPage', () => {
     });
   });
 
+  it('persists an ordered numeric read-processing pipeline on a point', async () => {
+    const onCreate = vi.fn().mockResolvedValue(pointSet);
+    renderPage({ onCreate, pointSets: [] });
+
+    fireEvent.click(screen.getByRole('button', { name: '新建点位集' }));
+    const dialog = screen.getByRole('dialog', { name: '新建点位集' });
+    fireEvent.change(within(dialog).getByLabelText('点位集 ID'), { target: { value: 'scaled-meter-points' } });
+    fireEvent.change(within(dialog).getByLabelText('点位集名称'), { target: { value: '换算后仪表点位' } });
+    fireEvent.change(within(dialog).getByLabelText('点位 1 Point ID'), { target: { value: 'pressure' } });
+    fireEvent.change(within(dialog).getByLabelText('点位 1 语义 ID'), { target: { value: 'pump.pressure' } });
+    fireEvent.change(within(dialog).getByLabelText('点位 1 地址值'), { target: { value: '40001' } });
+
+    const operation = within(dialog).getByLabelText('点位 1 添加读取处理');
+    fireEvent.change(operation, { target: { value: 'linear' } });
+    fireEvent.change(within(dialog).getByLabelText('点位 1 处理 1 系数'), { target: { value: '0.1' } });
+    fireEvent.change(within(dialog).getByLabelText('点位 1 处理 1 偏移'), { target: { value: '-5' } });
+    fireEvent.change(operation, { target: { value: 'clamp' } });
+    fireEvent.change(within(dialog).getByLabelText('点位 1 处理 2 最小值'), { target: { value: '0' } });
+    fireEvent.change(within(dialog).getByLabelText('点位 1 处理 2 最大值'), { target: { value: '16' } });
+    fireEvent.change(operation, { target: { value: 'round' } });
+    fireEvent.change(within(dialog).getByLabelText('点位 1 处理 3 小数位'), { target: { value: '2' } });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0][0].points[0].readTransforms).toEqual([
+      { kind: 'linear', factor: 0.1, offset: -5 },
+      { kind: 'clamp', min: 0, max: 16 },
+      { kind: 'round', decimals: 2 },
+    ]);
+  });
+
   it('models a register bit as a read-only Boolean point', async () => {
     const onCreate = vi.fn().mockResolvedValue(pointSet);
     renderPage({ onCreate, pointSets: [] });

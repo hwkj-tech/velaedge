@@ -1373,6 +1373,48 @@ async fn dropping_mqtt_publisher_closes_its_background_connection() {
 }
 
 #[tokio::test]
+async fn mqtt_publisher_reports_disconnected_after_broker_closes_session() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let broker = format!("mqtt://{}", listener.local_addr().unwrap());
+    let (connack_tx, connack_rx) = oneshot::channel();
+    let (disconnect_tx, disconnect_rx) = oneshot::channel();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let (connect_header, _) = read_mqtt_packet(&mut stream).await;
+        assert_eq!(connect_header >> 4, 1);
+        stream.write_all(&[0x20, 0x02, 0x00, 0x00]).await.unwrap();
+        connack_tx.send(()).ok();
+        disconnect_rx.await.ok();
+        drop(stream);
+        drop(listener);
+    });
+    let uplink = MqttUplinkConfig::velamq("velamq-main", broker, "edge-disconnect-test");
+    let publisher = RumqttcMqttPublisher::connect_from_uplink(&uplink).unwrap();
+
+    tokio::time::timeout(Duration::from_secs(2), connack_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !publisher.is_connected() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("publisher should report the accepted MQTT session");
+
+    disconnect_tx.send(()).ok();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while publisher.is_connected() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("publisher should clear connected state after broker disconnect");
+    assert!(!publisher.runtime_status().connected);
+}
+
+#[tokio::test]
 async fn broker_ack_timeout_keeps_message_in_rocksdb_outbox() {
     let (broker, observed) = spawn_test_mqtt_broker(false).await;
     let uplink = MqttUplinkConfig::velamq("velamq-main", broker, "edge-timeout").with_qos(1);

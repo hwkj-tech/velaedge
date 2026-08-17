@@ -27,9 +27,11 @@ const emptyLastWill: MqttLastWill = {
 };
 
 export function MqttConnectionForm({
+  clientIdLocked = false,
   form,
   onChange,
 }: {
+  clientIdLocked?: boolean;
   form: MqttUplinkResponse;
   onChange: (form: MqttUplinkResponse) => void;
 }) {
@@ -95,7 +97,12 @@ export function MqttConnectionForm({
           <FormSectionBlock eyebrow="CONNECTION" title="连接">
             <div className="mqtt-field-grid">
               <Field label="连接名称" value={form.sinkId} onChange={(sinkId) => patch({ sinkId })} />
-              <Field label="Client ID" value={form.clientId} onChange={(clientId) => patch({ clientId })} />
+              <Field
+                label={clientIdLocked ? 'Client ID（Edge ID）' : 'Client ID'}
+                readOnly={clientIdLocked}
+                value={form.clientId}
+                onChange={(clientId) => patch({ clientId })}
+              />
               <label className="editor-control">
                 <span>传输安全</span>
                 <select
@@ -400,6 +407,7 @@ function Field({
   min,
   onChange,
   placeholder,
+  readOnly = false,
   type = 'text',
   value,
 }: {
@@ -407,6 +415,7 @@ function Field({
   min?: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  readOnly?: boolean;
   type?: string;
   value: string;
 }) {
@@ -417,6 +426,7 @@ function Field({
         aria-label={label}
         min={min}
         placeholder={placeholder}
+        readOnly={readOnly}
         type={type}
         value={value}
         onChange={(event) => onChange(event.target.value)}

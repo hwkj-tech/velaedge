@@ -101,41 +101,34 @@ When there is no edge yet, the console does not query edge-scoped endpoints or i
   version convergence, and apply history.
 - 审计日志: immutable records for catalog changes, token operations, releases, reviews, and apply
   results.
-- Agent 助手: scoped chat, governed knowledge, explainable suggestions, and approval-only proposals.
+- AI 集成: MCP endpoint 状态、能力目录、配置/指令审批中心和调用审计。
 
-## Agent Boundary
+## MCP And Agent Boundary
 
-Agent capabilities are intentionally advisory:
+Agent capabilities are exposed through `POST /mcp` and remain intentionally advisory:
 
-- It may draft point mappings, explain failures, summarize release risk, or suggest rollout plans.
-- It must not publish configurations without user approval.
-- It must not directly write protocol registers or execute physical device commands.
-- Any command candidate must pass cloud governance and edge-side policy validation.
+- Viewer tools read scoped, sanitized projects, products, protocols, point sets, graphs, Runtime,
+  MQTT, audit, and knowledge.
+- Operator tools may persist a configuration change set or device command candidate for review.
+- MCP never exposes configuration apply, product publish, command dispatch, register write, shell,
+  or arbitrary database tools.
+- Any confirmed command still passes Cloud validation and Runtime local safety policy.
 
-The chat UI uses `GET /api/agent/provider` to show whether the backend is running in deterministic
-local-analysis mode or through a configured OpenAI-compatible model gateway. `POST /api/agent/chat`
-accepts the operator question plus optional project and edge scope. The backend validates that scope
-and supplies only a bounded operational summary; credentials, certificates, secret references, raw
-protocol frames, and MQTT passwords are never included. Configure the gateway with
-`EDGEOPS_AGENT_ENDPOINT`, `EDGEOPS_AGENT_MODEL`, optional `EDGEOPS_AGENT_API_KEY`, and optional
-`EDGEOPS_AGENT_TIMEOUT_MS`. These values stay server-side and are not returned to the browser.
+The AI 集成 page reads `GET /api/mcp/status` to show the effective transport, protocol, principal,
+role, service scope, and role-filtered tool catalog. It lists persisted change sets and command
+candidates in one approval center, opens review details in a modal, and uses the real validation,
+simulation, confirmation, rejection, apply, and dispatch APIs. Destructive final actions remain
+admin-gated and are never triggered by page load or MCP output.
 
-Model calls are non-streaming and failure is explicit: provider errors are returned to the console
-instead of silently pretending that a model answered. When no provider is configured, the backend
-uses deterministic context-based analysis and labels the response accordingly.
+MCP clients authenticate with the same fail-closed Bearer RBAC boundary as the management API and
+may be constrained further by Origin, project and edge allowlists. Every call records tool, actor,
+scope, and result in SQLite. The console renders these records under 调用审计. See
+`docs/mcp-integration.md` for headers, environment settings, tool contracts, and client examples.
 
-The Agent page includes a project scope selector and a managed knowledge list. Operators can add,
-edit, disable, or delete knowledge through modal forms backed by `/api/agent/knowledge`. Global
-documents are available to every project; project documents are isolated to their owning project.
-Answers render the exact retrieved title, source identifier, and bounded excerpt as citations.
-Disabled documents and documents from another project do not enter the model context. All knowledge
-mutations create audit records.
-
-The conversation toolbar creates a clean session, restores prior sessions in the selected project,
-continues a session by sending its `conversationId`, and uses a two-step delete action. Sessions are
-stored in SQLite, scoped to the authenticated console principal, and restored after cloud restart.
-Switching projects resets the active session so messages cannot be accidentally continued under a
-different project scope.
+The existing model-provider, conversation, knowledge, and proposal endpoints remain available only
+as a compatibility API for older integrations. They no longer own a primary navigation entry.
+Knowledge mutations and legacy conversations retain their existing project isolation and audit
+rules.
 
 The management API exposes a fail-closed Bearer-token RBAC layer and `/api/auth/me`. In `required`
 mode, viewer credentials are read-only, operators may author and publish, and only admins may delete

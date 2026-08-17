@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Edit3, Plus, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Edit3, Plus, Trash2, X } from 'lucide-react';
 
 import type {
   BacnetIpCatalogResponse,
   Dlt645DataIdentifierTemplateResponse,
   PointSetPointResponse,
+  PointReadTransform,
   PointSetResponse,
   SavePointSetRequest,
   RuntimeProtocolDescriptor,
@@ -290,7 +291,7 @@ export function PointSetsPage({
               <div className="point-set-editor-header">
                 <div>
                   <h4>点位明细</h4>
-                  <small>每个点位可独立设置地址、类型、读写权限、单位和采集周期。</small>
+                  <small>配置采集地址、解码类型、读写权限、周期，以及解码后的数值处理。</small>
                 </div>
                 <button
                   className="secondary-button compact"
@@ -304,7 +305,7 @@ export function PointSetsPage({
               {editor.protocol !== 'CustomSerial' ? (
                 <div className="point-set-row point-set-row-header" aria-hidden="true">
                   <span>Point ID</span><span>语义 ID</span><span>地址类型</span><span>地址值</span>
-                  <span>数据类型</span><span>读写权限</span><span>周期(ms)</span><span>单位</span><span />
+                  <span>数据类型</span><span>读写权限</span><span>周期(ms)</span><span />
                 </div>
               ) : null}
               <div className="point-set-rows">
@@ -460,6 +461,7 @@ function PointRow({
           onChange({
             ...point,
             valueType,
+            readTransforms: isNumericPointType(valueType) ? point.readTransforms : [],
             opcUa: protocol === 'OpcUa'
               ? { writeDataType: defaultOpcUaWriteDataType(valueType) }
               : point.opcUa,
@@ -516,7 +518,6 @@ function PointRow({
           <option disabled={isProtocolReadOnlyAddress(point.address.kind) || siemensS7ReadOnly || modbus.bitIndex !== undefined || (showBacnetOptions && !bacnetWritable) || ((protocol === 'Iec101' || protocol === 'Iec104') && point.valueType === 'string')} value="write_only">只写</option>
         </select>
         <input aria-label={`点位 ${index + 1} 采集周期(ms)`} min="100" step="100" type="number" value={point.intervalMs} onChange={(event) => onChange({ ...point, intervalMs: Number(event.target.value) })} />
-        <input aria-label={`点位 ${index + 1} 单位`} value={point.unit ?? ''} onChange={(event) => onChange({ ...point, unit: event.target.value || null })} />
         <button aria-label={`移除点位 ${index + 1}`} className="danger-button compact" disabled={!removable} onClick={onRemove} type="button"><Trash2 aria-hidden="true" size={14} /></button>
       </div>
       {showModbusOptions ? (
@@ -693,8 +694,93 @@ function PointRow({
           point={point}
         />
       ) : null}
+      <PointReadProcessing index={index} onChange={onChange} point={point} />
     </section>
   );
+}
+
+function PointReadProcessing({
+  index,
+  onChange,
+  point,
+}: {
+  index: number;
+  onChange: (point: PointSetPointResponse) => void;
+  point: PointSetPointResponse;
+}) {
+  const transforms = point.readTransforms ?? [];
+  const update = (next: PointReadTransform[]) => onChange({ ...point, readTransforms: next });
+  return (
+    <div aria-label={`点位 ${index + 1} 读取处理`} className="point-read-processing">
+      <div className="point-read-processing-head">
+        <div>
+          <strong>读取处理</strong>
+          <span>{transforms.length > 0 ? transformPipelineSummary(transforms) : '协议解码后直接输出'}</span>
+        </div>
+        {isNumericPointType(point.valueType) ? (
+          <select
+            aria-label={`点位 ${index + 1} 添加读取处理`}
+            onChange={(event) => {
+              if (!event.target.value) return;
+              update([...transforms, defaultPointTransform(event.target.value)]);
+              event.target.value = '';
+            }}
+            value=""
+          >
+            <option value="">+ 添加处理</option>
+            {pointTransformOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        ) : <span className="point-read-processing-note">仅数值点支持</span>}
+      </div>
+      {transforms.map((transform, transformIndex) => (
+        <div className="point-transform-row" key={`${transform.kind}-${transformIndex}`}>
+          <span className="point-transform-order">{transformIndex + 1}</span>
+          <strong>{pointTransformLabel(transform.kind)}</strong>
+          <PointTransformFields
+            index={index}
+            onChange={(next) => update(transforms.map((item, itemIndex) => itemIndex === transformIndex ? next : item))}
+            transform={transform}
+            transformIndex={transformIndex}
+          />
+          <div className="point-transform-actions">
+            <button aria-label={`上移读取处理 ${transformIndex + 1}`} className="icon-button" disabled={transformIndex === 0} onClick={() => update(moveItem(transforms, transformIndex, transformIndex - 1))} type="button"><ArrowUp aria-hidden="true" size={14} /></button>
+            <button aria-label={`下移读取处理 ${transformIndex + 1}`} className="icon-button" disabled={transformIndex === transforms.length - 1} onClick={() => update(moveItem(transforms, transformIndex, transformIndex + 1))} type="button"><ArrowDown aria-hidden="true" size={14} /></button>
+            <button aria-label={`删除读取处理 ${transformIndex + 1}`} className="icon-button danger" onClick={() => update(transforms.filter((_, itemIndex) => itemIndex !== transformIndex))} type="button"><Trash2 aria-hidden="true" size={14} /></button>
+          </div>
+        </div>
+      ))}
+      <details className="point-optional-metadata">
+        <summary>
+          <span>可选元数据</span>
+          <small>{point.unit ? `工程单位：${point.unit}` : '不影响采集与数值计算'}</small>
+        </summary>
+        <label className="point-unit-field">
+          <span>工程单位</span>
+          <input aria-label={`点位 ${index + 1} 单位`} placeholder="如 MPa、°C、rpm" value={point.unit ?? ''} onChange={(event) => onChange({ ...point, unit: event.target.value || null })} />
+        </label>
+      </details>
+    </div>
+  );
+}
+
+function PointTransformFields({
+  index,
+  onChange,
+  transform,
+  transformIndex,
+}: {
+  index: number;
+  onChange: (transform: PointReadTransform) => void;
+  transform: PointReadTransform;
+  transformIndex: number;
+}) {
+  const label = `点位 ${index + 1} 处理 ${transformIndex + 1}`;
+  if (transform.kind === 'linear') return <><label><span>系数</span><input aria-label={`${label} 系数`} step="any" type="number" value={transform.factor} onChange={(event) => onChange({ ...transform, factor: Number(event.target.value) })} /></label><label><span>偏移</span><input aria-label={`${label} 偏移`} step="any" type="number" value={transform.offset} onChange={(event) => onChange({ ...transform, offset: Number(event.target.value) })} /></label></>;
+  if (transform.kind === 'clamp') return <><label><span>最小值</span><input aria-label={`${label} 最小值`} step="any" type="number" value={transform.min} onChange={(event) => onChange({ ...transform, min: Number(event.target.value) })} /></label><label><span>最大值</span><input aria-label={`${label} 最大值`} step="any" type="number" value={transform.max} onChange={(event) => onChange({ ...transform, max: Number(event.target.value) })} /></label></>;
+  if (transform.kind === 'round') return <label><span>小数位</span><input aria-label={`${label} 小数位`} max="12" min="0" type="number" value={transform.decimals} onChange={(event) => onChange({ ...transform, decimals: Number(event.target.value) })} /></label>;
+  if (transform.kind === 'power') return <label><span>指数</span><input aria-label={`${label} 指数`} step="any" type="number" value={transform.exponent} onChange={(event) => onChange({ ...transform, exponent: Number(event.target.value) })} /></label>;
+  if (transform.kind === 'map_range') return <><label><span>输入范围</span><span className="paired-inputs"><input aria-label={`${label} 输入最小值`} step="any" type="number" value={transform.inputMin} onChange={(event) => onChange({ ...transform, inputMin: Number(event.target.value) })} /><input aria-label={`${label} 输入最大值`} step="any" type="number" value={transform.inputMax} onChange={(event) => onChange({ ...transform, inputMax: Number(event.target.value) })} /></span></label><label><span>输出范围</span><span className="paired-inputs"><input aria-label={`${label} 输出最小值`} step="any" type="number" value={transform.outputMin} onChange={(event) => onChange({ ...transform, outputMin: Number(event.target.value) })} /><input aria-label={`${label} 输出最大值`} step="any" type="number" value={transform.outputMax} onChange={(event) => onChange({ ...transform, outputMax: Number(event.target.value) })} /></span></label><label className="checkbox-field"><input aria-label={`${label} 限制输入范围`} checked={transform.clamp} onChange={(event) => onChange({ ...transform, clamp: event.target.checked })} type="checkbox" /><span>限制输入</span></label></>;
+  return <span className="point-transform-static">无需参数</span>;
 }
 
 function SiemensS7PointOptions({
@@ -1223,7 +1309,6 @@ function CustomSerialPointRow({
         <label><span>语义 ID</span><input aria-label={`点位 ${index + 1} 语义 ID`} value={point.semanticId} onChange={(event) => onChange({ ...point, semanticId: event.target.value })} /></label>
         <label><span>数据类型</span><select aria-label={`点位 ${index + 1} 数据类型`} value={point.valueType} onChange={(event) => onChange({ ...point, valueType: event.target.value })}><option value="float32">float32</option><option value="float64">float64</option><option value="int32">int32</option><option value="int64">int64</option><option value="bool">bool</option><option value="string">string</option></select></label>
         <label><span>周期(ms)</span><input aria-label={`点位 ${index + 1} 采集周期(ms)`} min="100" step="100" type="number" value={point.intervalMs} onChange={(event) => onChange({ ...point, intervalMs: Number(event.target.value) })} /></label>
-        <label><span>单位</span><input aria-label={`点位 ${index + 1} 单位`} value={point.unit ?? ''} onChange={(event) => onChange({ ...point, unit: event.target.value || null })} /></label>
         <button aria-label={`移除点位 ${index + 1}`} className="danger-button compact" disabled={!removable} onClick={onRemove} type="button"><Trash2 aria-hidden="true" size={14} /></button>
       </div>
       <div className="custom-serial-frame-grid">
@@ -1239,6 +1324,7 @@ function CustomSerialPointRow({
         <label><span>缩放</span><input aria-label={`点位 ${index + 1} 缩放`} step="any" type="number" value={frame.scale} onChange={(event) => updateFrame({ scale: Number(event.target.value) })} /></label>
         <label><span>偏置</span><input aria-label={`点位 ${index + 1} 偏置`} step="any" type="number" value={frame.offset} onChange={(event) => updateFrame({ offset: Number(event.target.value) })} /></label>
       </div>
+      <PointReadProcessing index={index} onChange={onChange} point={point} />
     </section>
   );
 }
@@ -1290,6 +1376,7 @@ function emptyPoint(): PointSetPointResponse {
     intervalMs: 1000,
     pointId: '',
     semanticId: '',
+    readTransforms: [],
     unit: null,
     valueType: 'float32',
   };
@@ -1796,6 +1883,8 @@ function validatePointSet(
   const ids = new Set<string>();
   for (const [index, point] of pointSet.points.entries()) {
     if (!point.pointId.trim() || !point.semanticId.trim() || !point.address.value.trim()) return `请补全第 ${index + 1} 个点位`;
+    const transformError = validateReadTransforms(point.readTransforms ?? [], point.valueType);
+    if (transformError) return `第 ${index + 1} 个点位${transformError}`;
     if (pointSet.protocol === 'CustomSerial') {
       const frame = parseCustomSerialFrame(point.address.value);
       if (![1, 2].includes(frame.schemaVersion)) return `第 ${index + 1} 个点位的 DSL 版本只支持 v1 或 v2`;
@@ -1907,4 +1996,67 @@ function intervalSummary(points: PointSetPointResponse[]): string {
   if (intervals.length === 0) return '-';
   if (intervals.length === 1) return `${intervals[0]}ms`;
   return `${Math.min(...intervals)}-${Math.max(...intervals)}ms`;
+}
+
+const pointTransformOptions = [
+  ['linear', '线性换算'],
+  ['map_range', '范围映射'],
+  ['clamp', '上下限幅'],
+  ['round', '精度处理'],
+  ['absolute', '绝对值'],
+  ['square_root', '平方根'],
+  ['power', '幂运算'],
+] as const;
+
+function isNumericPointType(valueType: string): boolean {
+  return valueType.startsWith('float') || valueType.startsWith('int');
+}
+
+function defaultPointTransform(kind: string): PointReadTransform {
+  switch (kind) {
+    case 'linear': return { kind, factor: 1, offset: 0 };
+    case 'clamp': return { kind, min: 0, max: 100 };
+    case 'round': return { kind, decimals: 2 };
+    case 'absolute': return { kind };
+    case 'square_root': return { kind };
+    case 'power': return { kind, exponent: 2 };
+    case 'map_range': return { kind, inputMin: 0, inputMax: 100, outputMin: 0, outputMax: 1, clamp: true };
+    default: return { kind: 'linear', factor: 1, offset: 0 };
+  }
+}
+
+function pointTransformLabel(kind: PointReadTransform['kind']): string {
+  return pointTransformOptions.find(([value]) => value === kind)?.[1] ?? kind;
+}
+
+function transformPipelineSummary(transforms: PointReadTransform[]): string {
+  return ['原始值', ...transforms.map((transform) => pointTransformLabel(transform.kind)), '采集编排'].join(' → ');
+}
+
+function moveItem<T>(items: T[], from: number, to: number): T[] {
+  const next = [...items];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
+}
+
+function validateReadTransforms(transforms: PointReadTransform[], valueType: string): string | undefined {
+  if (transforms.length === 0) return undefined;
+  if (!isNumericPointType(valueType)) return '的读取处理仅支持数值类型';
+  if (transforms.length > 16) return '的读取处理不能超过 16 步';
+  for (const [index, transform] of transforms.entries()) {
+    const prefix = `的第 ${index + 1} 个读取处理`;
+    if (transform.kind === 'linear' && (!Number.isFinite(transform.factor) || !Number.isFinite(transform.offset))) return `${prefix}参数无效`;
+    if (transform.kind === 'clamp' && (!Number.isFinite(transform.min) || !Number.isFinite(transform.max) || transform.min > transform.max)) return `${prefix}上下限无效`;
+    if (transform.kind === 'round' && (!Number.isInteger(transform.decimals) || transform.decimals < 0 || transform.decimals > 12)) return `${prefix}小数位必须为 0-12 的整数`;
+    if (transform.kind === 'power' && !Number.isFinite(transform.exponent)) return `${prefix}指数无效`;
+    if (transform.kind === 'map_range' && (
+      !Number.isFinite(transform.inputMin)
+      || !Number.isFinite(transform.inputMax)
+      || !Number.isFinite(transform.outputMin)
+      || !Number.isFinite(transform.outputMax)
+      || transform.inputMin === transform.inputMax
+    )) return `${prefix}范围参数无效`;
+  }
+  return undefined;
 }

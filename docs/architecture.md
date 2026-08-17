@@ -220,45 +220,27 @@ production MQTT client, and require a QoS 1 PUBACK. Hardware acceptance still ve
 USB/RS-485 adapter, line termination, direction control, configured baud/parity, slave timing, and
 representative field devices.
 
-## Agent Direction
+## Agent And MCP Direction
 
-Recommended Agent services:
+External Agents integrate through the stateless MCP Streamable HTTP endpoint at `POST /mcp`.
+Role-filtered tools expose project, product, protocol, point-set, collection/command graph, Runtime,
+MQTT, audit, and governed knowledge reads. Two mutation-intent tools may only persist a reviewable
+configuration change set or device command candidate. Apply, publish, dispatch, protocol write,
+arbitrary SQL, and shell tools are deliberately absent from the model-visible registry.
 
-- Fleet Ops Agent: health summary, capacity hints, and operational triage.
-- Protocol Expert Agent: assists point-table and manual interpretation.
-- Config Planning Agent: drafts config packages and rollout plans.
-- Algorithm Orchestration Agent: recommends edge algorithms and input mappings.
-- Maintenance Agent: explains alarms with manuals, SOPs, fault codes, and history.
-- Safety Review Agent: reviews risky configuration or command changes.
+Bearer RBAC, Origin checks, per-principal rate limits, and server-side project/edge allowlists form
+the MCP ingress boundary. Tool arguments cannot widen the scope fixed by request headers or service
+configuration. Every call records its principal, tool, scope, and result in SQLite. The management
+console's AI Integration page exposes endpoint health, the effective capability catalog, approval
+queues, and call audit instead of making an embedded chat assistant the primary interaction.
 
-All Agent outputs stay advisory until converted into governed configuration or policy-checked command candidates.
-`AgentProposal` is the persisted governance envelope for configuration suggestions, point mappings,
-rollout plans, and command candidates. Its terminal review transition is auditable and deliberately
-has no release or command side effect. The console uses `/api/agent/proposals` to create and list
-proposals and explicit `/approve` or `/reject` review endpoints; SQLite stores the proposal and audit
-record in one transaction.
+Drafts have no side effect until an independent operator validates, simulates, and confirms them
+through the management API. Final config application and command dispatch remain explicit admin
+actions. A dispatched command carries short-lived human approval evidence; the Runtime independently
+checks approval age, expiry, point access, type/range, source, rate, and idempotency before invoking a
+protocol adapter. See `docs/mcp-integration.md` for the complete client and safety contract.
 
-`AgentConversation` is the persisted dialogue envelope. It fixes the operator, optional project,
-and optional edge scope at creation, retains a bounded message history with citations, and supplies
-only the last 12 messages to later model calls as untrusted context. Conversation list/read/delete
-operations enforce operator ownership before returning data; creation and deletion have attributable
-audit records. Authenticated deployments derive that ownership from the server-injected principal;
-the client field is used only by the intentionally unauthenticated local-development mode.
-
-The cloud API contains a model-gateway adapter rather than embedding model logic in the edge runtime.
-`POST /api/agent/chat` validates an optional project and edge scope, builds a bounded operational
-context, and either calls an OpenAI-compatible endpoint or uses deterministic local analysis when no
-provider is configured. The supplied JSON is labeled untrusted and contains fleet counts, pending
-governance counts, edge identity/configuration summaries, and runtime health only. Access tokens,
-MQTT credentials, certificate material, secret references, and raw protocol payloads are excluded.
-Provider status is available through `GET /api/agent/provider`; the API never returns the endpoint or
-API key.
-
-The model adapter exposes no execution tools. The retrieval layer may supply manuals, point tables,
-fault codes, and SOPs. The current governed retrieval layer persists global and project-scoped
-`KnowledgeDocument` records in SQLite and performs bounded lexical recall over enabled documents.
-It excludes cross-project records, strips lines with common secret markers, caps excerpts and result
-count, and returns citations to the console. Retrieved text remains untrusted advisory context. Any
-model-generated change must first become an `AgentProposal` or `AgentCommandDraft`, then pass the
-existing human review, cloud validation, release, and edge policy paths. The retrieval contract can
-later adopt embeddings without changing these governance boundaries.
+The legacy scoped conversation and proposal APIs remain a compatibility surface for existing
+integrations. They are not linked from primary navigation and do not grant execution authority.
+Governed knowledge remains project-isolated, secret-filtered, bounded, and untrusted regardless of
+whether it is consumed by an MCP client or the legacy model gateway.

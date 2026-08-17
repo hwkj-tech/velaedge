@@ -7,8 +7,9 @@ use edge_core::{
 use uuid::Uuid;
 
 use crate::{
-    AgentConversation, AgentProposal, AuditAction, AuditRecord, EdgeAccessCredential, EdgeNode,
-    KnowledgeDocument, PointSet, Product, ProductVersion, Project, ReleaseRecord,
+    AgentChangeSet, AgentCommandCandidate, AgentConversation, AgentProposal, AuditAction,
+    AuditRecord, EdgeAccessCredential, EdgeNode, KnowledgeDocument, PointSet, Product,
+    ProductVersion, Project, ReleaseRecord,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -30,6 +31,8 @@ pub struct CloudControlStore {
     agent_proposals: BTreeMap<Uuid, AgentProposal>,
     knowledge_documents: BTreeMap<Uuid, KnowledgeDocument>,
     agent_conversations: BTreeMap<Uuid, AgentConversation>,
+    agent_change_sets: BTreeMap<String, AgentChangeSet>,
+    agent_command_candidates: BTreeMap<String, AgentCommandCandidate>,
 }
 
 impl CloudControlStore {
@@ -39,6 +42,10 @@ impl CloudControlStore {
 
     pub fn edge_nodes(&self) -> impl Iterator<Item = &EdgeNode> {
         self.edge_nodes.values()
+    }
+
+    pub fn edge_node(&self, edge_id: &str) -> Option<&EdgeNode> {
+        self.edge_nodes.get(edge_id)
     }
 
     pub fn remove_edge_node(&mut self, edge_id: &str) -> Option<EdgeNode> {
@@ -233,6 +240,8 @@ impl CloudControlStore {
             .retain(|_, document| document.project_id.as_deref() != Some(project_id));
         self.agent_conversations
             .retain(|_, conversation| conversation.project_id.as_deref() != Some(project_id));
+        self.agent_change_sets
+            .retain(|_, change_set| change_set.target.project_id != project_id);
         self.products
             .retain(|_, product| product.project_id != project_id);
         self.product_versions
@@ -348,5 +357,44 @@ impl CloudControlStore {
         conversation_id: Uuid,
     ) -> Option<AgentConversation> {
         self.agent_conversations.remove(&conversation_id)
+    }
+
+    pub fn upsert_agent_change_set(&mut self, change_set: AgentChangeSet) {
+        self.agent_change_sets
+            .insert(change_set.change_set_id.clone(), change_set);
+    }
+
+    pub fn agent_change_set(&self, change_set_id: &str) -> Option<&AgentChangeSet> {
+        self.agent_change_sets.get(change_set_id)
+    }
+
+    pub fn agent_change_sets(&self) -> impl Iterator<Item = &AgentChangeSet> {
+        self.agent_change_sets.values()
+    }
+
+    pub fn upsert_agent_command_candidate(&mut self, candidate: AgentCommandCandidate) {
+        self.agent_command_candidates
+            .insert(candidate.candidate_id.clone(), candidate);
+    }
+
+    pub fn agent_command_candidate(&self, candidate_id: &str) -> Option<&AgentCommandCandidate> {
+        self.agent_command_candidates.get(candidate_id)
+    }
+
+    pub fn agent_command_candidates(&self) -> impl Iterator<Item = &AgentCommandCandidate> {
+        self.agent_command_candidates.values()
+    }
+
+    pub fn agent_command_candidate_by_idempotency(
+        &self,
+        project_id: &str,
+        edge_id: &str,
+        idempotency_key: &str,
+    ) -> Option<&AgentCommandCandidate> {
+        self.agent_command_candidates.values().find(|candidate| {
+            candidate.target.project_id == project_id
+                && candidate.target.edge_id == edge_id
+                && candidate.idempotency_key == idempotency_key
+        })
     }
 }

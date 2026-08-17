@@ -34,6 +34,7 @@ pub struct EdgeGatewaySession {
     pub edge_id: String,
     pub runtime_id: String,
     pub runtime_version: String,
+    pub applied_config_version: Option<String>,
     pub capabilities: Vec<String>,
     pub peer_addr: SocketAddr,
 }
@@ -737,6 +738,7 @@ where
         edge_id: message.edge_id,
         runtime_id: hello.runtime_id.clone(),
         runtime_version: hello.runtime_version.clone(),
+        applied_config_version: hello.applied_config_version.clone(),
         capabilities: hello.capabilities.clone(),
         peer_addr,
     })
@@ -993,7 +995,12 @@ async fn deploy_pending_config_if_available<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let Some(package) = pending_config_package(&store, &session.edge_id)? else {
+    let Some(package) = deployable_config_package(
+        &store,
+        &session.edge_id,
+        session.applied_config_version.as_deref(),
+    )?
+    else {
         return Ok(0);
     };
 
@@ -1051,18 +1058,25 @@ where
     Ok(1)
 }
 
-fn pending_config_package(
+fn deployable_config_package(
     store: &Arc<Mutex<CloudControlStore>>,
     edge_id: &str,
+    runtime_version: Option<&str>,
 ) -> Result<Option<EdgeConfigPackage>> {
     let store = store
         .lock()
         .map_err(|_| anyhow!("cloud control store mutex poisoned"))?;
-    let Some(release) = store
+    let pending_release = store
         .releases()
         .filter(|release| release.edge_id == edge_id && release.status == ReleaseStatus::Pending)
-        .max_by(|left, right| left.desired_version.cmp(&right.desired_version))
-    else {
+        .max_by(|left, right| left.desired_version.cmp(&right.desired_version));
+    let applied_release = store
+        .releases()
+        .filter(|release| release.edge_id == edge_id && release.status == ReleaseStatus::Applied)
+        .max_by(|left, right| left.desired_version.cmp(&right.desired_version));
+    let Some(release) = pending_release.or_else(|| {
+        applied_release.filter(|release| runtime_version != Some(release.desired_version.as_str()))
+    }) else {
         return Ok(None);
     };
 

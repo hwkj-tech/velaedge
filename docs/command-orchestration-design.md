@@ -46,7 +46,8 @@
 
 | 参数 | 含义 | 约束 |
 | --- | --- | --- |
-| `require_confirmation` | 是否要求确认令牌 | 布尔值；启用后载荷必须包含非空 `confirmationToken` |
+| `require_confirmation` | 是否要求人工审批证据 | 布尔值；启用后必须携带令牌、审批人、审批时间和短期过期时间 |
+| `max_confirmation_age_ms` | 审批证据最大年龄 | 可选，`1..604800000`；默认 15 分钟 |
 | `source_path` | 指令来源字段路径 | 默认 `requestedBy` |
 | `allowed_sources` | 允许的逻辑来源 | 非空字符串数组；来源缺失或不在列表中时拒绝写入 |
 | `max_commands` | 窗口内最多执行次数 | 必须与 `window_ms` 同时配置且大于 0 |
@@ -55,6 +56,11 @@
 `requestedBy` 是业务载荷中的逻辑来源，不是密码学身份。生产环境必须同时使用
 MQTT Broker ACL、独立客户端凭证和 Topic 发布授权，确保只有可信发布者能够写入
 指令 Topic；Runtime 的来源白名单是第二层业务授权，不能替代 Broker 认证。
+
+启用人工确认时，`confirmationToken` 长度至少 24 且不能包含空白；`approvedBy` 必须是
+真实人工主体，Runtime 拒绝 `agent:*`、`model:*` 和 `system`；`approvedAt` 必须是未过期的
+RFC 3339 时间；`expiresAt` 必填且最多位于未来 5 分钟。Cloud 审批中心下发时生成一次性
+候选关联令牌并使用 60 秒有效期。模型自身不能生成可通过本地安全门的人工审批身份。
 
 ## MQTT 命令格式
 
@@ -66,8 +72,12 @@ MQTT Broker ACL、独立客户端凭证和 Topic 发布授权，确保只有可�
   "value": 12.5,
   "requestedBy": "scada",
   "issuedAt": "2026-07-31T10:00:00Z",
-  "expiresAt": "2026-07-31T10:00:10Z",
-  "confirmationToken": null
+  "expiresAt": "2026-07-31T10:01:00Z",
+  "confirmationToken": "approval:cmd-42:019f-random-token",
+  "approvalCandidateId": "cmd-42",
+  "approvedBy": "operator-a",
+  "coApprovedBy": "operator-b",
+  "approvedAt": "2026-07-31T10:00:00Z"
 }
 ```
 
@@ -94,7 +104,7 @@ Topic 与字段路径均可配置，但字段路径只能提供目标值；写�
 ## Runtime 执行顺序
 
 1. MQTT 长连接订阅并校验包大小。
-2. 检查命令 ID 幂等记录、过期时间和来源权限。
+2. 检查命令 ID 幂等记录、命令过期时间、人工审批证据和来源权限。
 3. 解析目标点位并确认访问权限。
 4. 执行类型、范围、速率和人工确认策略。
 5. 调用 `ProtocolCommandAdapter`。
@@ -146,7 +156,7 @@ IOA 的肯定激活确认，再发送执行命令；未启用时直接执行。�
   持久化审计，验证失败会终止当前指令流。
 - 已完成：IEC 104 `C_SC_NA_1`、`C_DC_NA_1`、`C_SE_NC_1` 写入，可选 SBO、
   肯定激活确认、会话失败重建、影子/指标/回执集成和真实 TCP 报文测试。
-- 已完成：安全门来源白名单、来源审计和滚动窗口速率限制；策略错误会在协议写入前
+- 已完成：安全门短期人工审批证据、审批人身份与年龄校验、来源白名单、来源审计和滚动窗口速率限制；策略错误会在协议写入前
   失败，并生成标准 MQTT 回执和 RocksDB 审计。Cloud 发布前会校验来源和限流参数。
 - 已完成：生产 MQTT 指令服务将安全门滚动窗口原子持久化到 RocksDB；Runtime 或
   配置服务重启后仍延续窗口，多安全门只有全部允许时才一次性消耗限额。无存储的

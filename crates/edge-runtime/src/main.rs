@@ -23,25 +23,37 @@ use edge_runtime::{
     HostSystemMetricsSampler, HttpEdgeConfigSyncClient, HttpRuntimeStatusReporter, JsonlLocalStore,
     MqttOutboxStats, MqttPublisher, MultiBrokerMqttPublisher, PersistentCollectionRuntime,
     PersistentMqttPublisher, ProtocolCircuitBreakerRegistry, RocksEdgeRuntimeStore,
-    RuntimeCapabilityConfig, RuntimeHealthState, RuntimeMetricsCollector, RuntimeStatusReporter,
-    SimulatedProtocolAdapter, TokioSerialBusFactory,
+    RuntimeCapabilityConfig, RuntimeHealthState, RuntimeMetricsCollector, RuntimeStartupConfig,
+    RuntimeStartupOverrides, RuntimeStatusReporter, SimulatedProtocolAdapter,
+    TokioSerialBusFactory,
 };
 use tracing::{info, warn};
 
 #[derive(Debug, Parser)]
 #[command(name = "edge-runtime")]
 #[command(about = "Runs the cloud-managed edge collection runtime")]
-struct Args {
-    #[arg(long, default_value = "edge-dev")]
-    edge_id: String,
-    #[arg(long, default_value = "pump-1")]
-    device_id: String,
-    #[arg(long, default_value = "runtime-dev")]
-    runtime_id: String,
-    #[arg(long, default_value = "data/telemetry.jsonl")]
-    storage: PathBuf,
-    #[arg(long, default_value = "data/edge-runtime.rocksdb")]
-    runtime_db: PathBuf,
+struct CliArgs {
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Load Runtime startup settings from TOML"
+    )]
+    config: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Validate startup configuration, referenced secrets and TLS files, then exit"
+    )]
+    check_config: bool,
+    #[arg(long)]
+    edge_id: Option<String>,
+    #[arg(long)]
+    device_id: Option<String>,
+    #[arg(long)]
+    runtime_id: Option<String>,
+    #[arg(long)]
+    storage: Option<PathBuf>,
+    #[arg(long)]
+    runtime_db: Option<PathBuf>,
     #[arg(long)]
     cloud_api_url: Option<String>,
     #[arg(long)]
@@ -52,35 +64,79 @@ struct Args {
     edgelink_tls_cert: Option<PathBuf>,
     #[arg(long)]
     edgelink_tls_key: Option<PathBuf>,
-    #[arg(long, default_value = "localhost")]
-    edgelink_tls_server_name: String,
+    #[arg(long)]
+    edgelink_tls_server_name: Option<String>,
     #[arg(long)]
     access_token: Option<String>,
     #[arg(long, conflicts_with = "access_token")]
     access_token_env: Option<String>,
-    #[arg(long)]
+    #[arg(long, conflicts_with = "no_mqtt_uplink")]
     mqtt_uplink: bool,
-    #[arg(long)]
+    #[arg(long, conflicts_with = "mqtt_uplink")]
+    no_mqtt_uplink: bool,
+    #[arg(long, conflicts_with = "no_edgelink_daemon")]
     edgelink_daemon: bool,
-    #[arg(long, default_value_t = 30_000)]
-    edgelink_command_wait_ms: u64,
-    #[arg(long, default_value_t = 1_000)]
-    edgelink_reconnect_ms: u64,
+    #[arg(long, conflicts_with = "edgelink_daemon")]
+    no_edgelink_daemon: bool,
+    #[arg(long)]
+    edgelink_command_wait_ms: Option<u64>,
+    #[arg(long)]
+    edgelink_reconnect_ms: Option<u64>,
     #[arg(
         long,
-        default_value = "127.0.0.1:19090",
         help = "Read-only local Runtime health page and probe listen address"
     )]
-    health_listen: SocketAddr,
-    #[arg(long, default_value_t = 0)]
-    scheduled_ticks: u32,
-    #[arg(long, default_value_t = 1000)]
-    scheduler_tick_ms: u64,
+    health_listen: Option<SocketAddr>,
+    #[arg(long)]
+    scheduled_ticks: Option<u32>,
+    #[arg(long)]
+    scheduler_tick_ms: Option<u64>,
     #[arg(
         long,
+        conflicts_with = "no_allow_simulated",
         help = "TEST ONLY: allow the standalone simulated protocol fallback"
     )]
     allow_simulated: bool,
+    #[arg(long, conflicts_with = "allow_simulated")]
+    no_allow_simulated: bool,
+}
+
+impl CliArgs {
+    fn startup_overrides(&self) -> RuntimeStartupOverrides {
+        RuntimeStartupOverrides {
+            edge_id: self.edge_id.clone(),
+            device_id: self.device_id.clone(),
+            runtime_id: self.runtime_id.clone(),
+            storage: self.storage.clone(),
+            runtime_db: self.runtime_db.clone(),
+            cloud_api_url: self.cloud_api_url.clone(),
+            cloud_gateway_addr: self.cloud_gateway_addr.clone(),
+            edgelink_tls_ca: self.edgelink_tls_ca.clone(),
+            edgelink_tls_cert: self.edgelink_tls_cert.clone(),
+            edgelink_tls_key: self.edgelink_tls_key.clone(),
+            edgelink_tls_server_name: self.edgelink_tls_server_name.clone(),
+            access_token: self.access_token.clone(),
+            access_token_env: self.access_token_env.clone(),
+            mqtt_uplink: bool_override(self.mqtt_uplink, self.no_mqtt_uplink),
+            edgelink_daemon: bool_override(self.edgelink_daemon, self.no_edgelink_daemon),
+            edgelink_command_wait_ms: self.edgelink_command_wait_ms,
+            edgelink_reconnect_ms: self.edgelink_reconnect_ms,
+            health_listen: self.health_listen,
+            scheduled_ticks: self.scheduled_ticks,
+            scheduler_tick_ms: self.scheduler_tick_ms,
+            allow_simulated: bool_override(self.allow_simulated, self.no_allow_simulated),
+        }
+    }
+}
+
+fn bool_override(enabled: bool, disabled: bool) -> Option<bool> {
+    if enabled {
+        Some(true)
+    } else if disabled {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 #[tokio::main]
@@ -92,7 +148,21 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let args = Args::parse();
+    let cli = CliArgs::parse();
+    let check_config = cli.check_config;
+    let config_path = cli.config.clone();
+    let args = RuntimeStartupConfig::load(cli.config.as_deref(), cli.startup_overrides())?;
+
+    if check_config {
+        let _ = resolve_access_token(&args)?;
+        let _ = load_edgelink_tls_config(&args)?;
+        if let Some(path) = config_path {
+            println!("Runtime configuration is valid: {}", path.display());
+        } else {
+            println!("Runtime configuration is valid: CLI/defaults");
+        }
+        return Ok(());
+    }
     let health_state = RuntimeHealthState::new(
         &args.edge_id,
         &args.runtime_id,
@@ -155,25 +225,28 @@ async fn main() -> Result<()> {
                     .map(|config| config.package().clone());
                 if args.mqtt_uplink {
                     if let Some(package) = active_package.as_ref() {
+                        if let Err(error) = mqtt_publisher.configure_package(package) {
+                            warn!(
+                                edge_id = %args.edge_id,
+                                config_version = %package.version,
+                                error = %error,
+                                "failed to configure shared MQTT runtime session"
+                            );
+                        }
                         let has_enabled_commands =
                             package.command_flows.iter().any(|flow| flow.enabled);
                         let needs_restart = command_service
                             .as_ref()
-                            .map(|service| {
-                                service.config_version() != package.version || service.is_finished()
-                            })
+                            .map(|service| service.config_version() != package.version)
                             .unwrap_or(true);
                         if !has_enabled_commands {
                             command_service = None;
                         } else if needs_restart {
                             command_service = None;
-                            match CommandRuntimeService::start(
+                            match CommandRuntimeService::from_package(
                                 package.clone(),
-                                Arc::clone(&runtime_store),
                                 circuit_breakers.clone(),
-                            )
-                            .await
-                            {
+                            ) {
                                 Ok(service) => {
                                     info!(
                                         edge_id = %args.edge_id,
@@ -192,10 +265,35 @@ async fn main() -> Result<()> {
                             }
                         }
                     } else {
+                        mqtt_publisher.configure(&[])?;
                         command_service = None;
                     }
                 } else {
+                    mqtt_publisher.configure(&[])?;
                     command_service = None;
+                }
+                while let Some(message) = mqtt_publisher.try_recv_command() {
+                    let Some(service) = command_service.as_mut() else {
+                        warn!(
+                            edge_id = %args.edge_id,
+                            sink_id = %message.sink_id,
+                            topic = %message.topic,
+                            "ignored MQTT command because command processing is disabled"
+                        );
+                        continue;
+                    };
+                    if let Err(error) = service
+                        .process_message(&message, runtime_store.as_ref(), &mut mqtt_publisher)
+                        .await
+                    {
+                        warn!(
+                            edge_id = %args.edge_id,
+                            sink_id = %message.sink_id,
+                            topic = %message.topic,
+                            error = %error,
+                            "MQTT command rejected or failed"
+                        );
+                    }
                 }
                 let mut snapshot = runtime_metrics_snapshot(
                     &args.edge_id,
@@ -368,10 +466,10 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    if let Some(cloud_api_url) = args.cloud_api_url {
+    if let Some(cloud_api_url) = args.cloud_api_url.as_deref() {
         let runtime_store = RocksEdgeRuntimeStore::open(&args.runtime_db)?;
-        let mut config_client = HttpEdgeConfigSyncClient::new(&cloud_api_url)?;
-        let mut runtime_reporter = HttpRuntimeStatusReporter::new(&cloud_api_url)?;
+        let mut config_client = HttpEdgeConfigSyncClient::new(cloud_api_url)?;
+        let mut runtime_reporter = HttpRuntimeStatusReporter::new(cloud_api_url)?;
         if args.scheduled_ticks > 0 {
             let report = run_scheduled_cloud_ticks(
                 &args.edge_id,
@@ -475,7 +573,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn resolve_access_token(args: &Args) -> Result<Option<String>> {
+fn resolve_access_token(args: &RuntimeStartupConfig) -> Result<Option<String>> {
     if let Some(variable_name) = args.access_token_env.as_deref() {
         let variable_name = variable_name.trim();
         anyhow::ensure!(
@@ -495,7 +593,9 @@ fn resolve_access_token(args: &Args) -> Result<Option<String>> {
     Ok(args.access_token.clone())
 }
 
-fn load_edgelink_tls_config(args: &Args) -> Result<Option<EdgeLinkClientTlsConfig>> {
+fn load_edgelink_tls_config(
+    args: &RuntimeStartupConfig,
+) -> Result<Option<EdgeLinkClientTlsConfig>> {
     match (
         args.edgelink_tls_ca.as_ref(),
         args.edgelink_tls_cert.as_ref(),

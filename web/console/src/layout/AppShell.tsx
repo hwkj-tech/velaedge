@@ -1,6 +1,5 @@
 import {
   Activity,
-  Bot,
   Boxes,
   Database,
   FolderKanban,
@@ -8,8 +7,7 @@ import {
   LogOut,
   RadioTower,
   ScrollText,
-  ShieldCheck,
-  Sparkles,
+  Workflow,
   UserRound,
   type LucideIcon,
 } from 'lucide-react';
@@ -31,7 +29,7 @@ export type PageKey =
   | 'discovery'
   | 'runtimeStatus'
   | 'auditLog'
-  | 'agentAssistant';
+  | 'aiIntegration';
 
 interface NavItem {
   key: PageKey;
@@ -47,7 +45,7 @@ export const navItems: NavItem[] = [
   { key: 'edges', label: '边端管理', icon: RadioTower },
   { key: 'runtimeStatus', label: '运行状态', icon: Activity },
   { key: 'auditLog', label: '审计日志', icon: ScrollText },
-  { key: 'agentAssistant', label: 'Agent 助手', icon: Bot },
+  { key: 'aiIntegration', label: 'AI 集成', icon: Workflow },
 ];
 
 const pageTitleByKey = new Map(navItems.map((item) => [item.key, item.label]));
@@ -62,19 +60,11 @@ export interface PlatformStatus {
   project: string;
 }
 
-const defaultPlatformStatus: PlatformStatus = {
-  environment: '未配置',
-  onlineEdgeCount: 0,
-  pendingReleaseCount: 0,
-  project: '暂无项目',
-};
-
 export function AppShell({
   activePage,
   children,
   onNavigate,
   onLogout,
-  platformStatus = defaultPlatformStatus,
   principal,
 }: {
   activePage: PageKey;
@@ -85,10 +75,6 @@ export function AppShell({
   principal?: AuthStatusResponse;
 }) {
   const activeTitle = pageTitleByKey.get(activePage) ?? 'Dashboard';
-  const releaseStatus =
-    platformStatus.pendingReleaseCount > 0
-      ? `${platformStatus.pendingReleaseCount} 个边端待同步`
-      : '配置已同步';
 
   return (
     <div className="app-shell">
@@ -118,7 +104,7 @@ export function AppShell({
         </nav>
 
         <div className="sidebar-footer">
-          <div className="agent-pulse"><span /> Agent Core</div>
+          <div className="agent-pulse"><span /> Policy Engine</div>
           <strong>系统运行正常</strong>
           <small>v2.4.0 · 安全策略已启用</small>
         </div>
@@ -131,25 +117,7 @@ export function AppShell({
             <h1>{activeTitle}</h1>
           </div>
 
-          <div className="status-strip" aria-label="平台状态">
-            <span className="status-pill online">
-              <ShieldCheck size={14} aria-hidden="true" />
-              {platformStatus.onlineEdgeCount} 个边端在线
-            </span>
-            <span className="status-pill">项目: {platformStatus.project}</span>
-            <span className="status-pill">环境: {platformStatus.environment}</span>
-            <span
-              className={
-                platformStatus.pendingReleaseCount > 0
-                  ? 'status-pill warning'
-                  : 'status-pill online'
-              }
-            >
-              {releaseStatus}
-            </span>
-            <button className="agent-command" type="button" onClick={() => onNavigate('agentAssistant')}>
-              <Sparkles size={14} aria-hidden="true" /> Ask Agent
-            </button>
+          <div className="status-strip" aria-label="账户操作">
             {principal ? (
               <span className="principal-status" title={principal.subject}>
                 <UserRound size={14} aria-hidden="true" />

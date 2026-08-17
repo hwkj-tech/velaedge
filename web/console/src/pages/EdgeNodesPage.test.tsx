@@ -194,7 +194,7 @@ describe('EdgeNodesPage', () => {
     const onSaveMqttUplink = vi.fn().mockResolvedValue({
       batchSize: 100,
       broker: 'mqtts://velamq.prod:8883',
-      clientId: 'edge-dev-runtime',
+      clientId: 'edge-dev',
       flushIntervalMs: 1000,
       qos: 1,
       sinkId: 'velamq-main',
@@ -211,12 +211,14 @@ describe('EdgeNodesPage', () => {
     fireEvent.change(screen.getByLabelText('传输安全'), {
       target: { value: 'mqtts' },
     });
+    expect(screen.getByLabelText('Client ID（Edge ID）')).toHaveValue('edge-dev');
+    expect(screen.getByLabelText('Client ID（Edge ID）')).toHaveAttribute('readonly');
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
       expect(onSaveMqttUplink).toHaveBeenCalledWith(
         'edge-dev',
-        expect.objectContaining({ broker: 'mqtts://velamq.prod:8883' }),
+        expect.objectContaining({ broker: 'mqtts://velamq.prod:8883', clientId: 'edge-dev' }),
       );
     });
     expect(dialog).toBeInTheDocument();

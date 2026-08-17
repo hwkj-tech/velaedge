@@ -193,7 +193,7 @@ fn command_subscriptions(edge_id: &str, flows: &[CommandFlowConfig]) -> Vec<(Str
 async fn subscribe_v3_topics(
     client: &AsyncClient,
     subscriptions: &[(String, String, u8)],
-) -> Result<()> {
+) -> Result<usize> {
     let mut topics = BTreeMap::<&str, u8>::new();
     for (_, topic, qos) in subscriptions {
         topics
@@ -201,19 +201,20 @@ async fn subscribe_v3_topics(
             .and_modify(|configured| *configured = (*configured).max(*qos))
             .or_insert(*qos);
     }
+    let subscription_count = topics.len();
     for (topic, qos) in topics {
         client
             .subscribe(topic, rumqttc_qos(qos)?)
             .await
             .with_context(|| format!("subscribe MQTT command topic {topic}"))?;
     }
-    Ok(())
+    Ok(subscription_count)
 }
 
 async fn subscribe_v5_topics(
     client: &AsyncClientV5,
     subscriptions: &[(String, String, u8)],
-) -> Result<()> {
+) -> Result<usize> {
     let mut topics = BTreeMap::<&str, u8>::new();
     for (_, topic, qos) in subscriptions {
         topics
@@ -221,13 +222,14 @@ async fn subscribe_v5_topics(
             .and_modify(|configured| *configured = (*configured).max(*qos))
             .or_insert(*qos);
     }
+    let subscription_count = topics.len();
     for (topic, qos) in topics {
         client
             .subscribe(topic, rumqttc_v5_qos(qos)?)
             .await
             .with_context(|| format!("subscribe MQTT 5 command topic {topic}"))?;
     }
-    Ok(())
+    Ok(subscription_count)
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -292,6 +294,21 @@ impl RumqttcMqttPublisher {
         uplink: &MqttUplinkConfig,
         acknowledgement_timeout: Duration,
     ) -> Result<Self> {
+        let (messages, _discarded_messages) = mpsc::unbounded_channel();
+        Self::connect_from_uplink_with_commands(
+            uplink,
+            acknowledgement_timeout,
+            Vec::new(),
+            messages,
+        )
+    }
+
+    fn connect_from_uplink_with_commands(
+        uplink: &MqttUplinkConfig,
+        acknowledgement_timeout: Duration,
+        subscriptions: Vec<(String, String, u8)>,
+        command_messages: mpsc::UnboundedSender<MqttCommandMessage>,
+    ) -> Result<Self> {
         validate_uplink(uplink)?;
         if acknowledgement_timeout.is_zero() {
             bail!("mqtt acknowledgement timeout must be greater than zero");
@@ -305,7 +322,14 @@ impl RumqttcMqttPublisher {
                 options.set_clean_session(uplink.clean_session);
                 configure_mqtt_options(&mut options, uplink, target.tls)?;
                 let (client, eventloop) = AsyncClient::new(options, 100);
-                let (task, events) = spawn_eventloop(eventloop, connected.clone());
+                let (task, events) = spawn_eventloop(
+                    eventloop,
+                    client.clone(),
+                    uplink.sink_id.clone(),
+                    subscriptions,
+                    command_messages,
+                    connected.clone(),
+                );
                 (MqttClient::V3_1_1(client), task, events)
             }
             MqttProtocolVersion::V5_0 => {
@@ -318,7 +342,14 @@ impl RumqttcMqttPublisher {
                 );
                 configure_mqtt_v5_options(&mut options, uplink, target.tls)?;
                 let (client, eventloop) = AsyncClientV5::new(options, 100);
-                let (task, events) = spawn_v5_eventloop(eventloop, connected.clone());
+                let (task, events) = spawn_v5_eventloop(
+                    eventloop,
+                    client.clone(),
+                    uplink.sink_id.clone(),
+                    subscriptions,
+                    command_messages,
+                    connected.clone(),
+                );
                 (MqttClient::V5_0(client), task, events)
             }
         };
@@ -489,6 +520,7 @@ impl MqttPublisher for RumqttcMqttPublisher {
 
 pub struct MultiBrokerMqttPublisher {
     publishers: BTreeMap<String, RumqttcMqttPublisher>,
+    command_messages: mpsc::UnboundedReceiver<MqttCommandMessage>,
 }
 
 impl MultiBrokerMqttPublisher {
@@ -500,21 +532,50 @@ impl MultiBrokerMqttPublisher {
         uplinks: &[MqttUplinkConfig],
         acknowledgement_timeout: Duration,
     ) -> Result<Self> {
+        Self::connect_with_subscriptions(uplinks, acknowledgement_timeout, &BTreeMap::new())
+    }
+
+    pub fn connect_from_package_with_ack_timeout(
+        package: &EdgeConfigPackage,
+        acknowledgement_timeout: Duration,
+    ) -> Result<Self> {
+        let subscriptions = command_subscriptions_by_sink(package)?;
+        Self::connect_with_subscriptions(
+            &package.mqtt_uplinks,
+            acknowledgement_timeout,
+            &subscriptions,
+        )
+    }
+
+    fn connect_with_subscriptions(
+        uplinks: &[MqttUplinkConfig],
+        acknowledgement_timeout: Duration,
+        subscriptions: &BTreeMap<String, Vec<(String, String, u8)>>,
+    ) -> Result<Self> {
         if uplinks.is_empty() {
             bail!("at least one mqtt uplink is required");
         }
+        let (command_messages_tx, command_messages) = mpsc::unbounded_channel();
         let mut publishers = BTreeMap::new();
         for uplink in uplinks {
             if publishers.contains_key(&uplink.sink_id) {
                 bail!("duplicate mqtt sink id: {}", uplink.sink_id);
             }
-            let publisher = RumqttcMqttPublisher::connect_from_uplink_with_ack_timeout(
+            let publisher = RumqttcMqttPublisher::connect_from_uplink_with_commands(
                 uplink,
                 acknowledgement_timeout,
+                subscriptions
+                    .get(&uplink.sink_id)
+                    .cloned()
+                    .unwrap_or_default(),
+                command_messages_tx.clone(),
             )?;
             publishers.insert(uplink.sink_id.clone(), publisher);
         }
-        Ok(Self { publishers })
+        Ok(Self {
+            publishers,
+            command_messages,
+        })
     }
 
     pub fn configured_sink_count(&self) -> usize {
@@ -534,6 +595,10 @@ impl MultiBrokerMqttPublisher {
             .map(RumqttcMqttPublisher::runtime_status)
             .collect()
     }
+
+    pub fn try_recv_command(&mut self) -> Option<MqttCommandMessage> {
+        self.command_messages.try_recv().ok()
+    }
 }
 
 #[async_trait]
@@ -549,6 +614,7 @@ impl MqttPublisher for MultiBrokerMqttPublisher {
 
 pub struct PersistentMqttPublisher {
     uplinks: Vec<MqttUplinkConfig>,
+    command_subscriptions: BTreeMap<String, Vec<(String, String, u8)>>,
     publisher: Option<MultiBrokerMqttPublisher>,
     acknowledgement_timeout: Duration,
     connection_generation: u64,
@@ -626,6 +692,7 @@ impl PersistentMqttPublisher {
     pub fn with_ack_timeout(acknowledgement_timeout: Duration) -> Self {
         Self {
             uplinks: Vec::new(),
+            command_subscriptions: BTreeMap::new(),
             publisher: None,
             acknowledgement_timeout,
             connection_generation: 0,
@@ -636,26 +703,56 @@ impl PersistentMqttPublisher {
         &mut self,
         uplinks: &[MqttUplinkConfig],
     ) -> Result<Option<&mut MultiBrokerMqttPublisher>> {
+        self.configure_with_subscriptions(uplinks, BTreeMap::new())
+    }
+
+    pub fn configure_package(
+        &mut self,
+        package: &EdgeConfigPackage,
+    ) -> Result<Option<&mut MultiBrokerMqttPublisher>> {
+        self.configure_with_subscriptions(
+            &package.mqtt_uplinks,
+            command_subscriptions_by_sink(package)?,
+        )
+    }
+
+    fn configure_with_subscriptions(
+        &mut self,
+        uplinks: &[MqttUplinkConfig],
+        command_subscriptions: BTreeMap<String, Vec<(String, String, u8)>>,
+    ) -> Result<Option<&mut MultiBrokerMqttPublisher>> {
         if uplinks.is_empty() {
             if self.publisher.is_some() {
                 self.connection_generation = self.connection_generation.saturating_add(1);
             }
             self.publisher = None;
             self.uplinks.clear();
+            self.command_subscriptions.clear();
             return Ok(None);
         }
 
-        if self.publisher.is_none() || self.uplinks != uplinks {
-            let publisher = MultiBrokerMqttPublisher::connect_from_uplinks_with_ack_timeout(
+        if self.publisher.is_none()
+            || self.uplinks != uplinks
+            || self.command_subscriptions != command_subscriptions
+        {
+            let publisher = MultiBrokerMqttPublisher::connect_with_subscriptions(
                 uplinks,
                 self.acknowledgement_timeout,
+                &command_subscriptions,
             )?;
             self.publisher = Some(publisher);
             self.uplinks = uplinks.to_vec();
+            self.command_subscriptions = command_subscriptions;
             self.connection_generation = self.connection_generation.saturating_add(1);
         }
 
         Ok(self.publisher.as_mut())
+    }
+
+    pub fn try_recv_command(&mut self) -> Option<MqttCommandMessage> {
+        self.publisher
+            .as_mut()
+            .and_then(MultiBrokerMqttPublisher::try_recv_command)
     }
 
     pub fn status(&self) -> PersistentMqttStatus {
@@ -680,6 +777,44 @@ impl PersistentMqttPublisher {
             sinks,
         }
     }
+}
+
+#[async_trait]
+impl MqttPublisher for PersistentMqttPublisher {
+    async fn publish(&mut self, message: MqttPublishMessage) -> Result<()> {
+        self.publisher
+            .as_mut()
+            .context("mqtt session is not configured")?
+            .publish(message)
+            .await
+    }
+}
+
+fn command_subscriptions_by_sink(
+    package: &EdgeConfigPackage,
+) -> Result<BTreeMap<String, Vec<(String, String, u8)>>> {
+    let sink_ids = package
+        .mqtt_uplinks
+        .iter()
+        .map(|uplink| uplink.sink_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut subscriptions = BTreeMap::<String, Vec<(String, String, u8)>>::new();
+    for flow in package.command_flows.iter().filter(|flow| flow.enabled) {
+        if !sink_ids.contains(flow.mqtt_connection_id.as_str()) {
+            bail!(
+                "command MQTT connection not found: {}",
+                flow.mqtt_connection_id
+            );
+        }
+        subscriptions
+            .entry(flow.mqtt_connection_id.clone())
+            .or_default()
+            .extend(command_subscriptions(
+                &package.edge_id,
+                std::slice::from_ref(flow),
+            ));
+    }
+    Ok(subscriptions)
 }
 
 fn duration_millis(duration: Duration) -> u64 {
@@ -1506,14 +1641,42 @@ pub(crate) fn rumqttc_v5_qos(qos: u8) -> Result<QoSV5> {
 
 fn spawn_eventloop(
     mut eventloop: EventLoop,
+    client: AsyncClient,
+    sink_id: String,
+    subscriptions: Vec<(String, String, u8)>,
+    command_messages: mpsc::UnboundedSender<MqttCommandMessage>,
     connected: Arc<AtomicBool>,
 ) -> (JoinHandle<()>, mpsc::UnboundedReceiver<MqttBrokerEvent>) {
     let (events_tx, events_rx) = mpsc::unbounded_channel();
     let task = tokio::spawn(async move {
+        let mut pending_subscription_acks = 0usize;
         loop {
             match eventloop.poll().await {
                 Ok(Event::Incoming(Packet::ConnAck(_))) => {
-                    connected.store(true, Ordering::Relaxed);
+                    connected.store(false, Ordering::Relaxed);
+                    match subscribe_v3_topics(&client, &subscriptions).await {
+                        Ok(0) => connected.store(true, Ordering::Relaxed),
+                        Ok(count) => pending_subscription_acks = count,
+                        Err(error) => {
+                            pending_subscription_acks = 0;
+                            tracing::warn!(sink_id, %error, "subscribe MQTT command topics failed");
+                        }
+                    }
+                }
+                Ok(Event::Incoming(Packet::SubAck(_))) => {
+                    pending_subscription_acks = pending_subscription_acks.saturating_sub(1);
+                    if pending_subscription_acks == 0 {
+                        connected.store(true, Ordering::Relaxed);
+                    }
+                }
+                Ok(Event::Incoming(Packet::Publish(publish))) => {
+                    route_command_message(
+                        &sink_id,
+                        &subscriptions,
+                        &publish.topic,
+                        publish.payload.to_vec(),
+                        &command_messages,
+                    );
                 }
                 Ok(Event::Outgoing(Outgoing::Publish(packet_id))) => {
                     if events_tx
@@ -1542,6 +1705,7 @@ fn spawn_eventloop(
                 Ok(_) => {}
                 Err(error) => {
                     connected.store(false, Ordering::Relaxed);
+                    pending_subscription_acks = 0;
                     tracing::warn!(?error, "mqtt eventloop poll failed");
                     if events_tx
                         .send(MqttBrokerEvent::ConnectionError(error.to_string()))
@@ -1567,12 +1731,24 @@ fn spawn_command_eventloop(
     connected: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let mut pending_subscription_acks = 0usize;
         loop {
             match eventloop.poll().await {
                 Ok(Event::Incoming(Packet::ConnAck(_))) => {
-                    connected.store(true, Ordering::Relaxed);
-                    if let Err(error) = subscribe_v3_topics(&client, &subscriptions).await {
-                        tracing::warn!(sink_id, %error, "subscribe MQTT command topics failed");
+                    connected.store(false, Ordering::Relaxed);
+                    match subscribe_v3_topics(&client, &subscriptions).await {
+                        Ok(0) => connected.store(true, Ordering::Relaxed),
+                        Ok(count) => pending_subscription_acks = count,
+                        Err(error) => {
+                            pending_subscription_acks = 0;
+                            tracing::warn!(sink_id, %error, "subscribe MQTT command topics failed");
+                        }
+                    }
+                }
+                Ok(Event::Incoming(Packet::SubAck(_))) => {
+                    pending_subscription_acks = pending_subscription_acks.saturating_sub(1);
+                    if pending_subscription_acks == 0 {
+                        connected.store(true, Ordering::Relaxed);
                     }
                 }
                 Ok(Event::Incoming(Packet::Publish(publish))) => {
@@ -1589,6 +1765,7 @@ fn spawn_command_eventloop(
                 Ok(_) => {}
                 Err(error) => {
                     connected.store(false, Ordering::Relaxed);
+                    pending_subscription_acks = 0;
                     tracing::warn!(sink_id, ?error, "mqtt command eventloop poll failed");
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
@@ -1600,14 +1777,46 @@ fn spawn_command_eventloop(
 
 fn spawn_v5_eventloop(
     mut eventloop: EventLoopV5,
+    client: AsyncClientV5,
+    sink_id: String,
+    subscriptions: Vec<(String, String, u8)>,
+    command_messages: mpsc::UnboundedSender<MqttCommandMessage>,
     connected: Arc<AtomicBool>,
 ) -> (JoinHandle<()>, mpsc::UnboundedReceiver<MqttBrokerEvent>) {
     let (events_tx, events_rx) = mpsc::unbounded_channel();
     let task = tokio::spawn(async move {
+        let mut pending_subscription_acks = 0usize;
         loop {
             match eventloop.poll().await {
                 Ok(EventV5::Incoming(PacketV5::ConnAck(_))) => {
-                    connected.store(true, Ordering::Relaxed);
+                    connected.store(false, Ordering::Relaxed);
+                    match subscribe_v5_topics(&client, &subscriptions).await {
+                        Ok(0) => connected.store(true, Ordering::Relaxed),
+                        Ok(count) => pending_subscription_acks = count,
+                        Err(error) => {
+                            pending_subscription_acks = 0;
+                            tracing::warn!(sink_id, %error, "subscribe MQTT 5 command topics failed");
+                        }
+                    }
+                }
+                Ok(EventV5::Incoming(PacketV5::SubAck(_))) => {
+                    pending_subscription_acks = pending_subscription_acks.saturating_sub(1);
+                    if pending_subscription_acks == 0 {
+                        connected.store(true, Ordering::Relaxed);
+                    }
+                }
+                Ok(EventV5::Incoming(PacketV5::Publish(publish))) => {
+                    let Ok(topic) = std::str::from_utf8(&publish.topic) else {
+                        tracing::warn!(sink_id, "ignored MQTT 5 command with non-UTF-8 topic");
+                        continue;
+                    };
+                    route_command_message(
+                        &sink_id,
+                        &subscriptions,
+                        topic,
+                        publish.payload.to_vec(),
+                        &command_messages,
+                    );
                 }
                 Ok(EventV5::Outgoing(Outgoing::Publish(packet_id))) => {
                     if events_tx
@@ -1636,6 +1845,7 @@ fn spawn_v5_eventloop(
                 Ok(_) => {}
                 Err(error) => {
                     connected.store(false, Ordering::Relaxed);
+                    pending_subscription_acks = 0;
                     tracing::warn!(?error, "mqtt 5 eventloop poll failed");
                     if events_tx
                         .send(MqttBrokerEvent::ConnectionError(error.to_string()))
@@ -1661,12 +1871,24 @@ fn spawn_v5_command_eventloop(
     connected: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let mut pending_subscription_acks = 0usize;
         loop {
             match eventloop.poll().await {
                 Ok(EventV5::Incoming(PacketV5::ConnAck(_))) => {
-                    connected.store(true, Ordering::Relaxed);
-                    if let Err(error) = subscribe_v5_topics(&client, &subscriptions).await {
-                        tracing::warn!(sink_id, %error, "subscribe MQTT 5 command topics failed");
+                    connected.store(false, Ordering::Relaxed);
+                    match subscribe_v5_topics(&client, &subscriptions).await {
+                        Ok(0) => connected.store(true, Ordering::Relaxed),
+                        Ok(count) => pending_subscription_acks = count,
+                        Err(error) => {
+                            pending_subscription_acks = 0;
+                            tracing::warn!(sink_id, %error, "subscribe MQTT 5 command topics failed");
+                        }
+                    }
+                }
+                Ok(EventV5::Incoming(PacketV5::SubAck(_))) => {
+                    pending_subscription_acks = pending_subscription_acks.saturating_sub(1);
+                    if pending_subscription_acks == 0 {
+                        connected.store(true, Ordering::Relaxed);
                     }
                 }
                 Ok(EventV5::Incoming(PacketV5::Publish(publish))) => {
@@ -1687,6 +1909,7 @@ fn spawn_v5_command_eventloop(
                 Ok(_) => {}
                 Err(error) => {
                     connected.store(false, Ordering::Relaxed);
+                    pending_subscription_acks = 0;
                     tracing::warn!(sink_id, ?error, "mqtt 5 command eventloop poll failed");
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
@@ -2032,6 +2255,32 @@ mod persistent_publisher_tests {
         publisher.configure(&[]).unwrap();
         assert_eq!(publisher.status().connection_generation, 3);
         assert_eq!(publisher.status().configured_sink_count, 0);
+    }
+
+    #[tokio::test]
+    async fn command_subscription_changes_rotate_the_shared_session_once() {
+        let mut publisher = PersistentMqttPublisher::new();
+        let package = EdgeConfigPackage::new("edge-1", "v1")
+            .with_mqtt_uplink(uplink("primary", "edge-1"))
+            .with_command_flow(CommandFlowConfig::new(
+                "flow-1",
+                "write",
+                "primary",
+                "factory/{edge_id}/commands/#",
+                "factory/{edge_id}/replies",
+            ));
+
+        publisher.configure_package(&package).unwrap();
+        assert_eq!(publisher.status().connection_generation, 1);
+        assert_eq!(publisher.status().configured_sink_count, 1);
+
+        publisher.configure_package(&package).unwrap();
+        assert_eq!(publisher.status().connection_generation, 1);
+
+        let mut changed = package;
+        changed.command_flows[0].subscribe_topic = "factory/{edge_id}/control/#".to_string();
+        publisher.configure_package(&changed).unwrap();
+        assert_eq!(publisher.status().connection_generation, 2);
     }
 
     #[test]

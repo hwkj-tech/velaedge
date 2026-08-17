@@ -6,3 +6,5 @@ node_modules/
 .idea/
 .DS_Store
 *.log
+.playwright-cli/
+/output/

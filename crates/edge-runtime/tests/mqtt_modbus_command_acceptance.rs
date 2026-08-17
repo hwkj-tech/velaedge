@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use edge_core::{
     CommandFlowConfig, CommandGraphEdge, CommandGraphNode, CommandGraphNodeKind, DeviceInstance,
@@ -6,8 +6,8 @@ use edge_core::{
     TelemetryPointMapping, TelemetryType, TelemetryValue,
 };
 use edge_runtime::{
-    CommandRuntimeService, ModbusTcpAdapter, ProtocolAdapter, ProtocolCircuitBreakerRegistry,
-    RocksEdgeRuntimeStore,
+    CommandRuntimeService, ModbusTcpAdapter, PersistentMqttPublisher, ProtocolAdapter,
+    ProtocolCircuitBreakerRegistry, RocksEdgeRuntimeStore,
 };
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use tempfile::tempdir;
@@ -110,11 +110,12 @@ async fn mqtt_command_writes_docker_modbus_and_publishes_reply() {
         ))
         .with_command_flow(flow);
     let directory = tempdir().unwrap();
-    let store =
-        Arc::new(RocksEdgeRuntimeStore::open(directory.path().join("runtime.rocksdb")).unwrap());
-    let service =
-        CommandRuntimeService::start(package, store, ProtocolCircuitBreakerRegistry::default())
-            .await
+    let store = RocksEdgeRuntimeStore::open(directory.path().join("runtime.rocksdb")).unwrap();
+    let mut publisher = PersistentMqttPublisher::new();
+    publisher.configure_package(&package).unwrap();
+    wait_for_shared_session(&publisher).await;
+    let mut service =
+        CommandRuntimeService::from_package(package, ProtocolCircuitBreakerRegistry::default())
             .unwrap();
 
     let mut options = MqttOptions::new(
@@ -140,6 +141,21 @@ async fn mqtt_command_writes_docker_modbus_and_publishes_reply() {
         )
         .await
         .unwrap();
+    wait_for_publish_ack(&mut eventloop).await;
+    let command = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(message) = publisher.try_recv_command() {
+                break message;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("shared MQTT session did not receive the command");
+    service
+        .process_message(&command, &store, &mut publisher)
+        .await
+        .unwrap();
     let reply = wait_for_reply(&mut eventloop, &reply_topic).await;
     assert_eq!(reply["commandId"], "cmd-docker-modbus");
     assert_eq!(reply["status"], "succeeded");
@@ -151,6 +167,36 @@ async fn mqtt_command_writes_docker_modbus_and_publishes_reply() {
     let samples = adapter.read_telemetry().await.unwrap();
     assert_eq!(samples[0].value, TelemetryValue::Integer(4321));
     assert_eq!(service.enabled_flow_count(), 1);
+    assert_eq!(publisher.status().configured_sink_count, 1);
+    assert_eq!(publisher.status().connected_sink_count, 1);
+}
+
+async fn wait_for_publish_ack(eventloop: &mut rumqttc::EventLoop) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if matches!(
+                eventloop.poll().await.unwrap(),
+                Event::Incoming(Packet::PubAck(_))
+            ) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("MQTT command publish acknowledgement timed out");
+}
+
+async fn wait_for_shared_session(publisher: &PersistentMqttPublisher) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if publisher.status().connected_sink_count == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("shared MQTT session did not finish command subscriptions");
 }
 
 async fn wait_for_subscription(eventloop: &mut rumqttc::EventLoop) {

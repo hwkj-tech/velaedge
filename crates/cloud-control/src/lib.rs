@@ -1,6 +1,7 @@
 //! Cloud control-plane primitives for fleet and configuration governance.
 
 pub mod agent;
+pub mod agent_v2;
 pub mod audit;
 pub mod catalog;
 pub mod config;
@@ -17,6 +18,15 @@ pub mod validation;
 pub use agent::{
     AgentCommandDraft, AgentProposal, AgentProposalKind, AgentProposalReviewError,
     AgentProposalRisk, AgentProposalStatus,
+};
+pub use agent_v2::{
+    AgentAuthorizationRequest, AgentChangeOperation, AgentChangeOperationKind, AgentChangeSet,
+    AgentChangeSetError, AgentChangeSetStatus, AgentChangeTarget, AgentCommandCandidate,
+    AgentCommandCandidateError, AgentCommandCandidateStatus, AgentCommandTarget,
+    AgentConfirmationEvidence, AgentConfirmationPolicy, AgentImpactSummary, AgentPermission,
+    AgentResourceKind, AgentRiskLevel, AgentToolCaller, AgentToolCategory, AgentToolDecision,
+    AgentToolDescriptor, AgentToolEffect, AgentToolExposure, AgentToolRegistry,
+    AgentToolRegistryError, AgentValidationIssue, AgentValidationReport, AgentValidationSeverity,
 };
 pub use audit::{AuditAction, AuditRecord};
 pub use catalog::{

@@ -39,6 +39,7 @@ pub mod runtime_health;
 pub mod scheduler;
 pub mod serial;
 pub mod siemens_s7;
+pub mod startup_config;
 pub mod storage;
 pub mod sync;
 
@@ -166,6 +167,7 @@ pub use serial::{
     SerialBusFactory, TokioSerialBus, TokioSerialBusFactory,
 };
 pub use siemens_s7::SiemensS7Adapter;
+pub use startup_config::{RuntimeStartupConfig, RuntimeStartupOverrides};
 pub use storage::{JsonlLocalStore, LocalStore};
 pub use sync::{
     sync_and_report_mqtt_uplink_once, sync_and_report_mqtt_uplink_with_store_once,

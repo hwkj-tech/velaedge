@@ -1654,6 +1654,19 @@ pub fn validate_command_flow(
                     );
                 }
             }
+            if let Some(max_confirmation_age_ms) = node.params.get("max_confirmation_age_ms") {
+                if max_confirmation_age_ms
+                    .as_u64()
+                    .filter(|value| *value > 0 && *value <= 7 * 24 * 60 * 60 * 1_000)
+                    .is_none()
+                {
+                    invalid!(
+                        "command flow {} safety node {} max_confirmation_age_ms must be between 1 and 604800000",
+                        flow.flow_id,
+                        node.node_id
+                    );
+                }
+            }
             if let Some(allowed_sources) = node.params.get("allowed_sources") {
                 let Some(allowed_sources) = allowed_sources.as_array() else {
                     invalid!(
@@ -1974,6 +1987,8 @@ pub struct TelemetryPointMapping {
     pub bacnet: Option<BacnetPointOptions>,
     pub unit: Option<String>,
     pub range: Option<NumberRange>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_transforms: Vec<PointValueTransform>,
     pub interval_ms: u64,
 }
 
@@ -2000,6 +2015,7 @@ impl TelemetryPointMapping {
             bacnet: None,
             unit: None,
             range: None,
+            read_transforms: Vec::new(),
             interval_ms: 1000,
         }
     }
@@ -2016,6 +2032,11 @@ impl TelemetryPointMapping {
 
     pub fn with_interval_ms(mut self, interval_ms: u64) -> Self {
         self.interval_ms = interval_ms;
+        self
+    }
+
+    pub fn with_read_transforms(mut self, transforms: Vec<PointValueTransform>) -> Self {
+        self.read_transforms = transforms;
         self
     }
 
@@ -2043,6 +2064,96 @@ impl TelemetryPointMapping {
         self.iec104 = Some(options);
         self
     }
+}
+
+/// Deterministic processing applied after protocol decoding and before collection flows.
+///
+/// These operations are intentionally read-only. Command writes use the engineering value
+/// supplied by the command flow and never attempt to invert this pipeline.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PointValueTransform {
+    Linear {
+        factor: f64,
+        offset: f64,
+    },
+    Clamp {
+        min: f64,
+        max: f64,
+    },
+    Round {
+        decimals: u8,
+    },
+    Absolute,
+    SquareRoot,
+    Power {
+        exponent: f64,
+    },
+    MapRange {
+        #[serde(rename = "inputMin")]
+        input_min: f64,
+        #[serde(rename = "inputMax")]
+        input_max: f64,
+        #[serde(rename = "outputMin")]
+        output_min: f64,
+        #[serde(rename = "outputMax")]
+        output_max: f64,
+        #[serde(default)]
+        clamp: bool,
+    },
+}
+
+pub fn validate_point_read_transforms(
+    transforms: &[PointValueTransform],
+    value_type: TelemetryType,
+) -> Result<(), String> {
+    if transforms.len() > 16 {
+        return Err("point read processing cannot contain more than 16 steps".to_string());
+    }
+    if !transforms.is_empty()
+        && !matches!(value_type, TelemetryType::Float | TelemetryType::Integer)
+    {
+        return Err("point read processing is only supported for numeric points".to_string());
+    }
+    for (index, transform) in transforms.iter().enumerate() {
+        let invalid = |message: &str| format!("read processing step {} {message}", index + 1);
+        match *transform {
+            PointValueTransform::Linear { factor, offset }
+                if !factor.is_finite() || !offset.is_finite() =>
+            {
+                return Err(invalid("linear parameters must be finite"));
+            }
+            PointValueTransform::Clamp { min, max }
+                if !min.is_finite() || !max.is_finite() || min > max =>
+            {
+                return Err(invalid("clamp range must be finite and ordered"));
+            }
+            PointValueTransform::Round { decimals } if decimals > 12 => {
+                return Err(invalid("decimal places cannot exceed 12"));
+            }
+            PointValueTransform::Power { exponent } if !exponent.is_finite() => {
+                return Err(invalid("power exponent must be finite"));
+            }
+            PointValueTransform::MapRange {
+                input_min,
+                input_max,
+                output_min,
+                output_max,
+                ..
+            } if !input_min.is_finite()
+                || !input_max.is_finite()
+                || !output_min.is_finite()
+                || !output_max.is_finite()
+                || input_min == input_max =>
+            {
+                return Err(invalid(
+                    "range mapping parameters must be finite and input bounds must differ",
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]

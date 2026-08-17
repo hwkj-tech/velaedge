@@ -1542,6 +1542,7 @@ where
                 .latency_ms = latency_ms;
             let mut connection_samples = match read_result {
                 Ok(mut samples) => {
+                    apply_point_read_transforms(&mappings, &mut samples);
                     apply_mapping_quality(&mappings, &mut samples);
                     self.record_protocol_success(&connection_id);
                     self.record_sample_quality(&connection_id, &samples);
@@ -1659,6 +1660,85 @@ fn apply_mapping_quality(mappings: &[TelemetryPointMapping], samples: &mut [Tele
                 sample.quality = DataQuality::Uncertain;
                 sample.quality_code = Some(DataQualityCode::UncertainOutOfRange);
             }
+        }
+    }
+}
+
+fn apply_point_read_transforms(
+    mappings: &[TelemetryPointMapping],
+    samples: &mut [TelemetrySample],
+) {
+    for sample in samples {
+        if sample.quality != DataQuality::Good {
+            continue;
+        }
+        let Some(mapping) = mappings.iter().find(|mapping| {
+            mapping.device_id == sample.device_id && mapping.point_id == sample.telemetry_id
+        }) else {
+            continue;
+        };
+        if mapping.read_transforms.is_empty() {
+            continue;
+        }
+        match transform_point_value(&sample.value, &mapping.read_transforms) {
+            Ok(value) => sample.value = value,
+            Err(_) => {
+                sample.quality = DataQuality::Bad;
+                sample.quality_code = Some(DataQualityCode::BadDecode);
+            }
+        }
+    }
+}
+
+fn transform_point_value(
+    source: &TelemetryValue,
+    transforms: &[edge_core::PointValueTransform],
+) -> Result<TelemetryValue> {
+    let mut value = source
+        .as_f64()
+        .context("point read processing requires a numeric value")?;
+    for transform in transforms {
+        value = match *transform {
+            edge_core::PointValueTransform::Linear { factor, offset } => {
+                value.mul_add(factor, offset)
+            }
+            edge_core::PointValueTransform::Clamp { min, max } => value.clamp(min, max),
+            edge_core::PointValueTransform::Round { decimals } => {
+                let factor = 10_f64.powi(i32::from(decimals));
+                (value * factor).round() / factor
+            }
+            edge_core::PointValueTransform::Absolute => value.abs(),
+            edge_core::PointValueTransform::SquareRoot => value.sqrt(),
+            edge_core::PointValueTransform::Power { exponent } => value.powf(exponent),
+            edge_core::PointValueTransform::MapRange {
+                input_min,
+                input_max,
+                output_min,
+                output_max,
+                clamp,
+            } => {
+                let ratio = (value - input_min) / (input_max - input_min);
+                let ratio = if clamp { ratio.clamp(0.0, 1.0) } else { ratio };
+                ratio.mul_add(output_max - output_min, output_min)
+            }
+        };
+        if !value.is_finite() {
+            bail!("point read processing produced a non-finite value");
+        }
+    }
+    match source {
+        TelemetryValue::Float(_) => Ok(TelemetryValue::Float(value)),
+        TelemetryValue::Integer(_) if value.fract() == 0.0 => {
+            if !(i64::MIN as f64..=i64::MAX as f64).contains(&value) {
+                bail!("point read processing exceeds i64 range");
+            }
+            Ok(TelemetryValue::Integer(value as i64))
+        }
+        TelemetryValue::Integer(_) => {
+            bail!("integer point read processing produced a fractional value")
+        }
+        TelemetryValue::Boolean(_) | TelemetryValue::Text(_) => {
+            bail!("point read processing requires a numeric value")
         }
     }
 }
@@ -1885,5 +1965,47 @@ mod simulated_value_tests {
             simulated_value(&pressure, first),
             simulated_value(&pressure, second)
         );
+    }
+}
+
+#[cfg(test)]
+mod point_read_transform_tests {
+    use edge_core::{PointValueTransform, TelemetryValue};
+
+    use super::transform_point_value;
+
+    #[test]
+    fn applies_ordered_numeric_processing() {
+        let value = transform_point_value(
+            &TelemetryValue::Float(250.0),
+            &[
+                PointValueTransform::MapRange {
+                    input_min: 0.0,
+                    input_max: 1_000.0,
+                    output_min: 0.0,
+                    output_max: 10.0,
+                    clamp: true,
+                },
+                PointValueTransform::Linear {
+                    factor: 1.2,
+                    offset: -0.5,
+                },
+                PointValueTransform::Round { decimals: 2 },
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(value, TelemetryValue::Float(2.5));
+    }
+
+    #[test]
+    fn rejects_invalid_math_results() {
+        let error = transform_point_value(
+            &TelemetryValue::Float(-1.0),
+            &[PointValueTransform::SquareRoot],
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("non-finite"));
     }
 }

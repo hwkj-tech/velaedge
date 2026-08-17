@@ -26,9 +26,16 @@ import {
   deleteAgentConversation,
   fetchDiscoverySuggestions,
   fetchAgentProposals,
+  fetchAgentChangeSets,
+  fetchAgentCommandCandidates,
   fetchAgentKnowledgeDocuments,
   fetchAgentConversations,
+  fetchAgentMetrics,
   fetchAgentProviderStatus,
+  applyAgentChangeSet,
+  confirmAgentChangeSet,
+  confirmAgentCommandCandidate,
+  dispatchAgentCommandCandidate,
   generateAgentSuggestions,
   fetchAlgorithms,
   fetchAuditRecords,
@@ -52,6 +59,7 @@ import {
   fetchReleaseList,
   fetchRuntimeStatus,
   fetchMqttUplink,
+  fetchMcpStatus,
   fetchSummary,
   generateEdgeAccessToken,
   runAgentSafetyCheck,
@@ -76,6 +84,8 @@ import {
   saveProductVersion,
   saveProject,
   sendAgentChat,
+  validateAgentChangeSet,
+  validateAgentCommandCandidate,
   setApiToken,
 } from './client';
 
@@ -115,6 +125,23 @@ describe('authenticated API client', () => {
 
     await fetchAuthStatus(fetchMock as unknown as typeof fetch);
     expect(fetchMock).toHaveBeenCalledWith('/api/auth/me');
+  });
+
+  it('loads the authenticated MCP gateway status', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        enabled: true,
+        endpoint: '/mcp',
+        transport: 'streamable_http',
+        tools: [],
+      }),
+    });
+
+    const status = await fetchMcpStatus(fetchMock as unknown as typeof fetch);
+
+    expect(status.endpoint).toBe('/mcp');
+    expect(fetchMock).toHaveBeenCalledWith('/api/mcp/status');
   });
 });
 
@@ -1398,7 +1425,7 @@ describe('management action clients', () => {
     );
   });
 
-  it('loads Agent provider status and sends chat to the backend', async () => {
+  it('loads Agent provider status and observability before sending chat', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -1411,6 +1438,8 @@ describe('management action clients', () => {
 
     await fetchAgentProviderStatus(fetchMock as unknown as typeof fetch);
     expect(fetchMock).toHaveBeenLastCalledWith('/api/agent/provider');
+    await fetchAgentMetrics(fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/agent/metrics');
     await sendAgentChat(
       { edgeId: 'edge-dev', message: '分析运行状态' },
       fetchMock as unknown as typeof fetch,
@@ -1420,6 +1449,91 @@ describe('management action clients', () => {
       headers: { 'content-type': 'application/json' },
       method: 'POST',
     });
+  });
+
+  it('drives ChangeSet validation, confirmation, and apply through governed APIs', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ changeSetId: 'change/1', status: 'confirmed' }),
+    });
+
+    await fetchAgentChangeSets(
+      'demo plant',
+      'awaiting_confirmation',
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/agent/change-sets?projectId=demo+plant&status=awaiting_confirmation',
+    );
+    await validateAgentChangeSet('change/1', fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/agent/change-sets/change%2F1/validate',
+      { method: 'POST' },
+    );
+    await confirmAgentChangeSet(
+      'change/1',
+      { note: '已核对影响范围' },
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/agent/change-sets/change%2F1/confirm',
+      {
+        body: JSON.stringify({ note: '已核对影响范围' }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      },
+    );
+    await applyAgentChangeSet('change/1', fetchMock as unknown as typeof fetch);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/agent/change-sets/change%2F1/apply',
+      { method: 'POST' },
+    );
+  });
+
+  it('drives governed command candidates through confirmation and MQTT dispatch', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ candidateId: 'command/1', status: 'confirmed' }),
+    });
+
+    await fetchAgentCommandCandidates(
+      'demo plant',
+      'edge/1',
+      'awaiting_confirmation',
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/agent/commands?projectId=demo+plant&edgeId=edge%2F1&status=awaiting_confirmation',
+    );
+    await validateAgentCommandCandidate(
+      'command/1',
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/agent/commands/command%2F1/validate',
+      { method: 'POST' },
+    );
+    await confirmAgentCommandCandidate(
+      'command/1',
+      { coApprover: 'safety-admin', note: '现场已确认' },
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/agent/commands/command%2F1/confirm',
+      {
+        body: JSON.stringify({ coApprover: 'safety-admin', note: '现场已确认' }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      },
+    );
+    await dispatchAgentCommandCandidate(
+      'command/1',
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/agent/commands/command%2F1/dispatch',
+      { method: 'POST' },
+    );
   });
 
   it('lists and deletes scoped Agent conversations', async () => {

@@ -11,6 +11,10 @@ use serde_json::{json, Value};
 
 use crate::{MqttPublishMessage, ProtocolWriteResult};
 
+const DEFAULT_MAX_CONFIRMATION_AGE_MS: i64 = 15 * 60 * 1_000;
+const MAX_COMMAND_TTL_MS: i64 = 5 * 60 * 1_000;
+const MIN_CONFIRMATION_TOKEN_LENGTH: usize = 24;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlannedPointWrite {
     pub node_id: String,
@@ -439,16 +443,13 @@ fn evaluate_condition(node: &CommandGraphNode, document: &Value) -> Result<bool>
 
 fn plan_safety_gate(node: &CommandGraphNode, document: &Value) -> Result<PlannedCommandSafetyGate> {
     validate_expiry(document)?;
-    if node
+    let require_confirmation = node
         .params
         .get("require_confirmation")
         .and_then(Value::as_bool)
-        .unwrap_or(false)
-        && string_at(document, "confirmationToken")
-            .filter(|token| !token.trim().is_empty())
-            .is_none()
-    {
-        bail!("safety gate {} requires confirmationToken", node.node_id);
+        .unwrap_or(false);
+    if require_confirmation {
+        validate_confirmation(node, document)?;
     }
     let source_path = node
         .params
@@ -487,6 +488,74 @@ fn plan_safety_gate(node: &CommandGraphNode, document: &Value) -> Result<Planned
     })
 }
 
+fn validate_confirmation(node: &CommandGraphNode, document: &Value) -> Result<()> {
+    let token = string_at(document, "confirmationToken")
+        .map(str::trim)
+        .filter(|token| token.len() >= MIN_CONFIRMATION_TOKEN_LENGTH)
+        .with_context(|| {
+            format!(
+                "safety gate {} requires a confirmationToken of at least {} characters",
+                node.node_id, MIN_CONFIRMATION_TOKEN_LENGTH
+            )
+        })?;
+    if token.chars().any(char::is_whitespace) {
+        bail!(
+            "safety gate {} confirmationToken must not contain whitespace",
+            node.node_id
+        );
+    }
+
+    string_at(document, "approvedBy")
+        .map(str::trim)
+        .filter(|actor| {
+            !actor.is_empty()
+                && !actor.starts_with("agent:")
+                && !actor.starts_with("model:")
+                && !actor.eq_ignore_ascii_case("system")
+        })
+        .with_context(|| {
+            format!(
+                "safety gate {} requires approvedBy from a human operator",
+                node.node_id
+            )
+        })?;
+
+    let approved_at = string_at(document, "approvedAt").with_context(|| {
+        format!(
+            "safety gate {} requires an RFC3339 approvedAt timestamp",
+            node.node_id
+        )
+    })?;
+    let approved_at = DateTime::parse_from_rfc3339(approved_at)
+        .context("command approvedAt must use RFC3339")?
+        .with_timezone(&Utc);
+    let now = Utc::now();
+    if approved_at > now + chrono::Duration::seconds(30) {
+        bail!(
+            "safety gate {} approval timestamp is in the future",
+            node.node_id
+        );
+    }
+    let max_age_ms = node
+        .params
+        .get("max_confirmation_age_ms")
+        .and_then(Value::as_u64)
+        .and_then(|value| i64::try_from(value).ok())
+        .unwrap_or(DEFAULT_MAX_CONFIRMATION_AGE_MS);
+    if approved_at < now - chrono::Duration::milliseconds(max_age_ms) {
+        bail!("safety gate {} approval has expired", node.node_id);
+    }
+
+    let expires_at = required_expiry(document)?;
+    if expires_at > now + chrono::Duration::milliseconds(MAX_COMMAND_TTL_MS) {
+        bail!(
+            "safety gate {} command expiry exceeds the local five minute limit",
+            node.node_id
+        );
+    }
+    Ok(())
+}
+
 fn validate_expiry(document: &Value) -> Result<()> {
     let Some(expires_at) = string_at(document, "expiresAt") else {
         return Ok(());
@@ -498,6 +567,18 @@ fn validate_expiry(document: &Value) -> Result<()> {
         bail!("command has expired");
     }
     Ok(())
+}
+
+fn required_expiry(document: &Value) -> Result<DateTime<Utc>> {
+    let expires_at =
+        string_at(document, "expiresAt").context("human-confirmed command requires expiresAt")?;
+    let expires_at = DateTime::parse_from_rfc3339(expires_at)
+        .context("command expiresAt must use RFC3339")?
+        .with_timezone(&Utc);
+    if expires_at <= Utc::now() {
+        bail!("command has expired");
+    }
+    Ok(expires_at)
 }
 
 fn telemetry_value(value: &Value, value_type: TelemetryType) -> Result<TelemetryValue> {

@@ -17,8 +17,11 @@ import {
   createPointMappingDraft,
   fetchAuditRecords,
   fetchAuthStatus,
+  fetchAgentMetrics,
   fetchAgentProviderStatus,
   fetchAgentProposals,
+  fetchAgentChangeSets,
+  fetchAgentCommandCandidates,
   fetchAgentKnowledgeDocuments,
   fetchAgentConversations,
   fetchDeviceModels,
@@ -38,9 +41,19 @@ import {
   fetchRuntimeStatus,
   fetchSummary,
   fetchMqttUplink,
+  fetchMcpStatus,
   fetchDiscoverySuggestions,
   generateEdgeAccessToken as generateEdgeAccessTokenApi,
   generateAgentSuggestions,
+  validateAgentChangeSet,
+  simulateAgentChangeSet,
+  confirmAgentChangeSet,
+  rejectAgentChangeSet,
+  applyAgentChangeSet,
+  validateAgentCommandCandidate,
+  confirmAgentCommandCandidate,
+  rejectAgentCommandCandidate,
+  dispatchAgentCommandCandidate,
   runAgentSafetyCheck,
   runConfigValidation,
   runReleaseDiff,
@@ -81,6 +94,7 @@ import type {
   AgentChatResponse,
   AgentConversationResponse,
   AgentKnowledgeDocumentResponse,
+  AgentObservabilityResponse,
   AgentProposalResponse,
   AgentProviderStatusResponse,
   AuditRecordResponse,
@@ -128,7 +142,7 @@ import type {
   SummaryResponse,
 } from './api/types';
 import { AppShell, type PageKey } from './layout/AppShell';
-import { AgentAssistantPage } from './pages/AgentAssistantPage';
+import { AiIntegrationPage } from './pages/AiIntegrationPage';
 import { AlgorithmsPage } from './pages/AlgorithmsPage';
 import { AuditLogPage } from './pages/AuditLogPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -551,7 +565,7 @@ export function ConsoleApp({
       action: 'apply_edge_template',
       details: [
         `产品 ${template.name} (${template.version}) 已绑定到边端 ${edgeId}`,
-        '产品版本已物化为边端配置包，等待校验与发布',
+        '配置已保存，并已通知 Runtime 实时同步',
       ],
       message: `${template.name} 已加载为边端产品配置`,
       status: '已完成',
@@ -868,6 +882,9 @@ export function ConsoleApp({
 
   const handleAgentProviderStatus = async (): Promise<AgentProviderStatusResponse> =>
     fetchAgentProviderStatus();
+
+  const handleAgentMetrics = async (): Promise<AgentObservabilityResponse> =>
+    fetchAgentMetrics();
 
   const handleListAgentConversations = async (
     projectId?: string,
@@ -1294,6 +1311,7 @@ export function ConsoleApp({
         handleGenerateAgentSuggestions,
         handleAgentChat,
         handleAgentProviderStatus,
+        handleAgentMetrics,
         handleListAgentConversations,
         handleDeleteAgentConversation,
         handleListAgentKnowledge,
@@ -2444,7 +2462,7 @@ export const EDGE_CONFIG_TEMPLATES: EdgeTemplateDefinition[] = [
     mqtt: {
       batchSize: 100,
       broker: 'mqtts://velamq.local:8883',
-      clientId: '{edge_id}-runtime',
+      clientId: '{edge_id}',
       flushIntervalMs: 1000,
       qos: 1,
       sinkId: 'velamq-main',
@@ -2539,7 +2557,7 @@ export const EDGE_CONFIG_TEMPLATES: EdgeTemplateDefinition[] = [
     mqtt: {
       batchSize: 80,
       broker: 'mqtts://velamq.local:8883',
-      clientId: '{edge_id}-runtime',
+      clientId: '{edge_id}',
       flushIntervalMs: 1000,
       qos: 1,
       sinkId: 'velamq-main',
@@ -2637,7 +2655,7 @@ export const EDGE_CONFIG_TEMPLATES: EdgeTemplateDefinition[] = [
     mqtt: {
       batchSize: 60,
       broker: 'mqtts://velamq.local:8883',
-      clientId: '{edge_id}-runtime',
+      clientId: '{edge_id}',
       flushIntervalMs: 2000,
       qos: 1,
       sinkId: 'velamq-main',
@@ -3247,6 +3265,7 @@ function renderPage(
   onGenerateAgentSuggestions: () => Promise<AgentActionResponse>,
   onAgentChat: (request: AgentChatRequest) => Promise<AgentChatResponse>,
   onAgentProviderStatus: () => Promise<AgentProviderStatusResponse>,
+  onAgentMetrics: () => Promise<AgentObservabilityResponse>,
   onListAgentConversations: (
     projectId?: string,
   ) => Promise<AgentConversationResponse[]>,
@@ -3524,26 +3543,23 @@ function renderPage(
           onRefresh={fetchAuditRecords}
         />
       );
-    case 'agentAssistant':
+    case 'aiIntegration':
       return (
-        <AgentAssistantPage
-          canReviewProposals={principal?.role === 'admin'}
-          onChat={onAgentChat}
-          onDeleteKnowledge={onDeleteAgentKnowledge}
-          onCreateProposal={onCreateAgentProposal}
-          onGenerateSuggestions={onGenerateAgentSuggestions}
-          onGetProviderStatus={onAgentProviderStatus}
-          onListConversations={onListAgentConversations}
-          onDeleteConversation={onDeleteAgentConversation}
-          onListKnowledge={onListAgentKnowledge}
-          onListProposals={onListAgentProposals}
-          onReviewProposal={onReviewAgentProposal}
-          onRunSafetyCheck={onAgentSafetyCheck}
-          onSaveKnowledge={onSaveAgentKnowledge}
-          projectOptions={projects.map((project) => ({
-            projectId: project.projectId,
-            projectName: project.projectName,
-          }))}
+        <AiIntegrationPage
+          canExecute={principal?.role === 'admin'}
+          onApplyChangeSet={applyAgentChangeSet}
+          onConfirmChangeSet={confirmAgentChangeSet}
+          onConfirmCommandCandidate={confirmAgentCommandCandidate}
+          onGetStatus={fetchMcpStatus}
+          onListAudit={fetchAuditRecords}
+          onListChangeSets={fetchAgentChangeSets}
+          onListCommandCandidates={fetchAgentCommandCandidates}
+          onRejectChangeSet={rejectAgentChangeSet}
+          onRejectCommandCandidate={rejectAgentCommandCandidate}
+          onSimulateChangeSet={simulateAgentChangeSet}
+          onValidateChangeSet={validateAgentChangeSet}
+          onValidateCommandCandidate={validateAgentCommandCandidate}
+          onDispatchCommandCandidate={dispatchAgentCommandCandidate}
         />
       );
   }
@@ -7608,45 +7624,58 @@ function ProductPointBindingList({
   onUnbindSet: (pointSet: PointSetResponse) => void;
   pointSets: PointSetResponse[];
 }) {
-  const [expandedPointSetId, setExpandedPointSetId] = useState<string>();
+  const [selectedPointSetId, setSelectedPointSetId] = useState<string>();
+  const resolveBindingState = (pointSet: PointSetResponse) => {
+    const isProductBound = boundPointSetIds.includes(pointSet.pointSetId);
+    const pointIds = new Set(pointSet.points.map((point) => point.pointId));
+    const connectionIds = Array.from(new Set(
+      dataConfigBindings
+        .filter((binding) => binding.pointIds.some((pointId) => pointIds.has(pointId)))
+        .map((binding) => binding.protocolConnectionId)
+        .filter(Boolean),
+    ));
+    const boundConnections = connections.filter((connection) =>
+      connectionIds.includes(connection.connectionId),
+    );
+    const isLegacySingleBinding = isProductBound
+      && connectionIds.length === 0
+      && connections.length === 1
+      && connections[0]?.connectionId === fixedConnectionId;
+    const isBound = connectionIds.includes(fixedConnectionId) || isLegacySingleBinding;
+    const occupiedConnectionId = connectionIds.find(
+      (connectionId) => connectionId !== fixedConnectionId,
+    );
+    const activeConnections = isBound
+      ? connections.filter((connection) => connection.connectionId === fixedConnectionId)
+      : boundConnections;
+
+    return { activeConnections, isBound, occupiedConnectionId };
+  };
+  const selectedPointSet = pointSets.find((pointSet) => pointSet.pointSetId === selectedPointSetId);
+  const selectedBindingState = selectedPointSet
+    ? resolveBindingState(selectedPointSet)
+    : undefined;
+
   return (
-    <div className="table-wrap product-config-table">
-      <table className="ops-table">
-        <thead>
-          <tr>
-            <th>点位集</th>
-            <th>协议</th>
-            <th>协议连接</th>
-            <th>点位数</th>
-            <th>周期</th>
-            <th>状态</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          {pointSets.map((pointSet) => {
-            const isProductBound = boundPointSetIds.includes(pointSet.pointSetId);
-            const pointIds = new Set(pointSet.points.map((point) => point.pointId));
-            const connectionIds = Array.from(new Set(
-              dataConfigBindings
-                .filter((binding) => binding.pointIds.some((pointId) => pointIds.has(pointId)))
-                .map((binding) => binding.protocolConnectionId)
-                .filter(Boolean),
-            ));
-            const boundConnections = connections.filter((connection) =>
-              connectionIds.includes(connection.connectionId),
-            );
-            const isLegacySingleBinding = isProductBound
-              && connectionIds.length === 0
-              && connections.length === 1
-              && connections[0]?.connectionId === fixedConnectionId;
-            const isBound = connectionIds.includes(fixedConnectionId) || isLegacySingleBinding;
-            const occupiedConnectionId = connectionIds.find(
-              (connectionId) => connectionId !== fixedConnectionId,
-            );
+    <>
+      <div className="table-wrap product-config-table">
+        <table className="ops-table">
+          <thead>
+            <tr>
+              <th>点位集</th>
+              <th>协议</th>
+              <th>协议连接</th>
+              <th>点位数</th>
+              <th>周期</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pointSets.map((pointSet) => {
+              const { isBound, occupiedConnectionId } = resolveBindingState(pointSet);
             return (
-              <Fragment key={pointSet.pointSetId}>
-                <tr>
+                <tr key={pointSet.pointSetId}>
                   <td>
                     <strong>{pointSet.name}</strong>
                     <small>{pointSet.pointSetId}</small>
@@ -7673,14 +7702,11 @@ function ProductPointBindingList({
                   <td>
                     <div className="row-actions">
                       <button
-                        aria-expanded={expandedPointSetId === pointSet.pointSetId}
                         className="secondary-button compact"
-                        onClick={() => setExpandedPointSetId((current) =>
-                          current === pointSet.pointSetId ? undefined : pointSet.pointSetId,
-                        )}
+                        onClick={() => setSelectedPointSetId(pointSet.pointSetId)}
                         type="button"
                       >
-                        {expandedPointSetId === pointSet.pointSetId ? '收起' : '查看参数'}
+                        查看参数
                       </button>
                       <button
                         className={isBound ? 'danger-button compact' : 'secondary-button compact'}
@@ -7697,63 +7723,120 @@ function ProductPointBindingList({
                     </div>
                   </td>
                 </tr>
-                {expandedPointSetId === pointSet.pointSetId ? (
-                  <tr className="point-set-detail-row">
-                    <td colSpan={7}>
-                      <div className="point-set-connection-strip">
-                        <strong>设备连接</strong>
-                        {isBound
-                          ? connections
-                              .filter((connection) => connection.connectionId === fixedConnectionId)
-                              .map((connection) => (
-                                <span key={connection.connectionId}>
-                                  {connection.connectionId} · {productConnectionSummary(connection)}
-                                </span>
-                              ))
-                          : boundConnections.length > 0
-                          ? boundConnections.map((connection) => (
-                              <span key={connection.connectionId}>
-                                {connection.connectionId} · {productConnectionSummary(connection)}
-                              </span>
-                            ))
-                          : <span>尚未绑定到当前连接。</span>}
-                      </div>
-                      <div className="point-set-address-table">
-                        <div className="point-set-address-grid point-set-address-head" role="row">
-                          <span>点位 ID</span>
-                          <span>语义</span>
-                          <span>地址类型</span>
-                          <span>协议地址</span>
-                          <span>数据类型</span>
-                          <span>权限</span>
-                          <span>周期</span>
-                        </div>
-                        {pointSet.points.map((point) => (
-                          <div className="point-set-address-grid point-set-address-item" key={point.pointId} role="row">
-                            <span>{point.pointId}</span>
-                            <span>{point.semanticId}</span>
-                            <span>{productPointAddressKindLabel(point.address.kind)}</span>
-                            <code>{point.address.value}</code>
-                            <span>{point.valueType}</span>
-                            <span>{pointAccessLabel(point.access)}</span>
-                            <span>{point.intervalMs}ms</span>
-                          </div>
-                        ))}
-                      </div>
-                    </td>
-                  </tr>
-                ) : null}
-              </Fragment>
-            );
-          })}
-          {pointSets.length === 0 ? (
-            <tr>
-              <td colSpan={7}>当前项目暂无点位集，请先在点位管理中创建。</td>
-            </tr>
-          ) : null}
-        </tbody>
-      </table>
-    </div>
+              );
+            })}
+            {pointSets.length === 0 ? (
+              <tr>
+                <td colSpan={7}>当前项目暂无点位集，请先在点位管理中创建。</td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+
+      {selectedPointSet && selectedBindingState ? (
+        <Modal closeOnBackdrop onClose={() => setSelectedPointSetId(undefined)}>
+          <section
+            aria-label={`点位集参数 ${selectedPointSet.name}`}
+            aria-modal="true"
+            className="modal-panel point-set-parameters-modal"
+            role="dialog"
+          >
+            <div className="modal-header">
+              <div>
+                <span className="modal-kicker">POINT SET</span>
+                <h3>{selectedPointSet.name}</h3>
+                <p>{selectedPointSet.pointSetId}</p>
+              </div>
+              <button
+                aria-label="关闭点位集参数"
+                className="icon-button"
+                onClick={() => setSelectedPointSetId(undefined)}
+                title="关闭"
+                type="button"
+              >
+                <X aria-hidden="true" size={20} />
+              </button>
+            </div>
+
+            <div className="point-set-parameters-content">
+              <dl className="point-set-parameters-meta">
+                <div>
+                  <dt>协议</dt>
+                  <dd>{productProtocolLabel(selectedPointSet.protocol)}</dd>
+                </div>
+                <div>
+                  <dt>点位</dt>
+                  <dd>{selectedPointSet.points.length} 个</dd>
+                </div>
+                <div>
+                  <dt>默认周期</dt>
+                  <dd>
+                    {dominantPointSetValue(
+                      selectedPointSet.points.map((point) => `${point.intervalMs}ms`),
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt>连接状态</dt>
+                  <dd className={selectedBindingState.isBound ? 'is-ok' : 'is-muted'}>
+                    {selectedBindingState.isBound ? '已绑定' : '未绑定'}
+                  </dd>
+                </div>
+              </dl>
+
+              <section aria-label="设备连接" className="point-set-parameters-section">
+                <div className="point-set-connection-strip">
+                  <strong>设备连接</strong>
+                  {selectedBindingState.activeConnections.length > 0
+                    ? selectedBindingState.activeConnections.map((connection) => (
+                        <span key={connection.connectionId}>
+                          {connection.connectionId} · {productConnectionSummary(connection)}
+                        </span>
+                      ))
+                    : <span>尚未绑定到当前连接。</span>}
+                </div>
+                <div className="point-set-address-table">
+                  <div className="point-set-address-grid point-set-address-head" role="row">
+                    <span>点位 ID</span>
+                    <span>语义</span>
+                    <span>地址类型</span>
+                    <span>协议地址</span>
+                    <span>数据类型</span>
+                    <span>权限</span>
+                    <span>周期</span>
+                  </div>
+                  {selectedPointSet.points.map((point) => (
+                    <div className="point-set-address-grid point-set-address-item" key={point.pointId} role="row">
+                      <span>{point.pointId}</span>
+                      <span>{point.semanticId}</span>
+                      <span>{productPointAddressKindLabel(point.address.kind)}</span>
+                      <code>{point.address.value}</code>
+                      <span>{point.valueType}</span>
+                      <span>{pointAccessLabel(point.access)}</span>
+                      <span>{point.intervalMs}ms</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+
+            <div className="drawer-footer">
+              <span className="editor-status" role="status">
+                {selectedPointSet.points.length} 个点位 · 参数只读
+              </span>
+              <button
+                className="secondary-button"
+                onClick={() => setSelectedPointSetId(undefined)}
+                type="button"
+              >
+                关闭
+              </button>
+            </div>
+          </section>
+        </Modal>
+      ) : null}
+    </>
   );
 }
 

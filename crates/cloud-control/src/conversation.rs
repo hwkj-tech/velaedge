@@ -85,7 +85,17 @@ pub enum AgentConversationRole {
 #[serde(rename_all = "camelCase")]
 pub struct AgentConversationCitation {
     pub document_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_id: Option<String>,
     pub title: String,
     pub source_uri: Option<String>,
     pub excerpt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub untrusted_content: Option<bool>,
 }

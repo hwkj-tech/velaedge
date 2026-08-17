@@ -116,10 +116,90 @@
 
 .point-set-row {
   display: grid;
-  grid-template-columns: 1fr 1.2fr 170px 1fr 100px 100px 105px 80px auto;
+  grid-template-columns: 1fr 1.2fr 170px 1fr 100px 100px 105px auto;
   gap: 8px;
   align-items: center;
 }
+
+.point-read-processing {
+  display: grid;
+  gap: 8px;
+  margin-left: 4px;
+  border-left: 3px solid #2387a8;
+  background: #f3f8fa;
+  padding: 10px 12px;
+}
+
+.point-read-processing-head,
+.point-transform-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.point-read-processing-head {
+  justify-content: space-between;
+}
+
+.point-read-processing-head > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.point-read-processing-head strong { color: #173f4b; font-size: 12px; }
+.point-read-processing-head span { overflow: hidden; color: #5c7880; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.point-read-processing-head select { min-height: 32px; border: 1px solid #b9d3da; border-radius: 6px; background: #fff; color: #174755; padding: 5px 8px; }
+.point-read-processing-note { flex: none; }
+
+.point-transform-row {
+  display: grid;
+  grid-template-columns: 24px 104px repeat(3, minmax(100px, 1fr)) auto;
+  border-top: 1px solid #d7e6ea;
+  padding-top: 8px;
+}
+
+.point-transform-row > label,
+.point-unit-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.point-transform-row label > span,
+.point-unit-field > span { color: #58747c; font-size: 10px; font-weight: 800; }
+.point-transform-row input,
+.point-unit-field input { min-width: 0; min-height: 32px; border: 1px solid #bfd4da; border-radius: 6px; background: #fff; color: #17312b; padding: 5px 8px; }
+.point-transform-order { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; background: #dceff4; color: #176178; font-size: 11px; font-weight: 900; }
+.point-transform-static { grid-column: span 3; color: #718990; font-size: 11px; }
+.point-transform-actions { display: flex; gap: 4px; justify-content: flex-end; }
+.point-transform-actions .icon-button { width: 30px; height: 30px; min-height: 30px; }
+.point-transform-actions .icon-button.danger { color: #c43c3c; }
+.paired-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.point-transform-row .checkbox-field { display: flex; align-items: center; align-self: end; min-height: 32px; gap: 6px; }
+.point-transform-row .checkbox-field input { width: 15px; min-width: 15px; min-height: 15px; height: 15px; padding: 0; }
+.point-optional-metadata {
+  border-top: 1px solid #d7e6ea;
+  padding-top: 8px;
+}
+
+.point-optional-metadata summary {
+  display: flex;
+  align-items: center;
+  width: fit-content;
+  cursor: pointer;
+  gap: 8px;
+  color: #4b6972;
+  font-size: 11px;
+  font-weight: 800;
+  list-style: none;
+}
+
+.point-optional-metadata summary::-webkit-details-marker { display: none; }
+.point-optional-metadata summary::before { color: #2387a8; content: '+'; font-size: 15px; line-height: 1; }
+.point-optional-metadata[open] summary::before { content: '-'; }
+.point-optional-metadata summary small { color: #80939a; font-size: 10px; font-weight: 600; }
+.point-unit-field { grid-template-columns: 120px minmax(160px, 300px); align-items: center; margin-top: 8px; }
 
 .point-set-row-header {
   position: sticky;
@@ -407,7 +487,7 @@
   align-items: end;
 }
 
-.custom-serial-point-meta { grid-template-columns: 1fr 1.2fr 120px 110px 90px auto; }
+.custom-serial-point-meta { grid-template-columns: 1fr 1.2fr 120px 110px auto; }
 .custom-serial-frame-grid { grid-template-columns: 1.6fr repeat(8, minmax(92px, .7fr)); }
 .custom-serial-frame-grid .frame-wide { min-width: 180px; }
 
@@ -816,6 +896,8 @@
   }
 
   .custom-serial-frame-grid .frame-wide { grid-column: span 2; }
+
+  .point-transform-row { grid-template-columns: 24px 90px repeat(2, minmax(90px, 1fr)) auto; }
 }
 
 @media (max-width: 620px) {
@@ -855,6 +937,14 @@
   .custom-serial-point-row {
     min-width: 0;
   }
+
+  .point-read-processing { margin-left: 0; }
+  .point-transform-row { grid-template-columns: 24px minmax(0, 1fr); }
+  .point-transform-row > label,
+  .point-transform-static,
+  .point-transform-actions { grid-column: 2; }
+  .point-transform-actions { justify-content: flex-start; }
+  .point-unit-field { grid-template-columns: 1fr; }
 
   .dlt645-point-options { margin-left: 0; }
 

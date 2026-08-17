@@ -14,8 +14,8 @@ use edge_core::{
     DataConfigPayload, DataConfigPoint, DataConfigPublish, DeviceInstance,
     Iec101ConnectionSettings, Iec101ControlType, Iec101PointOptions, Iec104ConnectionSettings,
     Iec104ControlType, Iec104PointOptions, MqttUplinkConfig, OpcUaConnectionSettings,
-    OpcUaPointOptions, OpcUaWriteDataType, PointAccess, PointAddress, ProtocolConnection,
-    ProtocolType, SerialConnectionSettings, TelemetryType,
+    OpcUaPointOptions, OpcUaWriteDataType, PointAccess, PointAddress, PointValueTransform,
+    ProtocolConnection, ProtocolType, SerialConnectionSettings, TelemetryType,
 };
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -1299,6 +1299,7 @@ async fn opc_ua_write_type_survives_product_publication_and_edge_materialization
             iec104: None,
             bacnet: None,
             unit: Some("rpm".to_string()),
+            read_transforms: Vec::new(),
             interval_ms: 500,
         });
         store.upsert_point_set(point_set);
@@ -1384,6 +1385,7 @@ async fn iec104_control_options_survive_product_publication_and_edge_materializa
             ),
             bacnet: None,
             unit: None,
+            read_transforms: Vec::new(),
             interval_ms: 500,
         });
         store.upsert_point_set(point_set);
@@ -1476,6 +1478,7 @@ async fn iec101_station_timezone_survives_product_edge_materialization() {
             iec104: None,
             bacnet: None,
             unit: None,
+            read_transforms: Vec::new(),
             interval_ms: 500,
         });
         store.upsert_point_set(point_set);
@@ -1869,10 +1872,7 @@ async fn edge_product_binding_materializes_config_and_survives_reopen() {
             .len(),
         2
     );
-    assert_eq!(
-        desired["package"]["mqtt_uplinks"][0]["client_id"],
-        format!("{edge_id}-runtime-dev")
-    );
+    assert_eq!(desired["package"]["mqtt_uplinks"][0]["client_id"], edge_id);
 
     let reopened_state = AppState::with_sqlite(&database_url).await.unwrap();
     {
@@ -1955,10 +1955,7 @@ async fn manufacturer_product_binding_materializes_complete_runtime_config() {
         assert_eq!(package["data_configs"].as_array().unwrap().len(), 1);
         assert_eq!(package["command_flows"].as_array().unwrap().len(), 1);
         assert_eq!(package["mqtt_uplinks"].as_array().unwrap().len(), 1);
-        assert_eq!(
-            package["mqtt_uplinks"][0]["client_id"],
-            format!("{edge_id}-{product_id}")
-        );
+        assert_eq!(package["mqtt_uplinks"][0]["client_id"], edge_id);
 
         let writable_point = package["point_mappings"]
             .as_array()
@@ -2000,6 +1997,17 @@ async fn multi_protocol_product_routes_each_point_through_its_data_config() {
             iec104: None,
             bacnet: None,
             unit: Some("kPa".to_string()),
+            read_transforms: vec![
+                PointValueTransform::Linear {
+                    factor: 0.1,
+                    offset: -5.0,
+                },
+                PointValueTransform::Clamp {
+                    min: 0.0,
+                    max: 16.0,
+                },
+                PointValueTransform::Round { decimals: 2 },
+            ],
             interval_ms: 1_000,
         });
         store.upsert_point_set(modbus_points);
@@ -2021,6 +2029,7 @@ async fn multi_protocol_product_routes_each_point_through_its_data_config() {
             iec104: None,
             bacnet: None,
             unit: Some("rpm".to_string()),
+            read_transforms: Vec::new(),
             interval_ms: 500,
         });
         store.upsert_point_set(s7_points);
@@ -2123,6 +2132,10 @@ async fn multi_protocol_product_routes_each_point_through_its_data_config() {
         .unwrap();
     assert_eq!(modbus["device_id"], "pump-1");
     assert_eq!(modbus["protocol_connection_id"], "modbus-main");
+    assert_eq!(modbus["read_transforms"][0]["kind"], "linear");
+    assert_eq!(modbus["read_transforms"][0]["factor"], 0.1);
+    assert_eq!(modbus["read_transforms"][1]["kind"], "clamp");
+    assert_eq!(modbus["read_transforms"][2]["kind"], "round");
     assert_eq!(s7["device_id"], "drive-1");
     assert_eq!(s7["protocol_connection_id"], "s7-main");
 }

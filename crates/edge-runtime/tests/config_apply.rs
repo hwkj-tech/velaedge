@@ -44,6 +44,19 @@ async fn applying_config_reports_version_and_collects_named_points() {
 }
 
 #[test]
+fn mqtt_client_id_is_normalized_to_edge_identity() {
+    let package = package().with_mqtt_uplink(MqttUplinkConfig::velamq(
+        "main",
+        "mqtt://127.0.0.1:1883",
+        "legacy-runtime-client",
+    ));
+
+    let applied = AppliedEdgeConfig::apply(package).unwrap();
+
+    assert_eq!(applied.package().mqtt_uplinks[0].client_id, "edge-dev");
+}
+
+#[test]
 fn applying_config_rejects_data_configs_with_unknown_points() {
     let package = data_config_package().with_data_config(
         DataConfig::new(

@@ -21,6 +21,11 @@ export EDGEOPS_ADMIN_TOKEN='replace-with-an-independent-secret'
 export EDGEOPS_GATEWAY_TLS_CERT='/etc/edgeops/tls/current/server.pem'
 export EDGEOPS_GATEWAY_TLS_KEY='/etc/edgeops/tls/current/server-key.pem'
 export EDGEOPS_GATEWAY_TLS_CLIENT_CA='/etc/edgeops/tls/current/runtime-ca.pem'
+export VELAEDGE_MCP_ENABLED='true'
+export VELAEDGE_MCP_ALLOWED_ORIGINS='https://agent.example.com'
+export VELAEDGE_MCP_ALLOWED_PROJECTS='plant-a'
+export VELAEDGE_MCP_ALLOWED_EDGES='edge-a-01'
+export VELAEDGE_MCP_RATE_LIMIT_PER_MINUTE='120'
 ```
 
 Reference systemd units and environment templates are provided under `deploy/systemd` and
@@ -28,6 +33,12 @@ Reference systemd units and environment templates are provided under `deploy/sys
 contents from `web/console/dist` to `/opt/edgeops/console`, and store populated environment files
 under `/etc/edgeops`. Environment files contain secrets and must be owned by the service account
 with mode `0600`; never install the example placeholder values unchanged.
+
+The MCP endpoint shares management API authentication but should receive a dedicated least-privilege
+Viewer or Operator token at the client. Restrict its Origin and resource allowlists, and expose it
+only through the same TLS reverse proxy as the management API. MCP never exposes apply or dispatch;
+those terminal actions remain in the independently authenticated management workflow. See
+[`docs/mcp-integration.md`](mcp-integration.md).
 
 For Cloud:
 
@@ -40,10 +51,32 @@ systemctl daemon-reload
 systemctl enable --now edgeops-cloud
 ```
 
-For each Runtime, create `/etc/edgeops/runtime/EDGE_ID.env`, provision its mTLS identity and
-one-time edge token, ensure the `edgeops-runtime` account can open the selected serial device, then
-start `edgeops-runtime@EDGE_ID.service`. The service passes only the token variable name on the
-command line, so the secret itself is not exposed by the process list.
+For each Runtime, install one startup configuration and one secret environment file:
+
+```bash
+install -d -m 0750 /etc/edgeops/runtime
+install -m 0640 deploy/config/runtime.toml.example \
+  /etc/edgeops/runtime/EDGE_ID.toml
+install -m 0600 deploy/env/runtime.env.example \
+  /etc/edgeops/runtime/EDGE_ID.env
+install -m 0644 deploy/systemd/edgeops-runtime@.service /etc/systemd/system/
+
+/opt/edgeops/bin/edge-runtime \
+  --config /etc/edgeops/runtime/EDGE_ID.toml \
+  --check-config
+systemctl daemon-reload
+systemctl enable --now edgeops-runtime@EDGE_ID
+```
+
+Edit the TOML identity, local state paths, health listener, Cloud gateway and mTLS references before
+starting the service. Put only the one-time edge token and process logging controls in the mode
+`0600` environment file. The systemd unit runs the same `--check-config` preflight before every
+start and passes only the configuration path to the Runtime process.
+
+Protocol connections, point mappings, collection/command graphs, calculation settings and MQTT
+sinks are product configuration synchronized from Cloud and persisted in RocksDB. They must not be
+duplicated in the startup TOML. Ensure the `edgeops-runtime` account can open every configured
+serial device and read its TLS files.
 
 For a physical 24-hour campaign, also install the release campaign binary and guarded runner:
 
